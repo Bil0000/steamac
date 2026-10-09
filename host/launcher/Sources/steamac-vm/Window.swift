@@ -82,6 +82,12 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// `pixelScale`.
     var onGuestSizeRequest: ((Int, Int) -> Void)?
     private var requestedGuestSize: (Int, Int)
+    /// Guest display size at boot: the target while the guest does not follow the window.
+    private let bootGuestSize: (Int, Int)
+    /// The focused game's window size in guest pixels (`game-size`, progress agent); nil outside game focus.
+    private var focusedGameSize: (Int, Int)?
+    /// MetalFX factor limit per axis while a lower game resolution is shown (above it: bilinear).
+    static let lowResMetalFXMaxRatio = 1.5
     private var guestResizeWork: DispatchWorkItem?
     private var inFullScreenTransition = false
     static let minGuestSize = NSSize(width: 800, height: 500)
@@ -106,6 +112,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         let guest = WindowController.guestSize(points: CGSize(width: width, height: height), scale: pixelScale)
         self.scanoutSize = guest
         self.requestedGuestSize = guest
+        self.bootGuestSize = guest
         let rect = NSRect(x: 0, y: 0, width: width, height: height)
         let screen = WindowController.targetScreen()
         window = NSWindow(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -174,6 +181,9 @@ final class WindowController: NSObject, NSWindowDelegate {
         subscriptions.append(settings.$superResolution.dropFirst().removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] on in
             self?.applySuperResolution(on)
         })
+        subscriptions.append(settings.$upscaleLowerResolutions.dropFirst().removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.refreshLowerResolution()
+        })
     }
 
     func show() {
@@ -211,6 +221,42 @@ final class WindowController: NSObject, NSWindowDelegate {
     func scanoutResized(width: Int, height: Int) {
         view.contentPixelSize = CGSize(width: width, height: height)
         scanoutSize = (width, height)
+        updateUpscaleCap()
+        view.redraw()
+    }
+
+    /// Lower game resolution (Settings > Display > "Upscale lower game resolutions"): the guest
+    /// game's own window size as reported by the progress agent. Nil = unknown / not in game focus.
+    func guestGameSize(width: Int, height: Int) {
+        focusedGameSize = (width & ~1, height & ~1)
+        log("display: focused game renders \(width)x\(height)")
+        refreshLowerResolution()
+    }
+
+    /// The guest display size wanted now: the window's (the boot size when it does not follow the
+    /// window), or the focused game's own size while that is smaller than it on both axes and the
+    /// setting is on. The window never changes for it: the Mac upscales the smaller picture.
+    func desiredGuestSize() -> (Int, Int) {
+        let base = settings.followWindowSize ? guestSizeForWindow() : bootGuestSize
+        guard settings.upscaleLowerResolutions, focusedGame != nil, let g = focusedGameSize,
+              g != base, g.0 >= 320, g.1 >= 200, g.0 <= base.0, g.1 <= base.1 else { return base }
+        return g
+    }
+
+    /// Re-evaluate the lower-resolution mode after a focus, game size or setting change.
+    private func refreshLowerResolution() {
+        updateUpscaleCap()
+        scheduleGuestResize()
+    }
+
+    /// MetalFX up to `lowResMetalFXMaxRatio` per axis only while the shown scanout is the focused
+    /// game's own size with the setting on; nil otherwise (the renderer's existing path, unchanged).
+    private func updateUpscaleCap() {
+        let lower = settings.upscaleLowerResolutions && focusedGame != nil
+            && focusedGameSize.map { $0 == scanoutSize } == true
+        let cap: Double? = lower ? WindowController.lowResMetalFXMaxRatio : nil
+        guard view.renderer.upscaleCap != cap else { return }
+        view.renderer.upscaleCap = cap
         view.redraw()
     }
 
@@ -241,10 +287,12 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// meanwhile); fires once the size has been stable for `guestResizeDebounce`.
     private func scheduleGuestResize() {
         guestResizeWork?.cancel()
-        guard settings.followWindowSize else { return }
+        // Also while a lower game size is shown: turning the option off must send the boot size back.
+        guard settings.followWindowSize || settings.upscaleLowerResolutions || requestedGuestSize != bootGuestSize
+        else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.window.inLiveResize, !self.inFullScreenTransition, !self.holdGuestSize else { return }
-            let size = self.guestSizeForWindow()
+            let size = self.desiredGuestSize()
             guard size != self.requestedGuestSize else { return }
             self.requestedGuestSize = size
             self.onGuestSizeRequest?(size.0, size.1)
@@ -357,6 +405,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         progress.onChange = { [weak self] s in previous?(s); self?.progressChanged(s) }
         let previousFocus = progress.onFocus
         progress.onFocus = { [weak self] f in previousFocus?(f); self?.guestFocusChanged(f) }
+        progress.onGameSize = { [weak self] w, h in self?.guestGameSize(width: w, height: h) }
         let previousReady = progress.onReady
         progress.onReady = { [weak self] in previousReady?(); self?.overlay.hide() }
         let previousShutdown = progress.onShutdown
@@ -719,9 +768,12 @@ final class WindowController: NSObject, NSWindowDelegate {
         }
         guard f != guestFocus else { return }
         guestFocus = f
+        // The agent sends the new game's `game-size` right after `focus game`; until then none is known.
+        focusedGameSize = nil
         stall?.gameFocused = focusedGame != nil
         updateNoPictureGate()
         log("input: guest focus \(f)")
+        refreshLowerResolution()
         guestCursor = nil
         // Back in Steam / desktop (or a game without auto-capture): give the pointer back.
         if captured && mouseMode == .auto && !clickCaptures { releasePointer() }

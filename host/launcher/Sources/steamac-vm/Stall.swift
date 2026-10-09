@@ -263,10 +263,10 @@ final class StallMonitor {
         guard now - perfStart >= StallMonitor.perfPeriod - StallMonitor.tick / 2 else { return }
         let dt = now - perfStart
         if let c, let p = perfCounters {
-            log(String(format: "perf: gpu ctrl/s=%.1f ring/s=%.1f longest-idle=%.2f s",
+            perfLog(String(format: "perf: gpu ctrl/s=%.1f ring/s=%.1f longest-idle=%.2f s",
                        Double(c.ctrl &- p.ctrl) / dt, Double(c.ring &- p.ring) / dt, perfLongestIdle))
         } else {
-            log("perf: gpu counters unavailable")
+            perfLog("perf: gpu counters unavailable")
         }
         perfStart = now
         perfCounters = c

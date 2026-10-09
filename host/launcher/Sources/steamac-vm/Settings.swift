@@ -24,7 +24,7 @@ final class LauncherSettings: ObservableObject {
              closeAction, checkForUpdates, followMacTime, shareClipboard, shareConcealedClipboard
         // Display
         case dpiSource, fixedDPI, fixedWidthMM, fixedHeightMM, refreshRate, followWindowSize, windowWidth, windowHeight,
-             windowSizePreset, retinaResolution, metalHUD, superResolution, renderScale
+             windowSizePreset, retinaResolution, metalHUD, superResolution, renderScale, upscaleLowerResolutions
         // Mouse
         case autoCaptureGames, gameNames
         // Controller
@@ -275,6 +275,10 @@ final class LauncherSettings: ObservableObject {
     /// Guest render scale 0.25...1.0 of the window's pixel size (Options.renderScale): the guest
     /// renders fewer pixels and MetalFX super resolution upscales them to the window; next start.
     @Published var renderScale = 1.0 { didSet { save(.renderScale, renderScale) } }
+    /// While the guest game renders below the window size, the guest scanout follows the game's
+    /// window size and the Mac upscales it to the window (Renderer; MetalFX up to 1.5x per axis,
+    /// bilinear above). The window and the Retina guest maximum are unchanged. Applies now.
+    @Published var upscaleLowerResolutions = false { didSet { save(.upscaleLowerResolutions, upscaleLowerResolutions) } }
     // Mouse
     @Published var autoCaptureGames = true { didSet { save(.autoCaptureGames, autoCaptureGames) } }
     @Published private(set) var games: [Game] = []
@@ -370,6 +374,7 @@ final class LauncherSettings: ObservableObject {
         bool(.retinaResolution, &retinaResolution)
         bool(.metalHUD, &metalHUD)
         bool(.superResolution, &superResolution)
+        bool(.upscaleLowerResolutions, &upscaleLowerResolutions)
         if let v = d.object(forKey: Key.renderScale.rawValue) as? Double { renderScale = min(1, max(0.25, v)) }
         bool(.autoCaptureGames, &autoCaptureGames)
         bool(.virtualPad, &virtualPad)
@@ -446,6 +451,7 @@ final class LauncherSettings: ObservableObject {
         case .retinaResolution: guard let b else { return false }; retinaResolution = b
         case .metalHUD: guard let b else { return false }; metalHUD = b
         case .superResolution: guard let b else { return false }; superResolution = b
+        case .upscaleLowerResolutions: guard let b else { return false }; upscaleLowerResolutions = b
         case .renderScale: guard let d, (0.25...1.0).contains(d) else { return false }; renderScale = d
         case .autoCaptureGames: guard let b else { return false }; autoCaptureGames = b
         case .gameNames: return false
@@ -492,6 +498,7 @@ final class LauncherSettings: ObservableObject {
         windowWidth = fresh.windowWidth; windowHeight = fresh.windowHeight; windowSizePreset = fresh.windowSizePreset
         retinaResolution = fresh.retinaResolution
         metalHUD = fresh.metalHUD; superResolution = fresh.superResolution; renderScale = fresh.renderScale
+        upscaleLowerResolutions = fresh.upscaleLowerResolutions
         autoCaptureGames = fresh.autoCaptureGames
         virtualPad = fresh.virtualPad; padType = fresh.padType; dualSensePassthrough = fresh.dualSensePassthrough
         controllerID = fresh.controllerID; swapABXY = fresh.swapABXY

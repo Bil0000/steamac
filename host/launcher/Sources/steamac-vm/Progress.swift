@@ -49,6 +49,9 @@ final class BootProgress {
     var onFocus: ((GuestFocus) -> Void)?
     /// `game <appid> <name>`: the display name of a game the guest focused.
     var onGameName: ((Int, String) -> Void)?
+    /// `game-size <w>x<h>`: the focused game window's size in guest pixels (sent after `focus game`
+    /// and when the window is resized). Older agents never send it: the host then keeps the window size.
+    var onGameSize: ((Int, Int) -> Void)?
     /// `game-frozen <appid>` / `game-thawed <appid>`: the agent's confirmation of a pause (GamePause).
     var onGameFrozen: ((_ appid: Int, _ frozen: Bool) -> Void)?
     /// First-boot provisioning ended (`provision done` / `provision failed <reason>`, fx.progress
@@ -170,6 +173,10 @@ final class BootProgress {
                   let r = line.range(of: parts[1], range: line.index(line.startIndex, offsetBy: 4)..<line.endIndex) else { return }
             let name = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
             if !name.isEmpty { onGameName?(id, name) }
+        case "game-size":
+            guard parts.count >= 2 else { return }
+            let size = parts[1].split(separator: "x").compactMap { Int($0) }
+            if size.count == 2, size[0] > 0, size[1] > 0 { onGameSize?(size[0], size[1]) }
         case "alive":
             guard parts.count >= 3, let ms = Int(parts[1]), let load = Double(parts[2]) else { return }
             onAlive?(ms, load)

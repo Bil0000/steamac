@@ -258,6 +258,7 @@ struct Options {
       --perf-stats         every 5 s log frame pacing (also STEAMAC_PERF_STATS=1): guest flush and
                            on-screen frame intervals (p50/p95/p99/max, count > 25 / > 50 ms), libkrun's
                            per-flush copy, flush -> screen latency, dropped/replaced frames, upload time
+                           (STEAMAC_PERF_FRAMES=<path> also appends one CSV line per shown frame)
       --selftest-display   feed synthetic frames (all formats) through the display backend vtable and
                            verify PNG dump, Metal render and (windowed) the presented drawable
       --input-selftest S   S seconds after boot, inject synthetic key/mouse/gamepad input, then
@@ -440,6 +441,10 @@ struct Options {
         if ProcessInfo.processInfo.environment["STEAMAC_PERF_STATS"] == "1" {
             o.perfStats = true
             o.explicit.insert("STEAMAC_PERF_STATS=1")
+        }
+        if let p = ProcessInfo.processInfo.environment["STEAMAC_PERF_FRAMES"], !p.isEmpty {
+            o.perfStats = true
+            o.explicit.insert("STEAMAC_PERF_FRAMES")
         }
         if ProcessInfo.processInfo.environment[CrashReporting.disableEnv] == "0" {
             o.noCrashReports = true

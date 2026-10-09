@@ -59,13 +59,17 @@ final class Presenter: DisplaySink {
         os_unfair_lock_unlock(&lock)
         guard let f = scanout.take() else { return }
         let perf = PerfStats.shared
-        let flushedAt = perf?.frameTaken() ?? 0
+        var stamp = perf?.frameTaken() ?? PerfStats.FrameStamp()
         let t0 = perf != nil ? CACurrentMediaTime() : 0
         renderer.upload(f)
-        if let perf { perf.uploaded(ms: (CACurrentMediaTime() - t0) * 1000) }
+        if let perf {
+            let ms = (CACurrentMediaTime() - t0) * 1000
+            perf.uploaded(ms: ms)
+            stamp.uploadMs = ms
+        }
         scanout.release(f)
         framesShown &+= 1
-        view?.redraw(flushedAt: flushedAt)
+        view?.redraw(stamp: stamp)
         if let next = onNextFrame {
             onNextFrame = nil
             next()
@@ -145,8 +149,8 @@ final class VMView: NSView {
         }
     }
 
-    /// `flushedAt`: the guest flush time of a new frame (perf stats), 0 for a plain redraw.
-    func redraw(flushedAt: CFTimeInterval = 0) { renderer.draw(to: metalLayer, flushedAt: flushedAt) }
+    /// `stamp`: the guest flush of a new frame (perf stats), empty for a plain redraw.
+    func redraw(stamp: PerfStats.FrameStamp = .init()) { renderer.draw(to: metalLayer, stamp: stamp) }
 
     /// Metal Performance HUD shown (WindowController). libMTLHud attaches to the layer once a
     /// drawable has reached the screen, starts shown (MTL_HUD_ENABLED) and then acts only on

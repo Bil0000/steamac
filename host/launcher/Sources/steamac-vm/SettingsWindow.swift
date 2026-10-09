@@ -443,6 +443,14 @@ private struct DisplayTab: View {
                            now: false, key: .renderScale)
                 }
                 .disabled(!Renderer.superResolutionSupported && settings.renderScale >= 1)
+                Toggle(isOn: $settings.upscaleLowerResolutions) {
+                    Label2(title: "Upscale lower game resolutions",
+                           detail: "When the game renders below the window's size (its own resolution setting), the guest "
+                               + "sends the game's size and the Mac upscales it to fill the window, instead of the guest "
+                               + "upscaling it to the full Retina size. MetalFX up to 1.5×, bilinear beyond. "
+                               + "The guest display's maximum is unchanged. Off: no change.",
+                           now: true)
+                }
                 Picker(selection: preset) {
                     ForEach(LauncherSettings.sizePresets) { Text(presetTitle($0)).tag($0.id) }
                     Divider()
