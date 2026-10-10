@@ -350,7 +350,7 @@ send_built_flags(uint16_t call, uint16_t extra_flags, void *params, uint32_t par
   uint32_t to_end = WMTR_RING_BYTES - pos;
   uint64_t need = total + (to_end < total ? to_end : 0);
   for (int spins = 0; ring_space() < need; spins++) {
-    if (__atomic_load_n(&R->host_idle, __ATOMIC_SEQ_CST)) T->kick(T);
+    if (wmtr_claim_kick(&R->host_idle)) T->kick(T);
     if (spins > 64) sched_yield();
   }
   if (to_end < total) {
@@ -368,7 +368,7 @@ send_built_flags(uint16_t call, uint16_t extra_flags, void *params, uint32_t par
   memcpy(dst + poff, B.buf, B.len);
   __atomic_store_n(&R->head, head + total, __ATOMIC_RELEASE);
   __atomic_thread_fence(__ATOMIC_SEQ_CST);
-  if (__atomic_load_n(&R->host_idle, __ATOMIC_SEQ_CST)) T->kick(T);
+  if (wmtr_claim_kick(&R->host_idle)) T->kick(T);
   pthread_mutex_unlock(&ring_lock);
 
   if (!sync) return STATUS_SUCCESS;

@@ -61,4 +61,13 @@ wmtr_spin_wait(volatile uint64_t *done, uint64_t seq, uint64_t budget_ns) {
   }
 }
 
+/* Whether this client must kick the sleeping host executor. The first client to see host_idle clears it and
+ * kicks; requests written before the host has woken up then go without a kick of their own. Each kick is a
+ * virtio-gpu submission and a VM exit; in VRChat the host slept ~97 times and was kicked ~290 times a frame. The
+ * executor sets host_idle again before it next sleeps. */
+static inline int
+wmtr_claim_kick(volatile uint32_t *host_idle) {
+  return __atomic_exchange_n(host_idle, 0, __ATOMIC_SEQ_CST) != 0;
+}
+
 #endif

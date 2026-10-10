@@ -35,8 +35,10 @@ void wmtr_present_release_view(void *ctx, uint64_t view);
 struct wmtr_host_stats { uint64_t requests, sync_requests, bytes, worker_calls, idle_sleeps; };
 void wmtr_host_get_stats(struct wmtr_host *h, struct wmtr_host_stats *out);
 /* How long the executor polls an empty ring before it sleeps (default WMTR_HOST_SPIN_US_DEFAULT us, env
- * WMTR_HOST_SPIN_US at create). Longer: fewer kicks (guest VM exits) for host CPU. */
-#define WMTR_HOST_SPIN_US_DEFAULT 2
+ * WMTR_HOST_SPIN_US at create). Longer: fewer kicks (guest VM exits) for host CPU. VRChat (DXMT): 2 us -> 100 us
+ * cut kicks from 290 to 64 a frame and executor sleeps from 97 to 15, idle fps 82 -> 99, host CPU of the VM process
+ * unchanged (347% vs 336%), n=1 each. */
+#define WMTR_HOST_SPIN_US_DEFAULT 100
 void wmtr_host_set_spin(struct wmtr_host *h, uint64_t ns);
 
 #endif
