@@ -52,6 +52,9 @@ struct wmtr_host {
   pthread_cond_t cond;
   int kicked, quit;
   int faulted; /* a call of this client faulted (see fault containment) */
+  /* the last calls (index, slot, first params after the call), dumped when a call faults */
+  struct { uint16_t call, slot; uint32_t st; uint64_t q[4]; } trace[128];
+  _Atomic uint32_t trace_n;
   dispatch_queue_t compile_q, block_q;
   pthread_mutex_t free_lock, event_lock;
   /* views the client created and has not released: released on destroy, so a client that exits
@@ -75,11 +78,12 @@ static int log_level = 1;
 #define STATUS_ACCESS_VIOLATION ((NTSTATUS)0xC0000005)
 #endif
 static __thread sigjmp_buf *fault_jmp;
+static __thread void *fault_addr;
 static struct sigaction prev_segv, prev_bus;
 
 static void
 fault_handler(int sig, siginfo_t *si, void *uc) {
-  if (fault_jmp) siglongjmp(*fault_jmp, sig);
+  if (fault_jmp) { fault_addr = si ? si->si_addr : NULL; siglongjmp(*fault_jmp, sig); }
   struct sigaction *prev = sig == SIGBUS ? &prev_bus : &prev_segv;
   if (prev->sa_flags & SA_SIGINFO) { prev->sa_sigaction(sig, si, uc); return; }
   if (prev->sa_handler != SIG_DFL && prev->sa_handler != SIG_IGN) { prev->sa_handler(sig); return; }
@@ -490,10 +494,30 @@ execute(struct wmtr_host *h, uint8_t *rec, uint32_t len) {
             st = host_call(h, r->h.call, payload, r, relocs, orig);
           }
           fault_jmp = NULL;
+          uint32_t ti = atomic_fetch_add(&h->trace_n, 1) % 128;
+          h->trace[ti].call = r->h.call; h->trace[ti].slot = r->h.slot; h->trace[ti].st = (uint32_t)st;
+          for (int k = 0; k < 4; k++) h->trace[ti].q[k] = r->h.params_size >= 8u * (k + 1) ? ((const uint64_t *)payload)[k] : 0;
         } else {
           fault_jmp = NULL;
           __atomic_store_n(&h->faulted, 1, __ATOMIC_RELEASE);
-          LOG(0, "call %u faulted (bad handle from the client?); failing this client's calls from now on\n", r->h.call);
+          const uint64_t *q = (const uint64_t *)payload;
+          LOG(0, "call %u faulted at %p (bad handle from the client?); params %llx %llx %llx %llx; failing this "
+                 "client's calls from now on\n", r->h.call, fault_addr, (unsigned long long)(r->h.params_size >= 8 ? q[0] : 0),
+              (unsigned long long)(r->h.params_size >= 16 ? q[1] : 0), (unsigned long long)(r->h.params_size >= 24 ? q[2] : 0),
+              (unsigned long long)(r->h.params_size >= 32 ? q[3] : 0));
+          uint32_t tn = atomic_load(&h->trace_n);
+          for (uint32_t k = tn > 128 ? tn - 128 : 0; k < tn; k++) {
+            uint32_t ti = k % 128;
+            LOG(0, "  before: call %u slot %u st %x: %llx %llx %llx %llx\n", h->trace[ti].call, h->trace[ti].slot, h->trace[ti].st,
+                (unsigned long long)h->trace[ti].q[0], (unsigned long long)h->trace[ti].q[1],
+                (unsigned long long)h->trace[ti].q[2], (unsigned long long)h->trace[ti].q[3]);
+          }
+          /* a by-pointer argument struct (e.g. a pipeline info) lives in the payload: show its head */
+          if (r->h.params_size >= 16 && q[1] >= (uint64_t)(uintptr_t)payload && q[1] + 32 <= (uint64_t)(uintptr_t)payload + r->payload_size) {
+            const uint64_t *in = (const uint64_t *)(uintptr_t)q[1];
+            LOG(0, "  arg struct: %llx %llx %llx %llx\n", (unsigned long long)in[0], (unsigned long long)in[1],
+                (unsigned long long)in[2], (unsigned long long)in[3]);
+          }
           st = STATUS_ACCESS_VIOLATION;
         }
       }

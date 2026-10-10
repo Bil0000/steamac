@@ -18,6 +18,8 @@ for f in d3d11.dll dxgi.dll d3d10core.dll; do
   dd if=/dev/zero of="$W/dxvk/x86_64-windows/$f" bs=1 seek=64 count=16 conv=notrunc status=none
 done
 rm -f "$W/x86_64-unix/winemetal.so"; cp "$SO" "$W/x86_64-unix/winemetal.so"
+# plain-wine scratch prefixes for lean-run.sh (only with LEAN_PREFIXES=1; lean-steamrun.sh needs none)
+[ "${LEAN_PREFIXES:-0}" = 1 ] || { md5sum "$W/x86_64-windows/d3d11.dll" "$SRC/lib/wine/x86_64-windows/d3d11.dll"; exit 0; }
 # prefixes (wineboot under FEX); dxvk prefix gets Proton's DXVK dlls the way proton installs them
 for m in dxvk wmtr; do
   if [ ! -d "$L/pfx-$m/drive_c/windows/system32" ]; then "$L/lean-run.sh" $m wineboot -i >/dev/null 2>&1 || true; fi

@@ -62,10 +62,32 @@ slot_release(void *p) {
   if (s >= 0) atomic_fetch_and(&slot_bitmap, ~(1ull << s));
 }
 
+/* WMTR_TRACE=<path> (debugging): one line per call before and after, with the first parameter words */
+#include <sys/syscall.h>
+#include <unistd.h>
+static FILE *trace_f;
+static pthread_mutex_t trace_lock = PTHREAD_MUTEX_INITIALIZER;
+static void
+trace_call(char tag, uint16_t call, const void *params, uint32_t size, NTSTATUS st) {
+  uint64_t q[4] = {0, 0, 0, 0};
+  if (call <= 1) q[0] = (uint64_t)(uintptr_t)params;
+  else memcpy(q, params, size < sizeof q ? size : sizeof q);
+  pthread_mutex_lock(&trace_lock);
+  fprintf(trace_f, "%c %ld %u %x %llx %llx %llx %llx\n", tag, (long)syscall(SYS_gettid), call, (unsigned)st,
+          (unsigned long long)q[0], (unsigned long long)q[1], (unsigned long long)q[2], (unsigned long long)q[3]);
+  pthread_mutex_unlock(&trace_lock);
+}
+
 static void
 wmtr_init(void) {
   const char *l = getenv("WMTR_LOG");
   if (l) wmtr_log_level = env_int(l);
+  const char *tp = getenv("WMTR_TRACE");
+  if (tp && *tp) {
+    char path[512];
+    snprintf(path, sizeof path, "%s.%d", tp, (int)getpid());
+    if ((trace_f = fopen(path, "w"))) setvbuf(trace_f, NULL, _IOLBF, 0);
+  }
   pthread_key_create(&slot_key, slot_release);
   T = wmtr_transport_create();
   if (!T) { LOG(0, "no transport\n"); return; }
@@ -803,14 +825,25 @@ static const uint32_t call_size[146] = {
 };
 
 static NTSTATUS
-entry(uint16_t call, void *params) {
-  pthread_once(&init_once, wmtr_init);
-  if (!init_ok) return STATUS_UNSUCCESSFUL;
+entry_untraced(uint16_t call, void *params) {
   if (call == 0 || call == 1) { /* retain / release take the handle itself */
     b_begin(params, 8);
     return send_built(call, 0, params, 8);
   }
   return dispatch(call, params, call_size[call], call_sync[call]);
+}
+
+static NTSTATUS
+entry(uint16_t call, void *params) {
+  pthread_once(&init_once, wmtr_init);
+  if (!init_ok) return STATUS_UNSUCCESSFUL;
+  if (__builtin_expect(trace_f != NULL, 0)) {
+    trace_call('>', call, params, call_size[call], 0);
+    NTSTATUS st = entry_untraced(call, params);
+    trace_call('<', call, params, call_size[call], st);
+    return st;
+  }
+  return entry_untraced(call, params);
 }
 
 #define E(n) static NTSTATUS e##n(void *p) { return entry(n, p); }

@@ -23,6 +23,8 @@ if [ -n "${STEAM_COMPAT_DATA_PATH:-}" ]; then
   case "${EAC_LAUNCHERDIR:-}" in "$real"/*) export EAC_LAUNCHERDIR="$STEAM_COMPAT_DATA_PATH${EAC_LAUNCHERDIR#"$real"}" ;; esac
   "$L/lean-pfx-fix.sh" "$STEAM_COMPAT_DATA_PATH/pfx"
 fi
+# debugging: a TRACE flag file next to the scripts turns on the wmtr client's per-call trace
+[ -f "$L/TRACE" ] && export WMTR_TRACE=$L/wmtr-trace
 # DXMT's own log (errors such as failed PSOs) next to the copy, per executable
 export DXMT_LOG_PATH=${DXMT_LOG_PATH:-$L/dxmt-log}; mkdir -p "$DXMT_LOG_PATH"
 echo "lean-wrap: $(date '+%F %T') ${args[*]} (compatdata $STEAM_COMPAT_DATA_PATH, EAC_LAUNCHERDIR ${EAC_LAUNCHERDIR:-unset})" >> "$L/lean-wrap.log"
