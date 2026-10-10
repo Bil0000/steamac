@@ -161,6 +161,15 @@ contributed upstream (standalone fork rule); local changes keep the LGPL-2.1 ter
   FEX_ROOTFS=/usr/share/guestos/fex-mesa); proton-lean = hard-linked copy of Proton's files with
   DXMT's PE dlls + winemetal.dll/.so (originals never written).
 
+## Shader caches on the wmtr path (to be measured cold vs warm in P3/P6)
+
+DXMT's own cache defaults to a relative path `dxmt/<exe>/shaders_<metal version>.db`
+(src/dxmt/dxmt_shader_cache.cpp:25-31), resolved by the unix side under the executor process's
+DARWIN_USER_CACHE_DIR (src/winemetal/unix/cache.c:23-35) — with wmtr that is the steamac launcher's
+cache dir on the host, so it persists across guest runs. Metal's own cache is per process: the executor
+runs inside steamac-vm, so it shares the launcher's (MetalCompilerCache.swift). Do not set
+DXMT_SHADER_CACHE_PATH in the guest (an absolute guest path would be used on the host).
+
 ## P5/P6 plan — VRChat on the lean path without touching the user's setup
 
 * Launch-options wrapper (restored afterwards, like every other run): Steam's command is

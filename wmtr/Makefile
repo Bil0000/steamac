@@ -54,8 +54,11 @@ $(OUT)/x86_64-macos/winemetal.so: src/wmtr_client.c src/transport_sock.c include
 	$(CC) -arch x86_64 $(CFLAGS) -shared -fPIC -o $@ src/wmtr_client.c src/transport_sock.c -Wl,-undefined,dynamic_lookup
 	codesign -s - -f $@
 
-test: $(OUT)/wmtr_loopback
+test: $(OUT)/wmtr_loopback $(OUT)/wmtr_present_test
 	./$(OUT)/wmtr_loopback
+	./$(OUT)/wmtr_present_test
+$(OUT)/wmtr_present_test: tests/wmtr_present_test.m $(OUT)/libwmtr_host.dylib
+	$(CC) $(CFLAGS) -o $@ tests/wmtr_present_test.m -L$(OUT) -lwmtr_host -Wl,-rpath,@executable_path -framework Cocoa -framework Metal -framework QuartzCore
 $(OUT)/wmtr_loopback: tests/wmtr_loopback.m src/wmtr_host.m src/wmtr_client.c include/*.h | $(OUT)
 	$(CC) $(CFLAGS) -o $@ tests/wmtr_loopback.m src/wmtr_host.m src/wmtr_client.c -framework Foundation -framework Metal
 

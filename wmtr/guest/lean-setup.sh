@@ -5,10 +5,13 @@
 set -eu
 DX=$1; SO=$2
 L=$HOME/vrc/lean; mkdir -p "$L"
-SRC="$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/files"
-if [ ! -d "$L/proton-lean/files" ]; then mkdir -p "$L/proton-lean"; cp -al "$SRC" "$L/proton-lean/files"; fi
+TOOL="$HOME/.local/share/Steam/steamapps/common/Proton - Experimental"
+SRC="$TOOL/files"
+if [ ! -d "$L/proton-lean/files" ]; then cp -al "$TOOL" "$L/proton-lean"; fi
 W="$L/proton-lean/files/lib/wine"
 for f in d3d11.dll dxgi.dll d3d10core.dll winemetal.dll; do rm -f "$W/x86_64-windows/$f"; cp "$DX/$f" "$W/x86_64-windows/$f"; done
+# what `proton` installs into a prefix instead of wine's builtins (its DXVK set) becomes DXMT too
+for f in d3d11.dll dxgi.dll d3d10core.dll; do rm -f "$W/dxvk/x86_64-windows/$f"; cp "$DX/$f" "$W/dxvk/x86_64-windows/$f"; done
 rm -f "$W/x86_64-unix/winemetal.so"; cp "$SO" "$W/x86_64-unix/winemetal.so"
 # prefixes (wineboot under FEX); dxvk prefix gets Proton's DXVK dlls the way proton installs them
 for m in dxvk wmtr; do
