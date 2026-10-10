@@ -1,4 +1,4 @@
-From c76f21d31d94a90f4712807c2e8c0cbd603a405b Mon Sep 17 00:00:00 2001
+From a10b19e093003b4e38d99db7ac0f3d197d7650bc Mon Sep 17 00:00:00 2001
 From: StonkGuy <68372320+StonkGuy@users.noreply.github.com>
 Date: Sat, 10 Oct 2026 10:10:04 +0300
 Subject: [PATCH] rutabaga_gfx(macos): wmtr context type for remoted DXMT
@@ -11,19 +11,67 @@ Blobs are POSIX shared memory mapped into the guest by the existing SHM
 blob path and into the VMM for the executor; EXECBUFFER carries RING,
 KICK and WAIT; WAIT fences complete when the reply slot reaches its
 sequence number. The component exists only with STEAMAC_WMTR=1 and a
-loadable library, so other guests see no change.
+loadable library, so other guests see no change. The device's
+num_capsets counts it then (the stock value 5 covers only virgl, virgl2,
+venus, drm and cross-domain, so the guest would never query index 5);
+both sides read one cached load of the library.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- src/rutabaga_gfx/src/lib.rs            |   2 +
+ src/devices/src/virtio/gpu/device.rs   |  28 +-
+ src/rutabaga_gfx/src/lib.rs            |   9 +
  src/rutabaga_gfx/src/rutabaga_core.rs  |  18 +-
  src/rutabaga_gfx/src/rutabaga_utils.rs |   3 +
- src/rutabaga_gfx/src/wmtr.rs           | 505 +++++++++++++++++++++++++
- 4 files changed, 526 insertions(+), 2 deletions(-)
+ src/rutabaga_gfx/src/wmtr.rs           | 518 +++++++++++++++++++++++++
+ 5 files changed, 573 insertions(+), 3 deletions(-)
  create mode 100644 src/rutabaga_gfx/src/wmtr.rs
 
+diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
+index cc0f8d4..d1d562e 100644
+--- a/src/devices/src/virtio/gpu/device.rs
++++ b/src/devices/src/virtio/gpu/device.rs
+@@ -181,7 +181,9 @@ impl VirtioDevice for Gpu {
+             },
+             events_clear: 0,
+             num_scanouts: self.displays.len() as u32,
+-            num_capsets: 5,
++            // virgl, virgl2, venus, drm, cross-domain, plus wmtr when it is enabled: the driver
++            // only asks for capset indices below this count.
++            num_capsets: 5 + u32::from(rutabaga_gfx::wmtr_enabled()),
+             blob_alignment: self.blob_alignment,
+         };
+ 
+@@ -293,4 +295,28 @@ mod tests {
+         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u32;
+         assert_eq!(u32::from_le_bytes(data), page_size);
+     }
++
++    /// The wmtr capset is listed after the five stock ones, so the count must include it or the guest
++    /// never queries its index. Needs STEAMAC_WMTR_LIB=/path/to/libwmtr_host.dylib (skipped when unset).
++    #[cfg(target_os = "macos")]
++    #[test]
++    fn num_capsets_includes_wmtr() {
++        if std::env::var("STEAMAC_WMTR_LIB").is_err() {
++            eprintln!("STEAMAC_WMTR_LIB unset: skipped");
++            return;
++        }
++        std::env::set_var("STEAMAC_WMTR", "1");
++        let gpu = Gpu::new(
++            0,
++            None,
++            Box::new([]),
++            NoopDisplayBackend::into_display_backend(None),
++            Arc::new(DisplayControl::new(&[])),
++            crossbeam_channel::unbounded().0,
++        )
++        .unwrap();
++        let mut data = [0u8; 4];
++        gpu.read_config(12, &mut data);
++        assert_eq!(u32::from_le_bytes(data), 6);
++    }
+ }
 diff --git a/src/rutabaga_gfx/src/lib.rs b/src/rutabaga_gfx/src/lib.rs
-index 06c75ae..7670b01 100644
+index 06c75ae..602e428 100644
 --- a/src/rutabaga_gfx/src/lib.rs
 +++ b/src/rutabaga_gfx/src/lib.rs
 @@ -14,6 +14,8 @@ mod macros;
@@ -35,6 +83,17 @@ index 06c75ae..7670b01 100644
  mod rutabaga_core;
  mod rutabaga_gralloc;
  mod rutabaga_os;
+@@ -36,3 +38,10 @@ pub use crate::rutabaga_os::IntoRawDescriptor as RutabagaIntoRawDescriptor;
+ pub use crate::rutabaga_os::MappedRegion as RutabagaMappedRegion;
+ pub use crate::rutabaga_os::SafeDescriptor as RutabagaDescriptor;
+ pub use crate::rutabaga_utils::*;
++#[cfg(target_os = "macos")]
++pub use crate::wmtr::enabled as wmtr_enabled;
++/// The wmtr context type exists only on macOS.
++#[cfg(not(target_os = "macos"))]
++pub fn wmtr_enabled() -> bool {
++    false
++}
 diff --git a/src/rutabaga_gfx/src/rutabaga_core.rs b/src/rutabaga_gfx/src/rutabaga_core.rs
 index 691ad8a..8cd744b 100644
 --- a/src/rutabaga_gfx/src/rutabaga_core.rs
@@ -115,10 +174,10 @@ index 085912c..3ccfd93 100644
  /// Rutabaga handle types (memory and sync in same namespace)
 diff --git a/src/rutabaga_gfx/src/wmtr.rs b/src/rutabaga_gfx/src/wmtr.rs
 new file mode 100644
-index 0000000..86fcc9e
+index 0000000..e86fcb6
 --- /dev/null
 +++ b/src/rutabaga_gfx/src/wmtr.rs
-@@ -0,0 +1,505 @@
+@@ -0,0 +1,518 @@
 +// Copyright 2026 the steamac lean-graphics contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -140,6 +199,7 @@ index 0000000..86fcc9e
 +use std::ffi::CString;
 +use std::sync::Arc;
 +use std::sync::Mutex;
++use std::sync::OnceLock;
 +
 +use crate::rutabaga_core::RutabagaComponent;
 +use crate::rutabaga_core::RutabagaContext;
@@ -229,6 +289,21 @@ index 0000000..86fcc9e
 +            map_path: opt("wmtr_map_path").map(|p| std::mem::transmute::<*mut c_void, MapPath>(p)),
 +        })
 +    }
++}
++
++/// The host library, loaded once per process (the device's config space and the rutabaga builder
++/// must agree on whether the capset exists). None unless STEAMAC_WMTR=1 and the library loads.
++fn host_lib() -> Option<HostLib> {
++    if std::env::var("STEAMAC_WMTR").ok().as_deref() != Some("1") {
++        return None;
++    }
++    static LIB: OnceLock<Option<HostLib>> = OnceLock::new();
++    *LIB.get_or_init(load_host_lib)
++}
++
++/// Whether the wmtr capset is offered: the virtio-gpu device adds it to `num_capsets`.
++pub fn enabled() -> bool {
++    host_lib().is_some()
 +}
 +
 +struct Waiter {
@@ -461,10 +536,7 @@ index 0000000..86fcc9e
 +impl Wmtr {
 +    /// Returns the component when STEAMAC_WMTR=1 and the host library loads.
 +    pub fn init(fence_handler: RutabagaFenceHandler) -> Option<Box<dyn RutabagaComponent>> {
-+        if std::env::var("STEAMAC_WMTR").ok().as_deref() != Some("1") {
-+            return None;
-+        }
-+        let lib = load_host_lib()?;
++        let lib = host_lib()?;
 +        info!("wmtr: context type enabled (capset {RUTABAGA_CAPSET_WMTR})");
 +        Some(Box::new(Wmtr { lib, fence_handler }))
 +    }
