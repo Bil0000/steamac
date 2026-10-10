@@ -1,4 +1,4 @@
-From a2b923138d3f79af5972286aac21ca7c6ec967dd Mon Sep 17 00:00:00 2001
+From b1e0e737975c38b7ddf53a9c8b47061d25801848 Mon Sep 17 00:00:00 2001
 From: StonkGuy <68372320+StonkGuy@users.noreply.github.com>
 Date: Sat, 10 Oct 2026 04:23:05 +0300
 Subject: [PATCH] build: prebuilt_metal_dir and build_unixlib options
@@ -11,11 +11,11 @@ the Windows PE dlls (for a Linux-hosted cross build).
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  meson.build               | 20 +++++++++++---------
- meson.options             |  3 ++-
+ meson.options             |  4 +++-
  src/airconv/meson.build   | 18 +++++++++++++-----
  src/dxmt/meson.build      |  9 ++++++---
  src/winemetal/meson.build |  2 +-
- 5 files changed, 33 insertions(+), 19 deletions(-)
+ 5 files changed, 34 insertions(+), 19 deletions(-)
 
 diff --git a/meson.build b/meson.build
 index e10c901..7cf523e 100644
@@ -51,16 +51,17 @@ index e10c901..7cf523e 100644
  xxd = find_program('xxd')
  
 diff --git a/meson.options b/meson.options
-index 715b176..5a5372d 100644
+index 715b176..edcf082 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -8,4 +8,5 @@ option('wine_builtin_dll', type : 'boolean', value : true)
+@@ -8,4 +8,6 @@ option('wine_builtin_dll', type : 'boolean', value : true)
  option('enable_tests', type : 'boolean', value : false)
  option('enable_nvapi', type : 'boolean', value : false)
  option('enable_nvngx', type : 'boolean', value : false)
 -option('enable_d3d12', type : 'boolean', value : false)
 \ No newline at end of file
-+option('enable_d3d12', type : 'boolean', value : false)option('prebuilt_metal_dir', type : 'string', value : '', description : 'Directory with dxmt_command.metallib and air_{msad,samplepos,tessellation}.air built by the same DXMT revision; used instead of xcrun metal when the Metal toolchain is not installed')
++option('enable_d3d12', type : 'boolean', value : false)
++option('prebuilt_metal_dir', type : 'string', value : '', description : 'Directory with dxmt_command.metallib and air_{msad,samplepos,tessellation}.air built by the same DXMT revision; used instead of xcrun metal when the Metal toolchain is not installed')
 +option('build_unixlib', type : 'boolean', value : true, description : 'Build the macOS unixlib (winemetal.so) and the native airconv library; false builds only the Windows PE dlls')
 diff --git a/src/airconv/meson.build b/src/airconv/meson.build
 index 8e0c8be..cbb9013 100644
