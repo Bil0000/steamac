@@ -22,10 +22,10 @@ Layers removed: DXVK, Venus (guest and host), virglrenderer, Vulkan→Metal tran
 | P0 baseline | done for VRChat (A/B table below); d3d11bench-in-VM baseline still to do |
 | P1 feasibility (no VM) | DXMT renders d3d11bench on macOS Wine, D3D11 and D3D12 (numbers below); VRChat on Mac Wine not attempted; D3DMetal renders d3d11bench only after the symlink-layout fix (raw log for that run not retained) |
 | P2 cut point | winemetal-level remoting works end to end on macOS (d3d11bench through wmtr-server); sync round trip p50 0.25 µs, p99 11.5 µs; ~48 calls/frame of which ~15 sync |
-| P3 transport | libkrun patch 0020 (rutabaga wmtr context, capset 30) + guest client (Linux x86-64, glibc ≤2.14) built; staged bundle /Volumes/LEANWORK/app-lean; VM test pending |
-| P4 presentation | not started |
-| P5 guest integration | not started |
-| P6 full test | not started |
+| P3 transport | works in the VM: guest ping p50 0.38 µs / p95 23 µs / p99 39 µs (FEX); d3d11bench renders through wmtr, frame byte-identical to native DXMT |
+| P4 presentation | overlay CAMetalLayer in the launcher's VM view (WMTR_PRESENT=overlay); released when the client goes away |
+| P5 guest integration | VRChat via launch-option wrapper + compatdata copy: EAC 301, AntiCheat Session Begin: Success, world join (2026-10-10 15:49) |
+| P6 full test | tooling ready (wmtr/tools/vrc-p6.sh); runs pending |
 
 ## P0 — baseline
 
@@ -190,3 +190,23 @@ DXMT_SHADER_CACHE_PATH in the guest (an absolute guest path would be used on the
 ## Dead ends / notes
 
 * Run P0_LEAN_R10a: overlapped host work → not an fps baseline (kept for join).
+
+## P3/P5 — in the VM (2026-10-10)
+
+Fixes needed to get there (each with a test that fails before and passes after):
+* libkrun 0020: num_capsets counted only the five stock capsets, so the guest never saw capset 30.
+* client: NtSetEvent lookup in Wine's RTLD_LOCAL ntdll.so; built with -mtls-dialect=gnu (GCC 16's TLS
+  descriptors need GLIBC_ABI_GNU2_TLS, which the Steam Runtime lacks); at most one WAIT in flight per
+  thread (re-submitting on poll timeouts filled the virtio-gpu control queue and froze every GPU client
+  in the guest).
+* host: overlay views released when the client's context goes away; autoreleased results without a
+  client pool kept alive; a faulting call fails that client instead of killing the VMM; WMTR_FRAMES
+  per-frame export (wmtr frames bypass the scanout path that STEAMAC_PERF_FRAMES records).
+* DXMT 0002: the staging/argument-buffer allocator wrote to its own malloc instead of the memory
+  newBuffer returns (wmtr: draws read zeros). DXMT 0003: ArgumentEncodingContext::device_ was used by
+  ClearUAV's constructor before initialisation (VRChat: device 0x316cf2e0).
+
+d3d11bench A/B in the VM (Steam launch chain, scratch prefixes, 8192 MiB, one 20 s run per config,
+Mac swapping 9.3 GB; raw p3/ab2/): fill-bound 100 draws/16 passes 21.3 vs 30.1 fps (1% low 14.1 vs
+28.4); 100/32 10.8 vs 14.8; 10000 draws 67.4 vs 120.0 (wmtr display-capped); 2000/4 60.5 vs 120.1
+(capped); 200/0 not comparable (gamescope does not display most DXVK frames at 1100 fps).
