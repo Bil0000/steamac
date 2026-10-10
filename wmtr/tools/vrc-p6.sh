@@ -73,7 +73,9 @@ LEANWRAP=${LEANWRAP:-1}
 log "start $LABEL mode=$MODE idle=$IDLE move=$MOVE memMiB=$(defaults read es.fxgam.steamac memMiB 2>/dev/null) mac: $(sysctl -n vm.swapusage)"
 # one driver and one VM at a time: refuse if any steamac-vm or another vrc-p6.sh (not this shell or its
 # subshells) is running
-v=$(pgrep -x "${P6_VMPROC:-steamac-vm}" | tr '\n' ' '); [ -z "$v" ] || { log "ABORT: a VM is running (pid $v)"; DONE=1; exit 1; }
+# (launcher self-tests, e.g. another checkout's `steamac-vm --selftest-*`, run no VM: they do not count)
+vms() { local p; for p in $(pgrep -x "${P6_VMPROC:-steamac-vm}"); do ps -o command= -p "$p" | grep -q -- '--selftest' || printf '%s ' "$p"; done; }
+v=$(vms); [ -z "$v" ] || { log "ABORT: a VM is running (pid $v)"; DONE=1; exit 1; }
 # (ancestors are skipped too: the shell that started this driver has its name on its command line)
 o=$(ps -axo pid=,ppid=,command= | awk -v me=$$ -v re="${P6_DRIVER_RE:-vrc-p6[.]sh}" '
   { pp[$1] = $2; line[$1] = $0; cmd[$1] = $3 }

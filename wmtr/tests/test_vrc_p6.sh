@@ -69,17 +69,28 @@ LEANWRAP=0 run wmtrc 0 wmtr
 grep -q 'lean-launchopts' "$T/wmtrc/state/calls" && fail wmtrc "LEANWRAP=0 touched the launch options"
 grep -q 'compatdata/438100' "$T/wmtrc/state/calls" || fail wmtrc "LEANWRAP=0 did not use the game's real prefix"
 # another driver or VM already running: refuse before the boot
-printf '#!/bin/sh\nsleep 20\n' > "$T/bin/t6-other-driver.sh"; chmod +x "$T/bin/t6-other-driver.sh"
+printf '#!/bin/sh\nsleep 120\n' > "$T/bin/t6-other-driver.sh"; chmod +x "$T/bin/t6-other-driver.sh"
 "$T/bin/t6-other-driver.sh" & other=$!
 busy() { # name vmproc driver_re
   local root=$T/busy-$1; mkdir -p "$root"
   SCENARIO=ok P6_ROOT=$root P6_G=$T/bin/g P6_BOOT=$T/bin/boot P6_TOOLS=$T/tools P6_BUSY_RE=no-such-process-xyz \
-    P6_VMPROC=$2 P6_DRIVER_RE=$3 bash "$D" T_busy dxvk > "$root/out" 2>&1; local rc=$?
+    P6_SLEEP=$T/bin/nap P6_POLL=2 P6_VMPROC=$2 P6_DRIVER_RE=$3 perl -e "alarm 60; exec @ARGV" bash "$D" T_busy dxvk > "$root/out" 2>&1; local rc=$?
   { [ "$rc" = 1 ] && grep -q 'ABORT: a.* is running' "$root/out"; } || fail "busy-$1" "rc $rc: $(tail -1 "$root/out")"
   [ -f "$root/T_busy/vm.pid" ] && fail "busy-$1" "booted although another driver/VM runs"
 }
 busy driver no-such-vm-xyz 't6-other-driver[.]sh'
-busy vm sleep t6-no-such-driver
+# a VM process (named like the launcher binary) blocks the run; a launcher self-test of the same name does not
+printf '#include <unistd.h>\nint main(void) { sleep(120); return 0; }\n' > "$T/t6vm.c"
+cc -o "$T/bin/t6vm" "$T/t6vm.c"   # its own binary: a copied system binary is killed by code signing
+"$T/bin/t6vm" & vmp=$!
+busy vm t6vm t6-no-such-driver
+kill $vmp 2>/dev/null; wait $vmp 2>/dev/null
+"$T/bin/t6vm" --selftest-stall & stp=$!
+root=$T/selftest; mkdir -p "$root"
+SCENARIO=ok P6_ROOT=$root P6_G=$T/bin/g P6_BOOT=$T/bin/boot P6_SCP=$T/bin/scp P6_ASKPASS=$T/bin/askpass P6_TOOLS=$T/tools \
+  P6_SLEEP=$T/bin/nap P6_POLL=2 P6_BUSY_RE=no-such-process-xyz P6_VMPROC=t6vm P6_DRIVER_RE=t6-no-such-driver IDLE=1 MOVE=1 \
+  perl -e "alarm 60; exec @ARGV" bash "$D" T_st dxvk > "$root/out" 2>&1 || fail selftest "a --selftest process blocked the run: $(grep -m1 ABORT "$root/out")"
+kill $stp 2>/dev/null; wait $stp 2>/dev/null
 # started from a shell whose own command line names the driver: that ancestor is not "another driver"
 root=$T/ancestor; mkdir -p "$root"
 SCENARIO=ok P6_ROOT=$root P6_G=$T/bin/g P6_BOOT=$T/bin/boot P6_SCP=$T/bin/scp P6_ASKPASS=$T/bin/askpass P6_TOOLS=$T/tools \
