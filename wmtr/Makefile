@@ -8,10 +8,12 @@
 #   make test-linux    build and run tests/wmtr_ntdll_test against it
 #   make guest-tests   static wmtr_ping_static / wmtr_wait_test for the VM guest (run there under FEX)
 # Inputs: DXMT source at the pinned revision (DXMT=), its native build dir with libairconv.a (DXMT_BUILD=),
-# LLVM 15 static libs (LLVM=).
-DXMT ?= /Volumes/LEANWORK/dxmt
+# LLVM 15 static libs (LLVM=), static zstd (ZSTD_LIB=). Machine-specific values can go in local.mk (not tracked).
+-include local.mk
+DXMT ?= ../work/src/dxmt
 DXMT_BUILD ?= $(DXMT)/build-native
-LLVM ?= /Volumes/LEANWORK/toolchains/llvm15
+LLVM ?= ../work/out/host/llvm15
+ZSTD_LIB ?= $(shell pkg-config --variable=libdir libzstd 2>/dev/null)/libzstd.a
 OUT ?= build
 CC = clang
 
@@ -25,7 +27,7 @@ LLVM_LIBS = -L$(LLVM)/lib -lLLVMPasses -lLLVMTarget -lLLVMObjCARCOpts -lLLVMCoro
   -lLLVMAnalysis -lLLVMProfileData -lLLVMSymbolize -lLLVMDebugInfoPDB -lLLVMDebugInfoMSF -lLLVMDebugInfoDWARF \
   -lLLVMObject -lLLVMTextAPI -lLLVMMCParser -lLLVMMC -lLLVMDebugInfoCodeView -lLLVMBitReader -lLLVMCore \
   -lLLVMRemarks -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMSupport -lLLVMDemangle \
-  /opt/homebrew/opt/zstd/lib/libzstd.a -lz -lcurses -lxml2 -lc++
+  $(ZSTD_LIB) -lz -lcurses -lxml2 -lc++
 AIRCONV = $(DXMT_BUILD)/src/airconv/darwin/libairconv.a $(DXMT_BUILD)/libs/DXBCParser/libDXBCParserNative.a
 
 all: host server client-macos

@@ -1,1 +1,4 @@
 build/
+build-next/
+local.mk
+__pycache__/
