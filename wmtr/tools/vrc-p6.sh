@@ -133,6 +133,8 @@ $SLEEP 15
 PHASE=eac
 $G "find '$CD/pfx/drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat' -type f -newer $M -exec grep -a -h 'Launcher finished' {} + ; find '$VRC' -maxdepth 1 -name 'output_log_*.txt' -newer $M -exec grep -a -h 'AntiCheat Session Begin\|Finished entering world\|Graphics Device Version' {} +" > "$R/eac-log.txt" 2>&1
 log "eac: $(grep -a -o 'Launcher finished with: [0-9]*' "$R/eac-log.txt" | tail -1) | $(grep -a -o 'AntiCheat Session Begin: [A-Za-z]*' "$R/eac-log.txt" | tail -1)"
+# passive guest state: virtio-snd kernel messages of this boot, console log level, gamescope MangoApp setting
+$G 'dmesg 2>/dev/null | grep -a virtio_snd | tail -100; echo "printk $(cat /proc/sys/kernel/printk)"; grep -i mango /etc/steamac/gamescope-session.conf 2>/dev/null' > "$R/guest-info.txt" 2>&1
 grep -a "faulted" "$R/vm.out" 2>/dev/null | head -3 >> "$R/driver.log"
 PHASE=poweroff; poweroff
 for w in first60 idle move; do log "$w: $(grep -E '^(frame_avg_fps|frame_1pct_low_fps_pct|frame_0.1pct_low_fps_pct|frame_longest_gap_s|hitch_ge_1s|hitch_ge_2s),' "$R/stats-$w.csv" | tr '\n' ' ')"; done
