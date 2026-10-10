@@ -177,6 +177,9 @@ struct vpool {
 static struct vpool vpools[VPOOLS];
 static pthread_mutex_t vpool_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct vpool *vpool_top[WMTR_SLOTS];
+#define VPOOL_LOOSE 256
+static id loose[WMTR_SLOTS][VPOOL_LOOSE];
+static uint32_t loose_next[WMTR_SLOTS];
 
 static int
 is_vpool(uint64_t h) {
@@ -223,6 +226,14 @@ vpool_keep(uint32_t slot, uint64_t obj) {
   if (p) {
     if (p->n == p->cap) { p->cap = p->cap ? p->cap * 2 : 64; p->objs = realloc(p->objs, p->cap * sizeof(id)); }
     p->objs[p->n++] = [(id)obj retain];
+  } else {
+    /* no pool open on the client thread: natively the object would live in the thread's outer pool
+     * (e.g. an NSError whose description DXMT logs right after a failed PSO); our per-request pool
+     * would free it at once. Keep the last VPOOL_LOOSE such results per slot alive instead. */
+    id *ring = loose[slot];
+    uint32_t i = loose_next[slot]++ % VPOOL_LOOSE;
+    if (ring[i]) [ring[i] release];
+    ring[i] = [(id)obj retain];
   }
   pthread_mutex_unlock(&vpool_lock);
 }

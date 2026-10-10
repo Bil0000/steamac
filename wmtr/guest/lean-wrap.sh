@@ -17,8 +17,13 @@ if [ -n "${STEAM_COMPAT_DATA_PATH:-}" ]; then
   appid=$(basename "$STEAM_COMPAT_DATA_PATH")
   # never fall back to the real prefix: without the copy (lean-cdcopy.sh) the launch stops here
   [ -d "$L/compatdata-$appid/pfx" ] || { echo "lean-wrap: no $L/compatdata-$appid" >> "$L/lean-wrap.log"; exit 1; }
+  real=$STEAM_COMPAT_DATA_PATH
   export STEAM_COMPAT_DATA_PATH="$L/compatdata-$appid"
+  # the game's EAC launcher dir (launch options) points into the real prefix: use the copy's
+  case "${EAC_LAUNCHERDIR:-}" in "$real"/*) export EAC_LAUNCHERDIR="$STEAM_COMPAT_DATA_PATH${EAC_LAUNCHERDIR#"$real"}" ;; esac
   "$L/lean-pfx-fix.sh" "$STEAM_COMPAT_DATA_PATH/pfx"
 fi
-echo "lean-wrap: $(date '+%F %T') ${args[*]} (compatdata $STEAM_COMPAT_DATA_PATH)" >> "$L/lean-wrap.log"
+# DXMT's own log (errors such as failed PSOs) next to the copy, per executable
+export DXMT_LOG_PATH=${DXMT_LOG_PATH:-$L/dxmt-log}; mkdir -p "$DXMT_LOG_PATH"
+echo "lean-wrap: $(date '+%F %T') ${args[*]} (compatdata $STEAM_COMPAT_DATA_PATH, EAC_LAUNCHERDIR ${EAC_LAUNCHERDIR:-unset})" >> "$L/lean-wrap.log"
 exec "${args[@]}"

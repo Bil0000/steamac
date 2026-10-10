@@ -62,6 +62,15 @@ static NTSTATUS f_replace(void *a) {
 }
 static NTSTATUS f_argsinfo(void *a) { (void)a; return 0; }
 static NTSTATUS f_noop(void *a) { (void)a; return 0; }
+/* an autoreleased result whose lifetime the test watches */
+static int probe_alive;
+@interface Probe : NSObject
+@end
+@implementation Probe
+- (instancetype)init { if ((self = [super init])) probe_alive = 1; return self; }
+- (void)dealloc { probe_alive = 0; [super dealloc]; }
+@end
+static NTSTATUS f_autoreleased(void *a) { ((struct unixcall_generic_obj_ret *)a)->ret = (obj_handle_t)[[[Probe alloc] init] autorelease]; return 0; }
 static NTSTATUS f_pixelformat(void *a) { ((struct unixcall_generic_obj_uint64_ret *)a)->ret = 70; return 0; } /* RGBA8 */
 static NTSTATUS f_release(void *a) { [(id)*(obj_handle_t *)a release]; return 0; }
 static NTSTATUS f_newfunction(void *a) {
@@ -70,7 +79,7 @@ static NTSTATUS f_newfunction(void *a) {
   return 0;
 }
 const void *wmtr_impl_funcs[146] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
-                                    [39] = f_pixelformat, [47] = f_noop, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
+                                    [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
 static struct wmtr_host *H;
@@ -207,6 +216,12 @@ int main(void) {
     }
     struct wmtr_host_stats st; wmtr_host_get_stats(H, &st);
     printf("requests=%llu sync=%llu bytes=%llu\n", st.requests, st.sync_requests, st.bytes);
+    { /* an autoreleased result outside any client pool must outlive the request (DXMT reads it next) */
+      struct unixcall_generic_obj_ret ar = {0};
+      remote(53, &ar);
+      struct unixcall_generic_obj_uint64_ret pf3 = {0}; remote(39, &pf3);
+      CHECK(ar.ret && probe_alive, "autoreleased result without a pool was freed with the request");
+    }
     { /* WMTR_FRAMES: a presenting command buffer adds one line when it completes */
       id<MTLCommandQueue> q = [MTLCreateSystemDefaultDevice() newCommandQueue];
       id<MTLCommandBuffer> cb = [q commandBuffer];
