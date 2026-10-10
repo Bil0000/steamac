@@ -92,6 +92,104 @@ reply(struct wmtr_host *h, const struct wmtr_req_ext *r, const struct wmtr_out *
 }
 
 /* ------------------------------------------------------------------------------------------- *
+ * virtual autorelease pools. Natively each Wine thread runs its unix calls on its own OS thread and
+ * DXMT brackets work in NSAutoreleasePools, relying on them to keep autoreleased results alive. Here
+ * all client threads share host threads, so real pools would interleave. Instead each client thread
+ * (reply slot) has a stack of virtual pools; results that DXMT's implementation returns autoreleased
+ * are retained into the slot's current virtual pool and released when DXMT releases that pool. */
+struct vpool {
+  struct vpool *parent;
+  uint32_t slot, used;
+  id *objs;
+  uint32_t n, cap;
+};
+#define VPOOLS 4096
+static struct vpool vpools[VPOOLS];
+static pthread_mutex_t vpool_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct vpool *vpool_top[WMTR_SLOTS];
+
+static int
+is_vpool(uint64_t h) {
+  return h >= (uint64_t)(uintptr_t)&vpools[0] && h < (uint64_t)(uintptr_t)&vpools[VPOOLS] &&
+         (h - (uint64_t)(uintptr_t)&vpools[0]) % sizeof(struct vpool) == 0;
+}
+
+static uint64_t
+vpool_push(uint32_t slot) {
+  pthread_mutex_lock(&vpool_lock);
+  struct vpool *p = NULL;
+  for (int i = 0; i < VPOOLS; i++) if (!vpools[i].used) { p = &vpools[i]; break; }
+  if (p) {
+    p->used = 1; p->slot = slot; p->n = 0;
+    p->parent = slot < WMTR_SLOTS ? vpool_top[slot] : NULL;
+    if (slot < WMTR_SLOTS) vpool_top[slot] = p;
+  }
+  pthread_mutex_unlock(&vpool_lock);
+  return (uint64_t)(uintptr_t)p;
+}
+
+static void
+vpool_pop(struct vpool *target) {
+  pthread_mutex_lock(&vpool_lock);
+  uint32_t slot = target->slot;
+  struct vpool *p = slot < WMTR_SLOTS ? vpool_top[slot] : target;
+  /* release `target` and every pool pushed after it (released out of order = drained with it) */
+  while (p) {
+    struct vpool *parent = p->parent;
+    for (uint32_t i = 0; i < p->n; i++) [p->objs[i] release];
+    p->n = 0; p->used = 0;
+    if (p == target) { p = parent; break; }
+    p = parent;
+  }
+  if (slot < WMTR_SLOTS) vpool_top[slot] = p;
+  pthread_mutex_unlock(&vpool_lock);
+}
+
+static void
+vpool_keep(uint32_t slot, uint64_t obj) {
+  if (!obj || slot >= WMTR_SLOTS) return;
+  pthread_mutex_lock(&vpool_lock);
+  struct vpool *p = vpool_top[slot];
+  if (p) {
+    if (p->n == p->cap) { p->cap = p->cap ? p->cap * 2 : 64; p->objs = realloc(p->objs, p->cap * sizeof(id)); }
+    p->objs[p->n++] = [(id)obj retain];
+  }
+  pthread_mutex_unlock(&vpool_lock);
+}
+
+/* results returned autoreleased by DXMT's winemetal_unix.c (4ddb20e); +1 (new/alloc/copy) results and
+ * non-object handles are not listed */
+static void
+keep_autoreleased(uint32_t slot, uint16_t call, uint8_t *params) {
+  switch (call) {
+  case 2: case 7: case 11: case 28: case 30: case 31: case 32: case 53: case 60: case 62: case 66: case 67:
+  case 89: case 90: case 129: {
+    /* `ret` is the last obj_handle_t of these generic structs; locate it by call */
+    uint64_t ret = 0;
+    switch (call) {
+    case 2: case 31: case 32: ret = ((struct unixcall_generic_obj_uint64_obj_ret *)params)->ret; break;
+    case 53: case 62: ret = ((struct unixcall_generic_obj_ret *)params)->ret; break;
+    case 60: ret = ((struct unixcall_nsstring_string *)params)->ret; break;
+    case 129: ret = ((struct unixcall_mtlcommandbuffer_blitcommandencoderwithsamplebuffers *)params)->ret; break;
+    default: ret = ((struct unixcall_generic_obj_obj_ret *)params)->ret; break;
+    }
+    vpool_keep(slot, ret);
+    break;
+  }
+  case 25: vpool_keep(slot, ((struct unixcall_mtldevice_newlibrary *)params)->ret_error); break;
+  case 29: vpool_keep(slot, ((struct unixcall_mtldevice_newcomputepso *)params)->ret_error); break;
+  case 34: case 131: vpool_keep(slot, ((struct unixcall_mtldevice_newrenderpso *)params)->ret_error); break;
+  case 35: vpool_keep(slot, ((struct unixcall_mtldevice_newmeshrenderpso *)params)->ret_error); break;
+  case 98: vpool_keep(slot, ((struct unixcall_mtllibrary_newfunction_with_constants *)params)->ret_error); break;
+  case 112: vpool_keep(slot, ((struct unixcall_mtldevice_newbinaryarchive *)params)->ret_error); break;
+  case 113: vpool_keep(slot, ((struct unixcall_mtlbinaryarchive_serialize *)params)->ret_error); break;
+  case 132: vpool_keep(slot, ((struct unixcall_mtldevice_newresidencyset *)params)->ret_error); break;
+  case 144: vpool_keep(slot, ((struct unixcall_mtldevice_newlibrarywithsource *)params)->ret_error); break;
+  default: break;
+  }
+}
+
+/* ------------------------------------------------------------------------------------------- *
  * overridden calls */
 static void
 push_free(struct wmtr_host *h, uint32_t blob, uint32_t off, uint64_t size) {
@@ -151,6 +249,15 @@ static NTSTATUS
 host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr_req_ext *r, const uint32_t *relocs,
           const uint64_t *orig) {
   switch (call) {
+  case 0: /* NSObject_retain */
+    if (is_vpool(*(uint64_t *)params)) return STATUS_SUCCESS;
+    break;
+  case 1: /* NSObject_release: a virtual pool drains */
+    if (is_vpool(*(uint64_t *)params)) { vpool_pop((struct vpool *)(uintptr_t)*(uint64_t *)params); return STATUS_SUCCESS; }
+    break;
+  case 10: /* NSAutoreleasePool_alloc_init */
+    ((struct unixcall_generic_obj_ret *)params)->ret = vpool_push(r->h.slot);
+    return ((struct unixcall_generic_obj_ret *)params)->ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
   case 18: { /* newBuffer: memory field relocation carries the arena reference */
     uint64_t arena_ref = 0;
     struct unixcall_mtldevice_newbuffer *p = (void *)params;
@@ -205,17 +312,20 @@ host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr
       const char *m = h->ops->map_path(h->ctx, *field, buf, 1024);
       if (m) *field = (char *)m;
       NTSTATUS st = ((impl_fn)wmtr_impl_funcs[call])(params);
+      keep_autoreleased(r->h.slot, call, params);
       free(buf);
       return st;
     }
   }
   /* fallthrough */
-  default: {
-    impl_fn f = (impl_fn)wmtr_impl_funcs[call];
-    if (!f) return STATUS_UNSUCCESSFUL;
-    return f(params);
+  default:
+    break;
   }
-  }
+  impl_fn f = (impl_fn)wmtr_impl_funcs[call];
+  if (!f) return STATUS_UNSUCCESSFUL;
+  NTSTATUS st = f(params);
+  keep_autoreleased(r->h.slot, call, params);
+  return st;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -233,8 +343,9 @@ execute(struct wmtr_host *h, uint8_t *rec, uint32_t len) {
     reply(h, r, outs, payload, STATUS_INVALID_PARAMETER);
     return;
   }
-  uint64_t orig[512];
-  int nr = r->n_reloc < 512 ? r->n_reloc : 512;
+  uint64_t orig_small[512];
+  uint64_t *orig = r->n_reloc <= 512 ? orig_small : malloc(8u * r->n_reloc);
+  int nr = r->n_reloc;
   NTSTATUS st = STATUS_SUCCESS;
   for (int i = 0; i < nr; i++) {
     if (relocs[i] + 8 > r->payload_size) { st = STATUS_INVALID_PARAMETER; break; }
@@ -255,6 +366,7 @@ execute(struct wmtr_host *h, uint8_t *rec, uint32_t len) {
     } else st = STATUS_INVALID_PARAMETER;
   }
   reply(h, r, outs, payload, st);
+  if (orig != orig_small) free(orig);
 }
 
 static void

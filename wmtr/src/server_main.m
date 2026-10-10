@@ -51,8 +51,7 @@ c_create_view(void *ctx, uint64_t hwnd, void *device, uint64_t *layer_out) {
     layer.contentsScale = 1.0;
     view.layer = layer;
     [w setContentView:view];
-    [w makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    [w orderFront:nil]; /* never activate: do not take focus from the user's apps */
   });
   *layer_out = (uint64_t)[layer retain];
   return (uint64_t)[view retain];
@@ -147,7 +146,7 @@ main(int argc, char **argv) {
     const char *path = getenv("WMTR_SOCKET");
     if (!path) path = "/tmp/wmtr.sock";
     [NSApplication sharedApplication];
-    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     pthread_t t;
     pthread_create(&t, NULL, listen_thread, (void *)path);
     [NSApp run];

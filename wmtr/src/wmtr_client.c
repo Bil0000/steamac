@@ -161,7 +161,6 @@ arena_free(uint32_t blob, uint32_t off, uint64_t size) {
 
 /* ---------------------------------------------------------------------------------------------
  * request builder (thread-local scratch) */
-#define MAX_RELOC 512
 #define MAX_OUT 32
 #define MAX_STAGE 8
 struct out_dst { void *dst; uint32_t size; uint8_t *arena; /* non-NULL: output landed in arena */ };
@@ -169,7 +168,7 @@ struct stage { uint32_t blob, off; uint64_t size; };
 struct builder {
   uint8_t *buf; uint32_t cap, len; /* payload */
   uint32_t params_size;
-  uint32_t relocs[MAX_RELOC]; int n_reloc;
+  uint32_t *relocs; int n_reloc, cap_reloc;
   struct wmtr_out outs[MAX_OUT]; struct out_dst dsts[MAX_OUT]; int n_out;
   struct stage stages[MAX_STAGE]; int n_stage;
   int force_sync;
@@ -202,7 +201,12 @@ b_begin(const void *params, uint32_t size) {
 static void
 b_reloc(uint32_t field_off, uint64_t value) {
   memcpy(B.buf + field_off, &value, 8);
-  if (B.n_reloc == MAX_RELOC) { B.error = 1; return; }
+  if (B.n_reloc == B.cap_reloc) {
+    if (B.n_reloc == 65535) { B.error = 1; return; } /* the header counts relocations in 16 bits */
+    B.cap_reloc = B.cap_reloc ? B.cap_reloc * 2 : 256;
+    if (B.cap_reloc > 65535) B.cap_reloc = 65535;
+    B.relocs = realloc(B.relocs, B.cap_reloc * sizeof *B.relocs);
+  }
   B.relocs[B.n_reloc++] = field_off;
 }
 
@@ -246,7 +250,7 @@ b_out(uint32_t field_off, void *dst, uint64_t size, int inout) {
     b_reloc(field_off, WMTR_REF_ARENA | ((uint64_t)blob << 32) | off);
     return;
   }
-  uint32_t o = b_grow((uint32_t)size);
+  uint32_t o = b_grow(size ? (uint32_t)size : 8); /* a zero-length output still needs an in-bounds address */
   if (inout) memcpy(B.buf + o, dst, size);
   else memset(B.buf + o, 0, WMTR_ALIGN8((uint32_t)size));
   B.dsts[B.n_out] = (struct out_dst){dst, (uint32_t)size, NULL};
@@ -267,14 +271,23 @@ ring_space(void) {
   return WMTR_RING_BYTES - (R->head - __atomic_load_n(&R->tail, __ATOMIC_ACQUIRE));
 }
 
+static NTSTATUS send_built_flags(uint16_t call, uint16_t extra_flags, void *params, uint32_t params_size);
+
 static NTSTATUS
 send_built(uint16_t call, int sync, void *params, uint32_t params_size) {
+  if (sync) B.force_sync = 1;
+  return send_built_flags(call, 0, params, params_size);
+}
+
+static NTSTATUS
+send_built_flags(uint16_t call, uint16_t extra_flags, void *params, uint32_t params_size) {
+  int sync = 0;
   if (B.error) { LOG(0, "call %u: request too complex\n", call); return STATUS_UNSUCCESSFUL; }
   sync |= B.force_sync;
-  int slot = sync ? my_slot() : 0;
+  int slot = my_slot(); /* async requests carry it too: the host keeps per-thread autorelease state */
   struct wmtr_req_ext hdr = {0};
   hdr.h.call = call;
-  hdr.h.flags = sync ? WMTR_F_SYNC : 0;
+  hdr.h.flags = (sync ? WMTR_F_SYNC : 0) | extra_flags;
   hdr.h.slot = slot;
   hdr.h.params_size = params_size;
   hdr.n_reloc = (uint16_t)B.n_reloc;
@@ -560,13 +573,18 @@ dispatch(uint16_t call, void *params, uint32_t size, int sync) {
     uint32_t blob = 0, off = 0;
     void *mem = NULL;
     int private_storage = (info->options & 0xf0) == WMTResourceStorageModePrivate;
-    if (info->memory.ptr) LOG(0, "newBuffer with caller memory is not remotable\n");
-    else if (!private_storage) {
+    if (!private_storage || info->memory.ptr) {
+      /* caller-placed memory (DXMT's CpuPlaced buffers) is not host-visible: back the buffer with arena
+       * memory holding the same initial bytes; DXMT reads the pointer back from info->memory */
       mem = arena_alloc(info->length, &blob, &off);
       if (!mem) return STATUS_UNSUCCESSFUL;
+      if (info->memory.ptr) memcpy(mem, info->memory.ptr, info->length);
     }
     b_begin(p, size);
+    void *caller_mem = info->memory.ptr;
+    info->memory.ptr = NULL;
     b_out(OFF(struct unixcall_mtldevice_newbuffer, info), info, sizeof *info, 1);
+    (void)caller_mem;
     if (mem) b_reloc(B.outs[0].off + OFF(struct WMTBufferInfo, memory), WMTR_REF_ARENA | ((uint64_t)blob << 32) | off);
     NTSTATUS st = send_built(call, 1, p, size);
     info->memory.ptr = mem;
@@ -770,3 +788,14 @@ E10(10) E10(11) E10(12) E10(13) E(140) E(141) E(142) E(143) E(144) E(145)
 __attribute__((visibility("default"))) const void *__wine_unix_call_funcs[146] = {
     P(0) P(1) P(2) P(3) P(4) P(5) P(6) P(7) P(8) P(9) P10(1) P10(2) P10(3) P10(4) P10(5) P10(6) P10(7) P10(8) P10(9)
         P10(10) P10(11) P10(12) P10(13) P(140) P(141) P(142) P(143) P(144) P(145)};
+
+/* measurement hook: one synchronous no-op round trip through the transport and host executor */
+__attribute__((visibility("default"))) int
+wmtr_debug_ping(void) {
+  pthread_once(&init_once, wmtr_init);
+  if (!init_ok) return -1;
+  uint64_t dummy = 0;
+  b_begin(&dummy, 8);
+  B.force_sync = 1;
+  return send_built_flags(WMTR_CTL_PING, WMTR_F_CONTROL, &dummy, 8);
+}

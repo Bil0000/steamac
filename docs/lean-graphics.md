@@ -21,7 +21,7 @@ Layers removed: DXVK, Venus (guest and host), virglrenderer, Vulkan→Metal tran
 |---|---|
 | P0 baseline | done for VRChat (A/B table below); d3d11bench-in-VM baseline still to do |
 | P1 feasibility (no VM) | DXMT renders d3d11bench on macOS Wine (numbers below); VRChat on Mac Wine and D3D12 not yet; D3DMetal crashes in this setup |
-| P2 cut point | winemetal-level chosen on API-surface evidence; wmtr client/host built, loopback test passes; two-process measurement not yet |
+| P2 cut point | winemetal-level remoting works end to end on macOS (d3d11bench through wmtr-server); sync round trip p50 0.25 µs, p99 11.5 µs; ~48 calls/frame of which ~15 sync |
 | P3 transport | virtio-gpu client transport + libkrun rutabaga context written (wmtr/libkrun/wmtr.rs), not yet built into libkrun |
 | P4 presentation | not started |
 | P5 guest integration | not started |
@@ -88,7 +88,36 @@ DXMT on macOS Wine, d3d11bench 15 s per config, VM off (raw: /Volumes/LEANWORK/l
 
 Single runs; the 2000/4 repeat differs by 18%, so treat differences under ~20% as noise until repeated.
 
-## P2 — cut point analysis (in progress)
+### D3D12 (DXMT, measured with d3d12bench probe; source refs src/d3d12/d3d12_device.cpp)
+
+Max feature level 11_1, shader model 5.1 (DXBC only, no DXIL), root signature 1.1, binding tier 2, tiled
+resources not supported (CreateReservedResource E_NOTIMPL), no ray tracing / mesh shaders / wave ops,
+conservative rasterization not supported (Metal does not expose it), ROVs reported. Shader-visible heaps,
+PSOs, ExecuteIndirect command signatures work. Known perf issue: ExecuteIndirect with 10000 draws ran at
+0.2 fps vs 369 fps for the same draws issued directly (one run, VM up). D3DMetal (Sikarugir copy, in place)
+crashes in this setup; not pursued (user: focus on D3D11).
+
+## P2 — two-process remoting (measured)
+
+Per-frame winemetal calls (wmtcount interposer, d3d11bench under direct DXMT, raw p1/wmtcount_{A,B}.log):
+48 calls/frame at both 200 and 2000 draws (draws are batched into 20 encodeCommands calls). Calls that need
+a reply: ~15/frame (2 autorelease pools, commandBuffer, 2 encoders, 2 status, texture width/height,
+drawable texture, nextDrawable, logs, enumerate, display setting, waitUntilCompleted on DXMT's finish
+thread). Blocking time is in nextDrawable (6.6-7.9 ms) and waitUntilCompleted (1.2-1.9 ms), not in work.
+
+wmtr two-process (client winemetal.so x86_64 in Wine -> unix socket + shm -> wmtr-server arm64 running
+DXMT's winemetal_unix.c + airconv natively): d3d11bench runs end to end, shaders compile on the host.
+Round trip of a sync no-op request (tests/wmtr_ping, x86_64 client under Rosetta, 3 x 20000):
+p50 0.25 µs, p95 0.29-0.38 µs, p99 11.5 µs (host executor asleep -> kick), max 83-94 µs.
+At ~15 sync calls/frame this is ~4 µs/frame typical. Displayed fps of these runs is not comparable
+(windows occluded by the user's apps: 145 vs 275 fps for the same config), so fps comparisons wait for P3.
+
+Fixes found by this run (each with a loopback case that fails on the previous commit and passes now):
+command lists longer than 512 commands, zero-length outputs, DXMT's caller-placed (CpuPlaced) buffer memory;
+plus virtual per-thread autorelease pools on the host (DXMT returns autoreleased objects and brackets work in
+NSAutoreleasePools from several threads).
+
+## P2 — cut point analysis
 
 Evidence for cutting at DXMT's winemetal unix-call boundary:
 

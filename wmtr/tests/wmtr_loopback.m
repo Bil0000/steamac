@@ -60,6 +60,7 @@ static NTSTATUS f_replace(void *a) {
   for (uint64_t i = 0; i < p->bytes_per_row * p->size.height; i++) replace_sum += d[i] * (i + 1);
   return 0;
 }
+static NTSTATUS f_argsinfo(void *a) { (void)a; return 0; }
 static NTSTATUS f_pixelformat(void *a) { ((struct unixcall_generic_obj_uint64_ret *)a)->ret = 70; return 0; } /* RGBA8 */
 static NTSTATUS f_release(void *a) { [(id)*(obj_handle_t *)a release]; return 0; }
 static NTSTATUS f_newfunction(void *a) {
@@ -68,7 +69,7 @@ static NTSTATUS f_newfunction(void *a) {
   return 0;
 }
 const void *wmtr_impl_funcs[146] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
-                                    [39] = f_pixelformat, [45] = f_replace, [145] = f_getbytes};
+                                    [39] = f_pixelformat, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
 static struct wmtr_host *H;
@@ -125,6 +126,29 @@ int main(void) {
     CHECK(n_sum == encode_sum && n_cmds == encode_cmds && n_vp == encode_vp, "encode sum %llu/%llu cmds %u/%u vp %u/%u",
           n_sum, encode_sum, n_cmds, encode_cmds, n_vp, encode_vp);
 
+    /* 3b. a command list longer than any fixed relocation budget (DXMT batches ~100+ draws per call) */
+    {
+      enum { N = 2000 };
+      static struct wmtcmd_render_setbytes cmds[N]; static uint8_t payload[N][16];
+      for (int i = 0; i < N; i++) {
+        memset(&cmds[i], 0, sizeof cmds[i]); cmds[i].type = WMTRenderCommandSetFragmentBytes;
+        for (int k = 0; k < 16; k++) payload[i][k] = (uint8_t)(i + k);
+        cmds[i].bytes.ptr = payload[i]; cmds[i].length = 16; cmds[i].next.ptr = i + 1 < N ? &cmds[i + 1] : NULL;
+      }
+      struct unixcall_generic_obj_cmd_noret cl = {0x1234, {&cmds[0]}};
+      encode_sum = 0; encode_cmds = 0; native(38, &cl);
+      uint64_t s1 = encode_sum; uint32_t c1 = encode_cmds;
+      encode_sum = 0; encode_cmds = 0; NTSTATUS st = remote(38, &cl); remote(26, &fb);
+      CHECK(st == 0 && s1 == encode_sum && c1 == encode_cmds, "long list st=%x sum %llu/%llu cmds %u/%u", st, s1, encode_sum, c1, encode_cmds);
+    }
+    /* 3c. zero-length output array (SM50GetArgumentsInfo of a shader without constant buffers) */
+    {
+      struct MTL_SM50_SHADER_ARGUMENT none[1];
+      struct sm50_get_arguments_info_params ga = {(sm50_shader_t)0x77, none, none};
+      NTSTATUS st = remote(88, &ga);
+      CHECK(st == 0 && ga.constant_buffers == none, "zero-length output st=%x", st);
+    }
+
     /* 4. large input (arena staging) and large output (arena) */
     uint32_t W = 1024, Hh = 512; uint8_t *src = malloc(W * 4 * Hh), *o1 = malloc(W * 4 * Hh), *o2 = malloc(W * 4 * Hh);
     for (uint32_t i = 0; i < W * 4 * Hh; i++) src[i] = (uint8_t)(i ^ (i >> 9));
@@ -162,6 +186,16 @@ int main(void) {
       remote(1, &h); remote(26, &fb);
       for (int i = 0; i < 1000 && R->free_head == fh; i++) usleep(1000);
       CHECK(R->free_head == fh + 1, "buffer range not returned (free_head %llu)", R->free_head);
+    }
+    /* 6. caller-placed memory (DXMT CpuPlaced): initial bytes kept, pointer replaced by arena memory */
+    {
+      uint8_t *own; posix_memalign((void **)&own, 16384, 65536); memset(own, 0x3c, 65536);
+      struct WMTBufferInfo ci = {65536, WMTResourceStorageModeShared, {own}, 0};
+      struct unixcall_mtldevice_newbuffer cb2 = {(obj_handle_t)dev, {&ci}, 0};
+      remote(18, &cb2);
+      CHECK(cb2.ret && ci.memory.ptr && ci.memory.ptr != own && ((uint8_t *)ci.memory.ptr)[65535] == 0x3c,
+            "caller-placed buffer ret %llx mem %p", cb2.ret, ci.memory.ptr);
+      free(own);
     }
     struct wmtr_host_stats st; wmtr_host_get_stats(H, &st);
     printf("requests=%llu sync=%llu bytes=%llu\n", st.requests, st.sync_requests, st.bytes);
