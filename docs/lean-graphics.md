@@ -20,7 +20,7 @@ Layers removed: DXVK, Venus (guest and host), virglrenderer, Vulkan→Metal tran
 | gate | status |
 |---|---|
 | P0 baseline | done for VRChat (A/B table below); d3d11bench-in-VM baseline still to do |
-| P1 feasibility (no VM) | DXMT renders d3d11bench on macOS Wine (numbers below); VRChat on Mac Wine and D3D12 not yet; D3DMetal crashes in this setup |
+| P1 feasibility (no VM) | DXMT renders d3d11bench on macOS Wine, D3D11 and D3D12 (numbers below); VRChat on Mac Wine not attempted; D3DMetal renders d3d11bench only after the symlink-layout fix (raw log for that run not retained) |
 | P2 cut point | winemetal-level remoting works end to end on macOS (d3d11bench through wmtr-server); sync round trip p50 0.25 µs, p99 11.5 µs; ~48 calls/frame of which ~15 sync |
 | P3 transport | libkrun patch 0020 (rutabaga wmtr context, capset 30) + guest client (Linux x86-64, glibc ≤2.14) built; staged bundle /Volumes/LEANWORK/app-lean; VM test pending |
 | P4 presentation | not started |
@@ -97,16 +97,22 @@ PSOs, ExecuteIndirect command signatures work. Known perf issue: ExecuteIndirect
 0.2 fps vs 369 fps for the same draws issued directly (one run, VM up). D3DMetal (Sikarugir copy, in place)
 crashes in this setup; not pursued (user: focus on D3D11). Cause found by a side investigation: my
 renderer.sh copied the template's symlinked D3DMetal files (two bridge copies get loaded); with the template's
-symlink layout + its WINEDLLPATH*/CX_* env, D3DMetal 3.0 renders d3d11bench (206.5 fps at 200 draws, one
-run, Mac window fps not comparable). Rule: symlink, never copy, D3DMetal's files.
+symlink layout + its WINEDLLPATH*/CX_* env, D3DMetal 3.0 renders d3d11bench (number recorded at the time
+as ~206 fps at 200 draws, one run; **no raw log for that run is retained in p1/ — unverified**; the failed
+p1/w10_d3dmetal_*.out runs predate the fix and show gfxtoolkit3 `Assertion failed: (GFXTHandle && "Failed
+to dlopen D3DMetal")`). Rule: symlink, never copy, D3DMetal's files.
 
 ## P2 — two-process remoting (measured)
 
 Per-frame winemetal calls (wmtcount interposer, d3d11bench under direct DXMT, raw p1/wmtcount_{A,B}.log):
-48 calls/frame at both 200 and 2000 draws (draws are batched into 20 encodeCommands calls). Calls that need
-a reply: ~15/frame (2 autorelease pools, commandBuffer, 2 encoders, 2 status, texture width/height,
-drawable texture, nextDrawable, logs, enumerate, display setting, waitUntilCompleted on DXMT's finish
-thread). Blocking time is in nextDrawable (6.6-7.9 ms) and waitUntilCompleted (1.2-1.9 ms), not in work.
+48.0 calls/frame in every steady-state 300-frame block of both A and B (draws are batched into 20
+encodeCommands calls). Classified by the A/S/B marker in wmtr/src/wmtr_calls.inc: **13 host-blocking sync
+(S) + 2 reply-blocking (B) = 15 calls/frame that need a reply, and 33 fire-and-forget (A)**. The 15:
+2 NSAutoreleasePool_alloc_init(10), commandBuffer(11), 2 renderCommandEncoder(32), 2 status(14),
+texture width(40)+height(41), drawable texture(66), nextDrawable(67), logs(90), enumerate(91),
+display setting(101), waitUntilCompleted(13). Blocking time is in nextDrawable (6.6-7.9 ms/frame) and
+waitUntilCompleted (1.2-1.9 ms/frame), not in work: the 33 async calls cost 0.6-1.6 ms/frame total.
+The first block of each log is the 7.6 / 69.6 fps warm-up (shader compilation), not steady state.
 
 wmtr two-process (client winemetal.so x86_64 in Wine -> unix socket + shm -> wmtr-server arm64 running
 DXMT's winemetal_unix.c + airconv natively): d3d11bench runs end to end, shaders compile on the host.
