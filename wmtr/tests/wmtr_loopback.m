@@ -62,6 +62,7 @@ static NTSTATUS f_replace(void *a) {
 }
 static NTSTATUS f_argsinfo(void *a) { (void)a; return 0; }
 static NTSTATUS f_noop(void *a) { (void)a; return 0; }
+static NTSTATUS f_fault(void *a) { (void)a; return *(volatile int *)(uintptr_t)0x10; }
 /* an autoreleased result whose lifetime the test watches */
 static int probe_alive;
 @interface Probe : NSObject
@@ -79,7 +80,7 @@ static NTSTATUS f_newfunction(void *a) {
   return 0;
 }
 const void *wmtr_impl_funcs[146] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
-                                    [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
+                                    [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [5] = f_fault, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
 static struct wmtr_host *H;
@@ -245,6 +246,12 @@ int main(void) {
       remote(73, &r1); /* a second release of the same view is ignored */
       struct unixcall_generic_obj_uint64_ret pf = {0}; remote(39, &pf); /* sync call: the releases above are done */
       CHECK(n_released == 1 && released[0] == v1.ret_view, "ReleaseMetalView: %d releases", n_released);
+      /* a call that faults (bad handle) fails, the process lives, and the client is refused from then on */
+      struct unixcall_generic_obj_uint64_ret fz = {0};
+      NTSTATUS fs = remote(5, &fz);
+      struct unixcall_generic_obj_uint64_ret pf4 = {0};
+      NTSTATUS fs2 = remote(39, &pf4);
+      CHECK(fs == (NTSTATUS)0xC0000005 && fs2 == (NTSTATUS)0xC0000005, "fault containment: %x then %x", fs, fs2);
       wmtr_host_destroy(H);
       CHECK(n_released == 2 && released[1] == v2.ret_view, "destroy did not release the leftover view (%d releases)", n_released);
     }

@@ -10,6 +10,8 @@
 #import <objc/runtime.h>
 #include <pthread.h>
 #include <time.h>
+#include <setjmp.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +51,7 @@ struct wmtr_host {
   pthread_mutex_t lock;
   pthread_cond_t cond;
   int kicked, quit;
+  int faulted; /* a call of this client faulted (see fault containment) */
   dispatch_queue_t compile_q, block_q;
   pthread_mutex_t free_lock, event_lock;
   /* views the client created and has not released: released on destroy, so a client that exits
@@ -61,6 +64,37 @@ struct wmtr_host {
 
 static int log_level = 1;
 #define LOG(lvl, ...) do { if (log_level >= (lvl)) fprintf(stderr, "wmtr-host: " __VA_ARGS__); } while (0)
+
+/* ------------------------------------------------------------------------------------------- *
+ * fault containment: the executor runs inside the VMM, and every handle in a request is a raw host
+ * pointer the guest sent. A bad one (a client or DXMT bug) must cost that game, not the whole VM: a
+ * SIGSEGV/SIGBUS raised while a call executes jumps back to execute(), which fails the call and every
+ * later call of that client. Faults anywhere else go to the previously installed handler (or the
+ * default action). Cost on the common path: one sigsetjmp per call. */
+#ifndef STATUS_ACCESS_VIOLATION
+#define STATUS_ACCESS_VIOLATION ((NTSTATUS)0xC0000005)
+#endif
+static __thread sigjmp_buf *fault_jmp;
+static struct sigaction prev_segv, prev_bus;
+
+static void
+fault_handler(int sig, siginfo_t *si, void *uc) {
+  if (fault_jmp) siglongjmp(*fault_jmp, sig);
+  struct sigaction *prev = sig == SIGBUS ? &prev_bus : &prev_segv;
+  if (prev->sa_flags & SA_SIGINFO) { prev->sa_sigaction(sig, si, uc); return; }
+  if (prev->sa_handler != SIG_DFL && prev->sa_handler != SIG_IGN) { prev->sa_handler(sig); return; }
+  sigaction(sig, prev, NULL); /* default action: returning re-executes the fault and dies */
+}
+
+static void
+fault_install(void) {
+  struct sigaction sa = {0};
+  sa.sa_sigaction = fault_handler;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGSEGV, &sa, &prev_segv);
+  sigaction(SIGBUS, &sa, &prev_bus);
+}
 
 /* ------------------------------------------------------------------------------------------- *
  * per-frame export (WMTR_FRAMES=<path>): one line per presented frame, in the steamac launcher's
@@ -446,8 +480,22 @@ execute(struct wmtr_host *h, uint8_t *rec, uint32_t len) {
     if (r->h.flags & WMTR_F_CONTROL) {
       st = STATUS_SUCCESS; /* PING and HELLO need no work */
     } else if (r->h.call < 146) {
-      @autoreleasepool {
-        st = host_call(h, r->h.call, payload, r, relocs, orig);
+      if (__atomic_load_n(&h->faulted, __ATOMIC_ACQUIRE)) {
+        st = STATUS_ACCESS_VIOLATION; /* this client already faulted the executor: refuse further work */
+      } else {
+        sigjmp_buf jb;
+        if (sigsetjmp(jb, 1) == 0) {
+          fault_jmp = &jb;
+          @autoreleasepool {
+            st = host_call(h, r->h.call, payload, r, relocs, orig);
+          }
+          fault_jmp = NULL;
+        } else {
+          fault_jmp = NULL;
+          __atomic_store_n(&h->faulted, 1, __ATOMIC_RELEASE);
+          LOG(0, "call %u faulted (bad handle from the client?); failing this client's calls from now on\n", r->h.call);
+          st = STATUS_ACCESS_VIOLATION;
+        }
       }
     } else st = STATUS_INVALID_PARAMETER;
   }
@@ -535,6 +583,8 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
     LOG(0, "ring magic/version mismatch (%x/%u)\n", R->magic, R->version);
     return NULL;
   }
+  static pthread_once_t fault_once = PTHREAD_ONCE_INIT;
+  pthread_once(&fault_once, fault_install);
   struct wmtr_host *h = calloc(1, sizeof *h);
   h->ring = R;
   h->data = (uint8_t *)ring + WMTR_RING_DATA_OFFSET;
