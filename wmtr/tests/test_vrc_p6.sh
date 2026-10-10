@@ -64,6 +64,10 @@ grep -q 'lean-launchopts.sh off' "$T/wmtrfail/state/calls" || fail wmtrfail "lau
 run wmtrok 0 wmtr
 [ "$(grep -c 'lean-launchopts.sh off' "$T/wmtrok/state/calls")" = 1 ] || fail wmtrok "launch options not restored exactly once"
 grep -q 'lean-launchopts' "$T/ok/state/calls" && fail ok "dxvk run touched the launch options"
+# LEANWRAP=0: the guest's own graphics path; launch options and prefix copy stay out of it
+LEANWRAP=0 run wmtrc 0 wmtr
+grep -q 'lean-launchopts' "$T/wmtrc/state/calls" && fail wmtrc "LEANWRAP=0 touched the launch options"
+grep -q 'compatdata/438100' "$T/wmtrc/state/calls" || fail wmtrc "LEANWRAP=0 did not use the game's real prefix"
 # another driver or VM already running: refuse before the boot
 printf '#!/bin/sh\nsleep 20\n' > "$T/bin/t6-other-driver.sh"; chmod +x "$T/bin/t6-other-driver.sh"
 "$T/bin/t6-other-driver.sh" & other=$!

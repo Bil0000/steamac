@@ -66,6 +66,10 @@ trap 'exit 130' INT TERM
 
 case $MODE in dxvk) VMMODE=off; FR=$R/perf-frames.csv; CD=/home/steamos/.local/share/Steam/steamapps/compatdata/438100 ;;
               wmtr) VMMODE=wmtr; FR=$R/wmtr-frames.csv; CD=/home/steamos/vrc/lean/compatdata-438100 ;; *) DONE=1; exit 2 ;; esac
+# LEANWRAP=0 (wmtr): the guest's own graphics path (steam-gfx-path follows steamac.gfx=dxmt): the game's real
+# prefix and launch options, as a user runs it; LEANWRAP=1 (default): the launch-options wrapper and prefix copy
+LEANWRAP=${LEANWRAP:-1}
+[ "$MODE" = wmtr ] && [ "$LEANWRAP" = 0 ] && CD=/home/steamos/.local/share/Steam/steamapps/compatdata/438100
 log "start $LABEL mode=$MODE idle=$IDLE move=$MOVE memMiB=$(defaults read es.fxgam.steamac memMiB 2>/dev/null) mac: $(sysctl -n vm.swapusage)"
 # one driver and one VM at a time: refuse if any steamac-vm or another vrc-p6.sh (not this shell or its
 # subshells) is running
@@ -97,7 +101,7 @@ h0=$(nowms); gm=$($G 'date +%s%3N'); h1=$(nowms); need_int guest-clock "$gm"; OF
 $G "echo $MODE > ~/vrc/lean/MODE; rm -f ~/vrc/lean/TRACE; mkdir -p ~/vrc/route" || die "guest setup"
 # GUEST_PREP: one guest shell command before the launch (e.g. pick the wmtr client build under test)
 if [ -n "${GUEST_PREP:-}" ]; then $G "$GUEST_PREP" || die "guest prep"; log "guest prep: $GUEST_PREP"; fi
-if [ "$MODE" = wmtr ]; then LOPTS=1; $G "$GUEST_ENV ~/vrc/lean/lean-launchopts.sh on" >> "$R/driver.log" 2>&1 || die "launch options on"
+if [ "$MODE" = wmtr ] && [ "$LEANWRAP" = 1 ]; then LOPTS=1; $G "$GUEST_ENV ~/vrc/lean/lean-launchopts.sh on" >> "$R/driver.log" 2>&1 || die "launch options on"
   for _ in $(seq 1 30); do $G 'pgrep -x steamwebhelper >/dev/null' 2>/dev/null && break; $SLEEP 4; done; $SLEEP 20; fi
 $SCP "$TOOLS/vrc-route.py" "$TOOLS/vrc-route-square.json" vrc-guest:vrc/route/ || die "route copy"
 sudo_g "sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'"
@@ -129,6 +133,8 @@ $SLEEP 15
 PHASE=eac
 $G "find '$CD/pfx/drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat' -type f -newer $M -exec grep -a -h 'Launcher finished' {} + ; find '$VRC' -maxdepth 1 -name 'output_log_*.txt' -newer $M -exec grep -a -h 'AntiCheat Session Begin\|Finished entering world\|Graphics Device Version' {} +" > "$R/eac-log.txt" 2>&1
 log "eac: $(grep -a -o 'Launcher finished with: [0-9]*' "$R/eac-log.txt" | tail -1) | $(grep -a -o 'AntiCheat Session Begin: [A-Za-z]*' "$R/eac-log.txt" | tail -1)"
+# passive guest state: virtio-snd kernel messages of this boot, console log level, gamescope MangoApp setting
+$G 'dmesg 2>/dev/null | grep -a virtio_snd | tail -100; echo "printk $(cat /proc/sys/kernel/printk)"; grep -i mango /etc/steamac/gamescope-session.conf 2>/dev/null' > "$R/guest-info.txt" 2>&1
 grep -a "faulted" "$R/vm.out" 2>/dev/null | head -3 >> "$R/driver.log"
 PHASE=poweroff; poweroff
 for w in first60 idle move; do log "$w: $(grep -E '^(frame_avg_fps|frame_1pct_low_fps_pct|frame_0.1pct_low_fps_pct|frame_longest_gap_s|hitch_ge_1s|hitch_ge_2s),' "$R/stats-$w.csv" | tr '\n' ' ')"; done

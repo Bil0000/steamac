@@ -8,6 +8,7 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#include <mach/mach_time.h>
 #include <pthread.h>
 #include <time.h>
 #include <setjmp.h>
@@ -63,6 +64,8 @@ struct wmtr_host {
   uint64_t *views;
   uint32_t n_views, cap_views;
   _Atomic uint64_t n_req, n_sync, n_bytes, n_worker, n_sleep;
+  /* how long the executor polls an empty ring before it sleeps, in mach ticks (WMTR_HOST_SPIN_US) */
+  _Atomic uint64_t spin_ticks;
 };
 
 static int log_level = 1;
@@ -145,8 +148,8 @@ static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void
 callstats_dump(void) {
-  if (!cs_file) return;
   pthread_mutex_lock(&cs_lock);
+  if (!cs_file) { pthread_mutex_unlock(&cs_lock); return; }
   uint64_t t = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
   for (int i = 0; i < 146; i++) {
     uint64_t n = atomic_load(&cs_count[i]);
@@ -161,33 +164,77 @@ callstats_dump(void) {
   pthread_mutex_unlock(&cs_lock);
 }
 
+static int cs_state; /* 1 on, 2 off */
+
+/* Turned on at launch (WMTR_CALLSTATS=<path>) or at runtime: while the trigger file exists (default
+ * $TMPDIR/wmtr-callstats.on, WMTR_CALLSTATS_TRIGGER overrides) statistics are collected into the path written in
+ * it (or <trigger>.csv); removing it writes a last snapshot and stops collecting. The trigger is checked every
+ * 5 s (WMTR_CALLSTATS_POLL_MS) by one otherwise idle thread. */
+static char cs_trigger[1024];
+static int cs_from_env;
+
+static void
+callstats_open(const char *path) {
+  pthread_mutex_lock(&cs_lock);
+  if (!cs_file && path && *path) cs_file = fopen(path, "a");
+  if (cs_file) __atomic_store_n(&cs_state, 1, __ATOMIC_RELEASE);
+  pthread_mutex_unlock(&cs_lock);
+}
+
 static void *
 callstats_thread(void *arg) {
   (void)arg;
   pthread_setname_np("wmtr-callstats");
-  for (;;) { sleep(10); callstats_dump(); }
+  const char *pe = getenv("WMTR_CALLSTATS_POLL_MS");
+  useconds_t poll = (useconds_t)(pe && *pe ? atoi(pe) : 5000) * 1000;
+  uint64_t last = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+  for (;;) {
+    usleep(poll);
+    if (!cs_from_env && cs_trigger[0]) {
+      int want = access(cs_trigger, F_OK) == 0;
+      int on = __atomic_load_n(&cs_state, __ATOMIC_ACQUIRE) == 1;
+      if (want && !on) {
+        char path[1024] = {0};
+        FILE *t = fopen(cs_trigger, "r");
+        if (t) { if (!fgets(path, sizeof path, t)) path[0] = 0; fclose(t); }
+        path[strcspn(path, "\r\n")] = 0;
+        if (!path[0]) snprintf(path, sizeof path, "%s.csv", cs_trigger);
+        callstats_open(path);
+      } else if (!want && on) {
+        callstats_dump();
+        pthread_mutex_lock(&cs_lock);
+        __atomic_store_n(&cs_state, 2, __ATOMIC_RELEASE);
+        fclose(cs_file); cs_file = NULL;
+        pthread_mutex_unlock(&cs_lock);
+      }
+    }
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (now - last >= 10000000000ull) { last = now; callstats_dump(); }
+  }
   return NULL;
 }
 
-static int cs_state; /* 1 on, 2 off */
 static void
 callstats_init(void) {
   const char *p = getenv("WMTR_CALLSTATS");
-  if (p && *p && (cs_file = fopen(p, "a"))) {
-    pthread_t t;
-    pthread_create(&t, NULL, callstats_thread, NULL);
-    pthread_detach(t);
-    __atomic_store_n(&cs_state, 1, __ATOMIC_RELEASE);
-  } else {
-    __atomic_store_n(&cs_state, 2, __ATOMIC_RELEASE);
+  if (p && *p) { cs_from_env = 1; callstats_open(p); }
+  const char *t = getenv("WMTR_CALLSTATS_TRIGGER");
+  if (t && *t) snprintf(cs_trigger, sizeof cs_trigger, "%s", t);
+  else {
+    char tmp[512];
+    if (confstr(_CS_DARWIN_USER_TEMP_DIR, tmp, sizeof tmp)) snprintf(cs_trigger, sizeof cs_trigger, "%swmtr-callstats.on", tmp);
   }
+  if (__atomic_load_n(&cs_state, __ATOMIC_ACQUIRE) != 1) __atomic_store_n(&cs_state, 2, __ATOMIC_RELEASE);
+  pthread_t th;
+  pthread_create(&th, NULL, callstats_thread, NULL);
+  pthread_detach(th);
 }
 
 static int
 callstats_on(void) {
   static pthread_once_t once = PTHREAD_ONCE_INIT;
   if (__builtin_expect(!__atomic_load_n(&cs_state, __ATOMIC_ACQUIRE), 0)) pthread_once(&once, callstats_init);
-  return cs_state == 1;
+  return __atomic_load_n(&cs_state, __ATOMIC_RELAXED) == 1;
 }
 
 static inline void
@@ -659,12 +706,14 @@ executor(void *arg) {
     uint64_t tail = R->tail;
     uint64_t head = __atomic_load_n(&R->head, __ATOMIC_ACQUIRE);
     if (tail == head) {
-      /* spin briefly, then sleep until kicked */
+      /* poll for the spin budget, then sleep until kicked: a sleeping executor costs the next request a kick
+       * (a virtio-gpu submission and a VM exit in the guest), a polling one costs host CPU */
       int got = 0;
-      for (int i = 0; i < 2000 && !got; i++) {
-        if (__atomic_load_n(&R->head, __ATOMIC_ACQUIRE) != tail) got = 1;
-        else __asm__ __volatile__("yield");
-      }
+      uint64_t end = mach_absolute_time() + atomic_load_explicit(&h->spin_ticks, memory_order_relaxed);
+      do {
+        if (__atomic_load_n(&R->head, __ATOMIC_ACQUIRE) != tail) { got = 1; break; }
+        __asm__ __volatile__("yield");
+      } while (mach_absolute_time() < end);
       if (got) continue;
       pthread_mutex_lock(&h->lock);
       __atomic_store_n(&R->host_idle, 1, __ATOMIC_SEQ_CST);
@@ -729,6 +778,8 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
   h->slots = (struct wmtr_slot *)((uint8_t *)ring + WMTR_SLOTS_OFFSET);
   h->ops = ops; h->ctx = ctx;
   pthread_mutex_init(&h->lock, NULL); pthread_cond_init(&h->cond, NULL);
+  const char *sp = getenv("WMTR_HOST_SPIN_US");
+  wmtr_host_set_spin(h, (uint64_t)(sp && *sp ? atoll(sp) : WMTR_HOST_SPIN_US_DEFAULT) * 1000);
   pthread_mutex_init(&h->free_lock, NULL); pthread_mutex_init(&h->event_lock, NULL);
   pthread_mutex_init(&h->view_lock, NULL);
   h->compile_q = dispatch_queue_create("wmtr.compile", DISPATCH_QUEUE_CONCURRENT);
@@ -738,6 +789,13 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
   pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INTERACTIVE, 0);
   pthread_create(&h->thread, &a, executor, h);
   return h;
+}
+
+void
+wmtr_host_set_spin(struct wmtr_host *h, uint64_t ns) {
+  static mach_timebase_info_data_t tb;
+  if (!tb.denom) mach_timebase_info(&tb);
+  atomic_store(&h->spin_ticks, ns * tb.denom / tb.numer);
 }
 
 void

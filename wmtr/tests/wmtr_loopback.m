@@ -118,13 +118,27 @@ int main(void) {
     setenv("WMTR_FRAMES", frames_path, 1);
     char stats_path[] = "/tmp/wmtr_callstats_XXXXXX";
     close(mkstemp(stats_path));
-    setenv("WMTR_CALLSTATS", stats_path, 1);
+    /* WMTR_TEST_TRIGGER=1: statistics turned on at runtime through the trigger file instead of the environment */
+    int trigger_mode = getenv("WMTR_TEST_TRIGGER") != NULL;
+    char trigger_path[64];
+    snprintf(trigger_path, sizeof trigger_path, "/tmp/wmtr_trigger_%d", (int)getpid());
+    if (trigger_mode) {
+      unsetenv("WMTR_CALLSTATS");
+      setenv("WMTR_CALLSTATS_TRIGGER", trigger_path, 1);
+      setenv("WMTR_CALLSTATS_POLL_MS", "20", 1);
+      FILE *tf = fopen(trigger_path, "w");
+      fprintf(tf, "%s\n", stats_path);
+      fclose(tf);
+    } else {
+      setenv("WMTR_CALLSTATS", stats_path, 1);
+    }
     /* 1. output buffer through a uint64 pointer field */
     char a[32] = {0}, b[32] = {0};
     struct unixcall_nsstring_getcstring pa = {(obj_handle_t)"metal string", (uint64_t)(uintptr_t)a, sizeof a, 4, 0}, pb = pa;
     pb.buffer_ptr = (uint64_t)(uintptr_t)b;
     native(8, &pa); remote(8, &pb);
     CHECK(!strcmp(a, b) && pb.ret == 1 && pb.buffer_ptr == (uint64_t)(uintptr_t)b, "getCString: '%s' vs '%s'", a, b);
+    if (trigger_mode) usleep(200000); /* the first call started the statistics thread; it sees the trigger */
 
     /* 2. C-string input in a uint64 arg, value result */
     struct unixcall_generic_obj_uint64_obj_ret fa = {5, (uint64_t)(uintptr_t)"vertex_main", 0}, fb = fa;
@@ -255,6 +269,21 @@ int main(void) {
       struct unixcall_generic_obj_uint64_ret pf4 = {0};
       NTSTATUS fs2 = remote(39, &pf4);
       CHECK(fs == (NTSTATUS)0xC0000005 && fs2 == (NTSTATUS)0xC0000005, "fault containment: %x then %x", fs, fs2);
+      { /* executor spin budget: with a budget longer than the gaps between requests it never sleeps */
+        struct wmtr_host_stats st0, st1, st2;
+        wmtr_host_set_spin(H, 0);
+        wmtr_host_get_stats(H, &st0);
+        for (int i = 0; i < 20; i++) { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); usleep(300); }
+        wmtr_host_get_stats(H, &st1);
+        wmtr_host_set_spin(H, 20000000);
+        { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); }
+        wmtr_host_get_stats(H, &st1);
+        for (int i = 0; i < 20; i++) { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); usleep(300); }
+        wmtr_host_get_stats(H, &st2);
+        CHECK(st1.idle_sleeps - st0.idle_sleeps >= 15, "no spin: %llu sleeps in 20 gaps", st1.idle_sleeps - st0.idle_sleeps);
+        CHECK(st2.idle_sleeps - st1.idle_sleeps <= 1, "20 ms spin: %llu sleeps in 20 gaps of 0.3 ms", st2.idle_sleeps - st1.idle_sleeps);
+        wmtr_host_set_spin(H, WMTR_HOST_SPIN_US_DEFAULT * 1000);
+      }
       wmtr_host_destroy(H);
       CHECK(n_released == 2 && released[1] == v2.ret_view, "destroy did not release the leftover view (%d releases)", n_released);
       /* WMTR_CALLSTATS: destroy wrote a snapshot; call 39 (sync, above) is in it with its sync count */
@@ -272,6 +301,7 @@ int main(void) {
       if (sf) fclose(sf);
       CHECK(found, "WMTR_CALLSTATS: no executor sleep row");
       unlink(stats_path);
+      unlink(trigger_path);
     }
   }
   printf(failures ? "wmtr_loopback: %d FAILED\n" : "wmtr_loopback: all passed\n", failures);
