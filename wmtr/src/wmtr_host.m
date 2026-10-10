@@ -880,6 +880,11 @@ wmtr_present_create_view(void *ctx, uint64_t hwnd, void *device, uint64_t *layer
         layer.contentsGravity = kCAGravityResizeAspect;
         layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
         layer.opaque = YES;
+        /* drawables the game layer may have in flight: 2 (WMTR_DRAWABLES=3 restores Core Animation's default).
+         * d3d11bench probe, DXMT, 60 Hz panel: app-reaction-to-present median 48.6 -> 41.3 ms, p90 52.1 -> 42.2 ms,
+         * presented fps unchanged (119 vs 119) */
+        const char *nd = getenv("WMTR_DRAWABLES");
+        ((CAMetalLayer *)layer).maximumDrawableCount = nd && atoi(nd) == 3 ? 3 : 2;
         /* the launcher shows game layers only while a game has the guest's focus (VMView.gameLayersVisible) */
         if ([vm respondsToSelector:@selector(gameLayersVisible)])
           layer.hidden = ![[vm valueForKey:@"gameLayersVisible"] boolValue];

@@ -47,6 +47,7 @@ int main(void) {
         CHECK(layer && ((CAMetalLayer *)layer).device == dev, "layer device");
         CHECK(layer && NSEqualRects(NSRectFromCGRect(((CALayer *)layer).frame), NSRectFromCGRect(vm.layer.bounds)), "layer frame");
         CHECK(layer && ((CALayer *)layer).hidden, "game layer shown although no game has the guest's focus");
+        CHECK(layer && ((CAMetalLayer *)layer).maximumDrawableCount == 2, "game layer does not default to 2 drawables");
         CHECK(((TestVMView *)vm).policyApplied >= 1, "view's layer policy not re-applied after adding the game layer");
       });
       wmtr_present_release_view(NULL, view);
