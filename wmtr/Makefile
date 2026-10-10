@@ -65,7 +65,9 @@ $(OUT)/wmtr_present_test: tests/wmtr_present_test.m $(OUT)/libwmtr_host.dylib
 $(OUT)/wmtr_loopback: tests/wmtr_loopback.m src/wmtr_host.m src/wmtr_client.c include/*.h | $(OUT)
 	$(CC) $(CFLAGS) -o $@ tests/wmtr_loopback.m src/wmtr_host.m src/wmtr_client.c -framework Foundation -framework Metal -framework Cocoa -framework QuartzCore
 
-LINUX_CFLAGS = -O2 -g -Wall -Wno-unused-function $(INC) -include include/wmtr_glibc_compat.h
+# -mtls-dialect=gnu: newer GCC defaults to TLS descriptors, which need GLIBC_ABI_GNU2_TLS (absent in the
+# Steam Runtime's and the FEX rootfs's glibc), so the unixlib would not load
+LINUX_CFLAGS = -O2 -g -Wall -Wno-unused-function -mtls-dialect=gnu $(INC) -include include/wmtr_glibc_compat.h
 client-linux: $(OUT)/x86_64-linux/winemetal.so
 $(OUT)/x86_64-linux/winemetal.so: src/wmtr_client.c src/transport_virtgpu.c include/*.h src/*.inc
 	mkdir -p $(OUT)/x86_64-linux
@@ -75,6 +77,9 @@ test-linux: $(OUT)/x86_64-linux/winemetal.so
 	$(CC) -shared -fPIC -o $(OUT)/x86_64-linux/standin/ntdll.so tests/ntdll_standin.c
 	$(CC) -O2 -o $(OUT)/x86_64-linux/wmtr_ntdll_test tests/wmtr_ntdll_test.c -ldl
 	./$(OUT)/x86_64-linux/wmtr_ntdll_test $(abspath $(OUT))/x86_64-linux/standin/ntdll.so $(abspath $(OUT))/x86_64-linux/winemetal.so
+	@# loads in the Steam Runtime: no glibc version newer than 2.14 and no TLS-descriptor ABI requirement
+	@if readelf -V $< | grep -E 'GLIBC_ABI_|GLIBC_2\.(1[5-9]|[2-9][0-9])'; then echo "FAIL: glibc requirement too new"; exit 1; fi
+	@echo "glibc requirements: ok"
 
 clean:
 	rm -rf $(OUT)
