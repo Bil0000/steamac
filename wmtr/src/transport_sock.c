@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "wmtr_proto.h"
+#include "wmtr_spin.h"
 #include "wmtr_transport.h"
 #include "wmtr_sock.h"
 
@@ -103,12 +104,9 @@ s_kick(struct wmtr_transport *t) {
 }
 
 static void
-s_wait(struct wmtr_transport *t, volatile uint64_t *done, uint64_t seq, uint32_t slot) {
+s_wait(struct wmtr_transport *t, volatile uint64_t *done, uint64_t seq, uint32_t slot, uint64_t spin_ns) {
   (void)t; (void)slot;
-  for (int i = 0; i < 20000; i++) {
-    if (__atomic_load_n(done, __ATOMIC_ACQUIRE) >= seq) return;
-    if (i > 2000) sched_yield();
-  }
+  if (wmtr_spin_wait(done, seq, spin_ns)) return;
   struct timespec ts = {0, 50000};
   while (__atomic_load_n(done, __ATOMIC_ACQUIRE) < seq) nanosleep(&ts, NULL);
 }

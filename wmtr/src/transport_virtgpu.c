@@ -3,7 +3,7 @@
  *   blobs: VIRTGPU_BLOB_MEM_HOST3D, mappable; blob_id = wmtr blob number; the host allocates them
  *          (shared memory it also wraps with MTLBuffers) and the guest maps them with DRM_VIRTGPU_MAP
  *   kick:  EXECBUFFER of a struct wmtr_vgpu_cmd {KICK}
- *   wait:  spin, then EXECBUFFER {WAIT slot seq} on ring 1 + slot % 62 (63 for events) with an
+ *   wait:  poll for the caller's budget (wmtr_spin.h), then EXECBUFFER {WAIT slot seq} on ring 1 + slot % 62 (63 for events) with an
  *          out-fence the host signals once *done >= seq; poll() the fence fd
  * The UAPI structs are copied from include/uapi/drm/virtgpu_drm.h (stable kernel ABI). */
 #define _GNU_SOURCE
@@ -21,6 +21,7 @@
 #include <pthread.h>
 
 #include "wmtr_proto.h"
+#include "wmtr_spin.h"
 #include "wmtr_transport.h"
 #include "wmtr_vgpu.h"
 
@@ -148,11 +149,8 @@ v_kick(struct wmtr_transport *t) {
 }
 
 static void
-v_wait(struct wmtr_transport *t, volatile uint64_t *done, uint64_t seq, uint32_t slot) {
-  for (int i = 0; i < 4000; i++) {
-    if (__atomic_load_n(done, __ATOMIC_ACQUIRE) >= seq) return;
-    if (i > 1000) sched_yield();
-  }
+v_wait(struct wmtr_transport *t, volatile uint64_t *done, uint64_t seq, uint32_t slot, uint64_t spin_ns) {
+  if (wmtr_spin_wait(done, seq, spin_ns)) return;
   struct vg_priv *p = t->priv;
   uint32_t ring = slot == WMTR_EVENT_SLOT ? 63 : 1 + slot % 62;
   /* At most one WAIT in flight per waiting thread: the host answers a fenced command only when its

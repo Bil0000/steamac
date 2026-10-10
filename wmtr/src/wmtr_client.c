@@ -15,6 +15,7 @@
 #include "airconv_thunks.h"
 #include "wmtr_wire.h"
 #include "wmtr_transport.h"
+#include "wmtr_spin.h"
 
 typedef int32_t NTSTATUS;
 #define STATUS_SUCCESS 0
@@ -303,6 +304,18 @@ ring_space(void) {
 
 static NTSTATUS send_built_flags(uint16_t call, uint16_t extra_flags, void *params, uint32_t params_size);
 
+/* how a call runs on the host (wmtr_calls.inc): picks the reply wait's spin budget (wmtr_spin.h) */
+#define WMTR_CLS_A 0
+#define WMTR_CLS_S 1
+#define WMTR_CLS_B 2
+#define WMTR_CLS_C 3
+#define WMTR_CLS_N 1
+static const uint8_t call_cls[146] = {
+#define X(i, n, t, c) [i] = WMTR_CLS_##c,
+#include "wmtr_calls.inc"
+#undef X
+};
+
 static NTSTATUS
 send_built(uint16_t call, int sync, void *params, uint32_t params_size) {
   if (sync) B.force_sync = 1;
@@ -362,7 +375,8 @@ send_built_flags(uint16_t call, uint16_t extra_flags, void *params, uint32_t par
   struct wmtr_slot *s = &slots[slot];
   if (__atomic_load_n(&s->done_seq, __ATOMIC_ACQUIRE) < seq) {
     __atomic_store_n(&s->waiting, 1, __ATOMIC_SEQ_CST);
-    T->wait(T, &s->done_seq, seq, slot);
+    int cls = (extra_flags & WMTR_F_CONTROL) || call >= 146 ? WMTR_CLS_S : call_cls[call];
+    T->wait(T, &s->done_seq, seq, slot, wmtr_spin_budget_ns(cls));
     __atomic_store_n(&s->waiting, 0, __ATOMIC_RELAXED);
   }
   NTSTATUS st = (NTSTATUS)s->status;
@@ -500,7 +514,7 @@ listener_run(uint64_t listener) {
     __atomic_store_n(&R->event_tail, t, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&event_lock);
     if (stop) return STATUS_SUCCESS;
-    T->wait(T, &R->event_head, t + 1, WMTR_EVENT_SLOT);
+    T->wait(T, &R->event_head, t + 1, WMTR_EVENT_SLOT, 0); /* events come once or twice a frame */
   }
 }
 
@@ -861,7 +875,7 @@ __attribute__((visibility("default"))) int
 wmtr_debug_wait(volatile uint64_t *done, uint64_t seq, uint32_t slot) {
   pthread_once(&init_once, wmtr_init);
   if (!init_ok) return -1;
-  T->wait(T, done, seq, slot);
+  T->wait(T, done, seq, slot, wmtr_spin_budget_ns(WMTR_CLS_S));
   return 0;
 }
 

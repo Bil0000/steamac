@@ -101,7 +101,7 @@ static void *t_open_ring(struct wmtr_transport *t, uint64_t size) {
 }
 static void *t_add_blob(struct wmtr_transport *t, uint32_t b, uint64_t size) { blob_base[b] = pages(size); blob_size[b] = size; return blob_base[b]; }
 static void t_kick(struct wmtr_transport *t) { wmtr_host_kick(H); }
-static void t_wait(struct wmtr_transport *t, volatile uint64_t *d, uint64_t seq, uint32_t slot) { while (__atomic_load_n(d, __ATOMIC_ACQUIRE) < seq) sched_yield(); }
+static void t_wait(struct wmtr_transport *t, volatile uint64_t *d, uint64_t seq, uint32_t slot, uint64_t spin_ns) { (void)spin_ns; while (__atomic_load_n(d, __ATOMIC_ACQUIRE) < seq) sched_yield(); }
 struct wmtr_transport *wmtr_transport_create(void) {
   struct wmtr_transport *t = calloc(1, sizeof *t);
   t->open_ring = t_open_ring; t->add_blob = t_add_blob; t->kick = t_kick; t->wait = t_wait;

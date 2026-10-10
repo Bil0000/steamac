@@ -12,8 +12,10 @@ struct wmtr_transport {
   void *(*add_blob)(struct wmtr_transport *t, uint32_t blob, uint64_t size);
   /* wake the host executor (it set host_idle) */
   void (*kick)(struct wmtr_transport *t);
-  /* block until *done_seq >= seq (the host kicks waiting slots); spin first */
-  void (*wait)(struct wmtr_transport *t, volatile uint64_t *done_seq, uint64_t seq, uint32_t slot);
+  /* block until *done_seq >= seq (the host kicks waiting slots); poll for at most spin_ns first
+   * (wmtr_spin.h: 0 for calls the host answers in milliseconds) */
+  void (*wait)(struct wmtr_transport *t, volatile uint64_t *done_seq, uint64_t seq, uint32_t slot,
+               uint64_t spin_ns);
   void *priv;
 };
 
