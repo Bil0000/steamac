@@ -50,6 +50,12 @@ main(void) {
   CHECK(got, "a reply within the budget was missed");
   pthread_join(th, NULL);
   CHECK(yields == 0, "the spin called sched_yield");
+  /* one kick per executor sleep: the first client claims it, later ones until the host sleeps again do not */
+  volatile uint32_t idle = 1;
+  CHECK(wmtr_claim_kick(&idle), "first client does not kick a sleeping host");
+  CHECK(!wmtr_claim_kick(&idle) && !wmtr_claim_kick(&idle), "a second client kicks again before the host slept again");
+  idle = 1;
+  CHECK(wmtr_claim_kick(&idle), "no kick after the host slept again");
   printf("wmtr_spin_test: %s\n", fails ? "FAILED" : "passed");
   return fails != 0;
 }
