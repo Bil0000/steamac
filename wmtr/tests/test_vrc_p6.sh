@@ -31,7 +31,7 @@ case "$*" in
   *"Finished entering world"*) [ "$SCENARIO" = nojoin ] || echo "2026.10.10 16:04:34" ;;
   *"date -d"*) echo $(( $(ms) - 10500 )) ;;
   *"date +%s%3N"*) ms ;;
-  *nohup*) [ "$SCENARIO" = badroute ] && echo "bash: nohup: oops" || echo 4242 ;;
+  *nohup*) [ "$SCENARIO" = badroute ] || [ "$SCENARIO" = wmtrfail ] && echo "bash: nohup: oops" || echo 4242 ;;
   *sudo*) cat >/dev/null ;;
 esac
 exit 0
@@ -39,11 +39,11 @@ EOF
 chmod +x "$T"/bin/* "$T"/tools/*
 fails=0
 fail() { fails=$((fails + 1)); echo "FAIL [$1]: $2"; }
-run() { # scenario expected_rc
+run() { # scenario expected_rc [mode]
   local root=$T/$1; mkdir -p "$root"
   SCENARIO=$1 P6_ROOT=$root P6_G=$T/bin/g P6_BOOT=$T/bin/boot P6_SCP=$T/bin/scp P6_ASKPASS=$T/bin/askpass \
     P6_TOOLS=$T/tools P6_SLEEP=$T/bin/nap JOIN_TIMEOUT=3 P6_POLL=2 P6_BUSY_RE=no-such-process-xyz P6_VMPROC=${VMPROC:-no-such-vm-xyz} P6_DRIVER_RE=${DRIVER_RE:-t6-no-such-driver} IDLE=1 MOVE=1 \
-    perl -e "alarm 60; exec @ARGV" bash "$D" "T_$1" dxvk > "$root/out" 2>&1
+    perl -e "alarm 60; exec @ARGV" bash "$D" "T_$1" "${3:-dxvk}" > "$root/out" 2>&1
   local rc=$?
   [ "$rc" = "$2" ] || fail "$1" "rc $rc, expected $2: $(tail -3 "$root/out" | tr '\n' '|')"
   grep -q 'steam://close' "$root/state/calls" 2>/dev/null || fail "$1" "game not closed"
@@ -57,6 +57,13 @@ grep -q ' done; mac' "$T/ok/T_ok/driver.log" 2>/dev/null || fail ok "driver did 
 run badroute 1
 grep -q "cleanup after failure in phase 'move'" "$T/badroute/T_badroute/driver.log" || fail badroute "no cleanup record"
 run nojoin 2
+# wmtr: the launch-options wrapper is on only during the run, and off again after a failure
+run wmtrfail 1 wmtr
+grep -q 'lean-launchopts.sh on' "$T/wmtrfail/state/calls" || fail wmtrfail "launch options not switched on"
+grep -q 'lean-launchopts.sh off' "$T/wmtrfail/state/calls" || fail wmtrfail "launch options not restored after the failure"
+run wmtrok 0 wmtr
+[ "$(grep -c 'lean-launchopts.sh off' "$T/wmtrok/state/calls")" = 1 ] || fail wmtrok "launch options not restored exactly once"
+grep -q 'lean-launchopts' "$T/ok/state/calls" && fail ok "dxvk run touched the launch options"
 # another driver or VM already running: refuse before the boot
 printf '#!/bin/sh\nsleep 20\n' > "$T/bin/t6-other-driver.sh"; chmod +x "$T/bin/t6-other-driver.sh"
 "$T/bin/t6-other-driver.sh" & other=$!
