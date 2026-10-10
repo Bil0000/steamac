@@ -76,7 +76,10 @@ static struct wmtr_host *H;
 static void *blob_base[WMTR_MAX_BLOBS]; static uint64_t blob_size[WMTR_MAX_BLOBS];
 static void *t_blob_ptr(void *c, uint32_t b, uint64_t *s) { *s = blob_size[b]; return blob_base[b]; }
 static void t_wake(void *c, uint32_t s) {}
-static const struct wmtr_host_ops host_ops = {t_blob_ptr, t_wake, NULL, NULL, NULL};
+static uint64_t next_view = 0x1000, released[8]; static int n_released;
+static uint64_t t_create_view(void *c, uint64_t hwnd, void *dev, uint64_t *layer) { *layer = 0x77; return next_view++; }
+static void t_release_view(void *c, uint64_t v) { if (n_released < 8) released[n_released] = v; n_released++; }
+static const struct wmtr_host_ops host_ops = {t_blob_ptr, t_wake, t_create_view, t_release_view, NULL};
 static void *pages(uint64_t n) { void *p; posix_memalign(&p, WMTR_PAGE, n); memset(p, 0, n); return p; }
 static void *t_open_ring(struct wmtr_transport *t, uint64_t size) {
   struct wmtr_ring *R = pages(size);
@@ -199,6 +202,18 @@ int main(void) {
     }
     struct wmtr_host_stats st; wmtr_host_get_stats(H, &st);
     printf("requests=%llu sync=%llu bytes=%llu\n", st.requests, st.sync_requests, st.bytes);
+    { /* views: ReleaseMetalView releases once; views the client never released go on destroy */
+      struct unixcall_create_metal_view_from_hwnd v1 = {.hwnd = 1, .device = 2}, v2 = {.hwnd = 3, .device = 2};
+      CHECK(remote(72, &v1) == 0 && remote(72, &v2) == 0 && v1.ret_view && v2.ret_view && v1.ret_layer == 0x77,
+            "CreateMetalViewFromHWND %llx %llx", v1.ret_view, v2.ret_view);
+      struct unixcall_generic_obj_noret r1 = {.handle = v1.ret_view};
+      remote(73, &r1);
+      remote(73, &r1); /* a second release of the same view is ignored */
+      struct unixcall_generic_obj_uint64_ret pf = {0}; remote(39, &pf); /* sync call: the releases above are done */
+      CHECK(n_released == 1 && released[0] == v1.ret_view, "ReleaseMetalView: %d releases", n_released);
+      wmtr_host_destroy(H);
+      CHECK(n_released == 2 && released[1] == v2.ret_view, "destroy did not release the leftover view (%d releases)", n_released);
+    }
   }
   printf(failures ? "wmtr_loopback: %d FAILED\n" : "wmtr_loopback: all passed\n", failures);
   return failures != 0;

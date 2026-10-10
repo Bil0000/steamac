@@ -50,6 +50,11 @@ struct wmtr_host {
   int kicked, quit;
   dispatch_queue_t compile_q, block_q;
   pthread_mutex_t free_lock, event_lock;
+  /* views the client created and has not released: released on destroy, so a client that exits
+   * without ReleaseMetalView (DXMT never calls it at process exit) does not leave its layer behind */
+  pthread_mutex_t view_lock;
+  uint64_t *views;
+  uint32_t n_views, cap_views;
   _Atomic uint64_t n_req, n_sync, n_bytes, n_worker, n_sleep;
 };
 
@@ -57,6 +62,29 @@ static int log_level = 1;
 #define LOG(lvl, ...) do { if (log_level >= (lvl)) fprintf(stderr, "wmtr-host: " __VA_ARGS__); } while (0)
 
 /* ------------------------------------------------------------------------------------------- */
+static void
+view_track(struct wmtr_host *h, uint64_t v) {
+  pthread_mutex_lock(&h->view_lock);
+  if (h->n_views == h->cap_views) {
+    uint32_t cap = h->cap_views ? h->cap_views * 2 : 4;
+    uint64_t *n = realloc(h->views, cap * sizeof *n);
+    if (n) { h->views = n; h->cap_views = cap; }
+  }
+  if (h->n_views < h->cap_views) h->views[h->n_views++] = v;
+  pthread_mutex_unlock(&h->view_lock);
+}
+
+/* 1 if `v` was a live view of this client (then it is no longer tracked) */
+static int
+view_untrack(struct wmtr_host *h, uint64_t v) {
+  int found = 0;
+  pthread_mutex_lock(&h->view_lock);
+  for (uint32_t i = 0; i < h->n_views; i++)
+    if (h->views[i] == v) { h->views[i] = h->views[--h->n_views]; found = 1; break; }
+  pthread_mutex_unlock(&h->view_lock);
+  return found;
+}
+
 static void *
 resolve(struct wmtr_host *h, uint64_t v, uint8_t *payload, uint32_t payload_size) {
   uint64_t tag = v & WMTR_REF_MASK;
@@ -276,11 +304,14 @@ host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr
     uint64_t layer = 0;
     p->ret_view = h->ops->create_view(h->ctx, p->hwnd, (void *)p->device, &layer);
     p->ret_layer = layer;
+    if (p->ret_view) view_track(h, p->ret_view);
     return p->ret_view ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
   }
-  case 73:
-    if (h->ops->release_view) h->ops->release_view(h->ctx, ((struct unixcall_generic_obj_noret *)params)->handle);
+  case 73: {
+    uint64_t v = ((struct unixcall_generic_obj_noret *)params)->handle;
+    if (view_untrack(h, v) && h->ops->release_view) h->ops->release_view(h->ctx, v);
     return STATUS_SUCCESS;
+  }
   case 104: { /* setWin32EventAtValue: queue (listener, handle) for the client to NtSetEvent */
     struct unixcall_mtlsharedevent_setevent *p = (void *)params;
     struct host_listener *l = (struct host_listener *)p->shared_event_listener;
@@ -459,6 +490,7 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
   h->ops = ops; h->ctx = ctx;
   pthread_mutex_init(&h->lock, NULL); pthread_cond_init(&h->cond, NULL);
   pthread_mutex_init(&h->free_lock, NULL); pthread_mutex_init(&h->event_lock, NULL);
+  pthread_mutex_init(&h->view_lock, NULL);
   h->compile_q = dispatch_queue_create("wmtr.compile", DISPATCH_QUEUE_CONCURRENT);
   h->block_q = dispatch_queue_create("wmtr.block", DISPATCH_QUEUE_CONCURRENT);
   pthread_attr_t a;
@@ -486,6 +518,13 @@ wmtr_host_destroy(struct wmtr_host *h) {
   /* let queued compile/blocking jobs finish: they call back into the embedder */
   dispatch_barrier_sync(h->compile_q, ^{});
   dispatch_barrier_sync(h->block_q, ^{});
+  /* the client is gone: take down the views it never released */
+  pthread_mutex_lock(&h->view_lock);
+  for (uint32_t i = 0; i < h->n_views; i++)
+    if (h->ops->release_view) h->ops->release_view(h->ctx, h->views[i]);
+  h->n_views = 0;
+  free(h->views); h->views = NULL; h->cap_views = 0;
+  pthread_mutex_unlock(&h->view_lock);
 }
 
 uint64_t
