@@ -66,7 +66,11 @@ log "start $LABEL mode=$MODE idle=$IDLE move=$MOVE memMiB=$(defaults read es.fxg
 # one driver and one VM at a time: refuse if any steamac-vm or another vrc-p6.sh (not this shell or its
 # subshells) is running
 v=$(pgrep -x "${P6_VMPROC:-steamac-vm}" | tr '\n' ' '); [ -z "$v" ] || { log "ABORT: a VM is running (pid $v)"; DONE=1; exit 1; }
-o=$(ps -axo pid=,ppid=,command= | awk -v me=$$ -v re="${P6_DRIVER_RE:-vrc-p6[.]sh}" '$1 != me && $2 != me && $3 !~ /(^|\/)awk$/ && $0 ~ re {printf "%s ", $1}')
+# (ancestors are skipped too: the shell that started this driver has its name on its command line)
+o=$(ps -axo pid=,ppid=,command= | awk -v me=$$ -v re="${P6_DRIVER_RE:-vrc-p6[.]sh}" '
+  { pp[$1] = $2; line[$1] = $0; cmd[$1] = $3 }
+  END { for (p = me; p > 1; p = pp[p]) { skip[p] = 1; if (!(p in pp)) break }
+        for (p in line) if (!skip[p] && pp[p] != me && cmd[p] !~ /(^|\/)awk$/ && line[p] ~ re) printf "%s ", p }')
 [ -z "$o" ] || { log "ABORT: another P6 driver is running (pid $o)"; DONE=1; exit 1; }
 b=$(busy_host); [ -z "$b" ] || { log "ABORT: host busy (build process pid $b)"; DONE=1; exit 1; }
 # COLD=1 (wmtr): start without DXMT's shader cache for VRChat (host side; kept aside, not deleted)

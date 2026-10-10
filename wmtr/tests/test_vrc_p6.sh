@@ -69,6 +69,11 @@ busy() { # name vmproc driver_re
 }
 busy driver no-such-vm-xyz 't6-other-driver[.]sh'
 busy vm sleep t6-no-such-driver
+# started from a shell whose own command line names the driver: that ancestor is not "another driver"
+root=$T/ancestor; mkdir -p "$root"
+SCENARIO=ok P6_ROOT=$root P6_G=$T/bin/g P6_BOOT=$T/bin/boot P6_SCP=$T/bin/scp P6_ASKPASS=$T/bin/askpass P6_TOOLS=$T/tools \
+  P6_SLEEP=$T/bin/nap P6_POLL=2 P6_BUSY_RE=no-such-process-xyz P6_VMPROC=no-such-vm-xyz P6_DRIVER_RE=t6-anc-marker IDLE=1 MOVE=1 \
+  bash -c 'bash "$1" T_anc dxvk && : t6-anc-marker' _ "$D" > "$root/out" 2>&1 || fail ancestor "rc $?: $(grep -m1 ABORT "$root/out")"
 kill $other 2>/dev/null; wait $other 2>/dev/null
 echo "test_vrc_p6: $([ $fails = 0 ] && echo passed || echo FAILED)"
 exit $((fails > 0))
