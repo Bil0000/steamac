@@ -40,6 +40,7 @@ prefixes() {
     for d in "$STEAM"/steamapps/compatdata/*/pfx; do [[ -d $d/drive_c/windows/system32 ]] && printf '%s\n' "$d"; done
 }
 key() { printf '%s' "$1" | cksum | cut -d' ' -f1; }
+vkey() { cksum < "$1/version" 2>/dev/null | cut -d' ' -f1; }   # Proton's version file: changes with each update
 
 # DXMT's PE files are Wine builtins; Proton loads its DXVK set native-only (d3d11=n), so those copies drop
 # the "Wine builtin DLL" marker (16 bytes at 0x40). winemetal.dll keeps it (a unixlib).
@@ -52,16 +53,28 @@ same_as_native() { # payload file, candidate
     cmp -s "$t" "$2"; local rc=$?; rm -f "$t"; return $rc
 }
 install_file() { cmp -s "$1" "$2" || { cp -f "$1" "$2.steamac-tmp" && mv -f "$2.steamac-tmp" "$2"; }; }
+# A DXMT file this script installed, from this or an earlier DXMT payload (a layer update changes the payload):
+# their checksums are kept in $STATE/orig/*/installed.
+ours() { # file
+    local c; c=$(cksum < "$1" 2>/dev/null | cut -d' ' -f1) || return 1
+    [[ -n $c ]] && cat "$STATE"/orig/*/installed 2>/dev/null | grep -qx "$c"
+}
 
 apply_dxmt() {
     local p=$1 W=$1/files/lib/wine B; B=$STATE/orig/$(key "$p")
     local D=$W/dxvk/x86_64-windows f changed=0
     mkdir -p "$B"
     for f in $DLLS; do
-        # keep Proton's file unless it already is DXMT's (a re-run, or a Proton update wrote it anew)
+        # keep Proton's file unless it is DXMT's: this payload's (a re-run), or an earlier payload's (a layer
+        # update: replace it, the kept original stays); anything else is Proton's (first run, a Proton update)
         if ! same_as_native "$PAYLOAD/x86_64-windows/$f.dll" "$D/$f.dll"; then
-            cp -f "$D/$f.dll" "$B/$f.dll" || return 1
+            # a kept original stays valid while Proton's version is the one it was kept from (also covers
+            # files installed before the checksums were recorded)
+            if ! ours "$D/$f.dll" && ! [[ -f $B/$f.dll && $(vkey "$p") == "$(cat "$B/version" 2>/dev/null)" ]]; then
+                cp -f "$D/$f.dll" "$B/$f.dll" || return 1
+            fi
             native_copy "$PAYLOAD/x86_64-windows/$f.dll" "$D/$f.dll" || return 1
+            cksum < "$D/$f.dll" | cut -d' ' -f1 >> "$B/installed"
             changed=1
         fi
     done
@@ -72,6 +85,7 @@ apply_dxmt() {
     local T=$1/files/share/default_pfx/drive_c/windows/system32
     [[ -d $T && ! -L $T/winemetal.dll ]] && ln -sfn ../../../../../lib/wine/x86_64-windows/winemetal.dll "$T/winemetal.dll"
     printf '%s\n' "$p" > "$B/path"
+    vkey "$p" > "$B/version"
     touch "$W/$MARK"
     (( changed )) && log "DXMT in $p"
     return 0
@@ -82,7 +96,7 @@ restore() {
     local D=$W/dxvk/x86_64-windows f
     for f in $DLLS; do
         # put Proton's file back only where DXMT's is still there (an update may have restored it already)
-        if [[ -f $B/$f.dll ]] && same_as_native "$PAYLOAD/x86_64-windows/$f.dll" "$D/$f.dll"; then
+        if [[ -f $B/$f.dll ]] && { same_as_native "$PAYLOAD/x86_64-windows/$f.dll" "$D/$f.dll" || ours "$D/$f.dll"; }; then
             cp -f "$B/$f.dll" "$D/$f.dll.steamac-tmp" && mv -f "$D/$f.dll.steamac-tmp" "$D/$f.dll"
         fi
     done
@@ -102,19 +116,23 @@ reconcile() {
             touch "$x/$MARK"
         done < <(prefixes)
     else
-        while read -r p; do [[ -e $p/files/lib/wine/$MARK || -d $STATE/orig/$(key "$p") ]] && restore "$p"; done < <(protons)
+        # prefixes first: their DXMT copies are recognised through the kept checksums, which restore() removes
         while read -r x; do
             [[ -e $x/$MARK ]] || continue
             rm -f "$x/drive_c/windows/system32/winemetal.dll" "$x/$MARK"
             # the prefix's DXMT copies go back to its Proton's DXVK now (Proton would do it at the next start)
-            local s=$x/drive_c/windows/system32 src
+            local s=$x/drive_c/windows/system32 src f
             src=$(protons | head -1)
             for f in $DLLS; do
-                if [[ -f $s/$f.dll ]] && same_as_native "$PAYLOAD/x86_64-windows/$f.dll" "$s/$f.dll" && [[ -n $src ]]; then
-                    cp -f "$src/files/lib/wine/dxvk/x86_64-windows/$f.dll" "$s/$f.dll"
+                # a prefix this script marked holds Proton's set as Proton last copied it: DXMT's (of any payload)
+                if [[ -f $s/$f.dll && -n $src ]]; then
+                    local o=$STATE/orig/$(key "$src")/$f.dll
+                    [[ -f $o ]] || o=$src/files/lib/wine/dxvk/x86_64-windows/$f.dll
+                    cp -f "$o" "$s/$f.dll"
                 fi
             done
         done < <(prefixes)
+        while read -r p; do [[ -e $p/files/lib/wine/$MARK || -d $STATE/orig/$(key "$p") ]] && restore "$p"; done < <(protons)
     fi
 }
 

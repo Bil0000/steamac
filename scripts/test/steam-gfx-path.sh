@@ -59,7 +59,14 @@ upd=$(cd "$T" && cksum < "$P1/files/lib/wine/dxvk/x86_64-windows/dxgi.dll")
 run "steamac.gfx=dxmt"
 isdxmt "$P1/files/lib/wine/dxvk/x86_64-windows/dxgi.dll" || fail update "DXMT not re-applied after the update"
 
-run "steamac.gfx=vulkan"
+# layer update: a new DXMT payload (n) replaces the old DXMT files, Proton's originals stay kept
+X2=$T/dxmt2; mkdir -p "$X2/x86_64-windows" "$X2/x86_64-unix"
+for f in d3d11 dxgi d3d10core winemetal; do blob "$X2/x86_64-windows/$f.dll" n; done; blob "$X2/x86_64-unix/winemetal.so" t
+rm -f "$T"/state/orig/*/installed   # state as left by a version of this script that kept no checksums
+run "steamac.gfx=dxmt" "$X2"
+[ "$(head -c 64 "$P2/files/lib/wine/dxvk/x86_64-windows/d3d11.dll" | tr -d n)" = "" ] || fail payload "new payload not installed"
+X=$X2
+run "steamac.gfx=vulkan" "$X2"
 [ "$(cksum < "$P1/files/lib/wine/dxvk/x86_64-windows/dxgi.dll")" = "$upd" ] || fail vulkan "P1 dxgi is not the updated stock file"
 for f in d3d11 dxgi d3d10core; do
   cmp -s "$P2/files/lib/wine/dxvk/x86_64-windows/$f.dll" "$P2/files/lib/wine/dxvk/x86_64-windows/d3d9.dll" || fail vulkan "P2 $f.dll not stock"
@@ -75,7 +82,7 @@ for a in 100 200; do
   for f in d3d11 dxgi d3d10core; do isdxmt "$s/drive_c/windows/system32/$f.dll" && fail vulkan "prefix $a $f.dll still DXMT"; done
 done
 [ -z "$(ls -A "$T/state/orig" 2>/dev/null)" ] || fail vulkan "backups left in state"
-s2=$(snap); run "steamac.gfx=vulkan"; [ "$(snap)" = "$s2" ] || fail vulkan "second Vulkan run changed files"
+s2=$(snap); run "steamac.gfx=vulkan" "$X2"; [ "$(snap)" = "$s2" ] || fail vulkan "second Vulkan run changed files"
 
 run "steamac.gfx=dxmt" "$T/none"; [ "$(snap)" = "$s2" ] || fail missing "changed files without DXMT files"
 echo "steam-gfx-path: $([ $fails = 0 ] && echo passed || echo FAILED)"
