@@ -6,6 +6,12 @@
 # compat-tool setting are untouched. Everything else (EAC runtime env, game args) passes through unchanged.
 set -u
 L=$HOME/vrc/lean
+# ~/vrc/lean/MODE selects the path per launch without touching Steam's settings again: "wmtr" = lean path,
+# anything else = today's path, the command unchanged (A/B runs)
+if [ "$(cat "$L/MODE" 2>/dev/null)" != wmtr ]; then
+  echo "lean-wrap: $(date '+%F %T') passthrough (MODE=$(cat "$L/MODE" 2>/dev/null))" >> "$L/lean-wrap.log"
+  exec "$@"
+fi
 args=()
 for a in "$@"; do
   case "$a" in
