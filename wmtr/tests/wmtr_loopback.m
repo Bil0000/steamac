@@ -61,6 +61,7 @@ static NTSTATUS f_replace(void *a) {
   return 0;
 }
 static NTSTATUS f_argsinfo(void *a) { (void)a; return 0; }
+static NTSTATUS f_noop(void *a) { (void)a; return 0; }
 static NTSTATUS f_pixelformat(void *a) { ((struct unixcall_generic_obj_uint64_ret *)a)->ret = 70; return 0; } /* RGBA8 */
 static NTSTATUS f_release(void *a) { [(id)*(obj_handle_t *)a release]; return 0; }
 static NTSTATUS f_newfunction(void *a) {
@@ -69,7 +70,7 @@ static NTSTATUS f_newfunction(void *a) {
   return 0;
 }
 const void *wmtr_impl_funcs[146] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
-                                    [39] = f_pixelformat, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
+                                    [39] = f_pixelformat, [47] = f_noop, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
 static struct wmtr_host *H;
@@ -99,8 +100,12 @@ struct wmtr_transport *wmtr_transport_create(void) {
 static NTSTATUS remote(int call, void *p) { return ((fn_t)__wine_unix_call_funcs[call])(p); }
 static NTSTATUS native(int call, void *p) { return ((fn_t)wmtr_impl_funcs[call])(p); }
 
+static char frames_path[64];
 int main(void) {
   @autoreleasepool {
+    snprintf(frames_path, sizeof frames_path, "/tmp/wmtr_frames_%d.csv", (int)getpid());
+    unlink(frames_path);
+    setenv("WMTR_FRAMES", frames_path, 1);
     /* 1. output buffer through a uint64 pointer field */
     char a[32] = {0}, b[32] = {0};
     struct unixcall_nsstring_getcstring pa = {(obj_handle_t)"metal string", (uint64_t)(uintptr_t)a, sizeof a, 4, 0}, pb = pa;
@@ -202,6 +207,20 @@ int main(void) {
     }
     struct wmtr_host_stats st; wmtr_host_get_stats(H, &st);
     printf("requests=%llu sync=%llu bytes=%llu\n", st.requests, st.sync_requests, st.bytes);
+    { /* WMTR_FRAMES: a presenting command buffer adds one line when it completes */
+      id<MTLCommandQueue> q = [MTLCreateSystemDefaultDevice() newCommandQueue];
+      id<MTLCommandBuffer> cb = [q commandBuffer];
+      struct unixcall_generic_obj_obj_noret pd = {.handle = (obj_handle_t)cb, .arg = 0};
+      remote(47, &pd);
+      struct unixcall_generic_obj_uint64_ret pf2 = {0}; remote(39, &pf2); /* the async present is done */
+      [cb commit]; [cb waitUntilCompleted];
+      usleep(100000); /* completion handlers run after waitUntilCompleted returns */
+      FILE *f = fopen(frames_path, "r"); char line[128] = ""; int n = 0; unsigned long long t = 0;
+      while (f && fgets(line, sizeof line, f)) { n++; sscanf(line, "%llu,", &t); }
+      if (f) fclose(f);
+      CHECK(n == 1 && t > 0 && strstr(line, ",0,0,0,0,0"), "WMTR_FRAMES: %d lines, last '%s'", n, line);
+      unlink(frames_path);
+    }
     { /* views: ReleaseMetalView releases once; views the client never released go on destroy */
       struct unixcall_create_metal_view_from_hwnd v1 = {.hwnd = 1, .device = 2}, v2 = {.hwnd = 3, .device = 2};
       CHECK(remote(72, &v1) == 0 && remote(72, &v2) == 0 && v1.ret_view && v2.ret_view && v1.ret_layer == 0x77,

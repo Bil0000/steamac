@@ -9,6 +9,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #include <pthread.h>
+#include <time.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,6 +61,44 @@ struct wmtr_host {
 
 static int log_level = 1;
 #define LOG(lvl, ...) do { if (log_level >= (lvl)) fprintf(stderr, "wmtr-host: " __VA_ARGS__); } while (0)
+
+/* ------------------------------------------------------------------------------------------- *
+ * per-frame export (WMTR_FRAMES=<path>): one line per presented frame, in the steamac launcher's
+ * STEAMAC_PERF_FRAMES format (t_ns,flush_ms,shown_ms,copy_ms,upload_ms,vsyncs) so its frame_stats.py
+ * reads it unchanged. t_ns = completion of the command buffer that presents the drawable, on the mach
+ * clock (CLOCK_UPTIME_RAW, the base of CACurrentMediaTime and of Python's time.monotonic_ns on macOS);
+ * the other columns are 0 (they describe the scanout copy path, which wmtr frames do not take). Off
+ * (one getenv) unless set. */
+static pthread_mutex_t frames_lock = PTHREAD_MUTEX_INITIALIZER;
+static FILE *
+frames_out(void) {
+  static FILE *f;
+  static int tried;
+  if (!tried) {
+    pthread_mutex_lock(&frames_lock);
+    if (!tried) {
+      const char *p = getenv("WMTR_FRAMES");
+      if (p && *p) {
+        f = fopen(p, "a");
+        if (f) setvbuf(f, NULL, _IOLBF, 0);
+      }
+      __atomic_store_n(&tried, 1, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&frames_lock);
+  }
+  return f;
+}
+
+static void
+frame_record_on_completion(id<MTLCommandBuffer> cb) {
+  [cb addCompletedHandler:^(id<MTLCommandBuffer> b) {
+    (void)b;
+    uint64_t t = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    pthread_mutex_lock(&frames_lock);
+    fprintf(frames_out(), "%llu,0,0,0,0,0\n", (unsigned long long)t);
+    pthread_mutex_unlock(&frames_lock);
+  }];
+}
 
 /* ------------------------------------------------------------------------------------------- */
 static void
@@ -357,6 +396,8 @@ host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr
   }
   impl_fn f = (impl_fn)wmtr_impl_funcs[call];
   if (!f) return STATUS_UNSUCCESSFUL;
+  if ((call == 47 || call == 48) && frames_out()) /* presentDrawable: record when the frame is done */
+    frame_record_on_completion((id<MTLCommandBuffer>)((struct unixcall_generic_obj_obj_noret *)params)->handle);
   NTSTATUS st = f(params);
   keep_autoreleased(r->h.slot, call, params);
   return st;
