@@ -1,6 +1,6 @@
 # Fork notes
 
-A fork of [steamac](https://github.com/fxgl/steamac) (base: 1.8.2) that adds support for genuine-Easy-Anti-Cheat x86 games,
+A fork of [steamac](https://github.com/fxgl/steamac) (base: 1.9; the live results below were measured on 1.8.1/1.8.2) that adds support for genuine-Easy-Anti-Cheat x86 games,
 verified with VRChat, plus launcher and stability fixes. It is standalone: nothing here is sent to steamac, libkrun, Mesa,
 FEX or Proton. Not affiliated with FX GAMES, Valve, Epic or VRChat.
 
