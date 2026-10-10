@@ -129,7 +129,8 @@ frames_out(void) {
 
 /* per-call statistics (WMTR_CALLSTATS=<path>): cumulative count, synchronous count and host execution
  * time per call, written every 10 s (and when a client goes away) as CSV snapshots
- * t_ns,call,name,class,count,sync,exec_ns; consecutive snapshots give the per-frame call profile of a
+ * t_ns,call,name,class,count,sync,exec_ns (plus rows 200/201: executor sleeps and kicks, in count);
+ * consecutive snapshots give the per-frame call profile of a
  * running game (presentDrawable = calls 47/48) without touching the guest. Off (one getenv) unless set. */
 static const char *const call_name[146] = {
 #define X(i, n, t, c) [i] = #n,
@@ -137,6 +138,8 @@ static const char *const call_name[146] = {
 #undef X
 };
 static _Atomic uint64_t cs_count[146], cs_sync[146], cs_ns[146];
+/* executor sleeps (ring empty after the spin) and kicks (a client woke it): rows 200/201, class 9 */
+static _Atomic uint64_t cs_sleeps, cs_kicks;
 static FILE *cs_file;
 static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -152,6 +155,8 @@ callstats_dump(void) {
             call_class[i], (unsigned long long)n, (unsigned long long)atomic_load(&cs_sync[i]),
             (unsigned long long)atomic_load(&cs_ns[i]));
   }
+  fprintf(cs_file, "%llu,200,_executor_sleeps,9,%llu,0,0\n%llu,201,_kicks,9,%llu,0,0\n", (unsigned long long)t,
+          (unsigned long long)atomic_load(&cs_sleeps), (unsigned long long)t, (unsigned long long)atomic_load(&cs_kicks));
   fflush(cs_file);
   pthread_mutex_unlock(&cs_lock);
 }
@@ -666,6 +671,7 @@ executor(void *arg) {
       __atomic_thread_fence(__ATOMIC_SEQ_CST);
       while (!h->quit && !h->kicked && __atomic_load_n(&R->head, __ATOMIC_ACQUIRE) == tail) {
         atomic_fetch_add(&h->n_sleep, 1);
+        if (cs_state == 1) atomic_fetch_add_explicit(&cs_sleeps, 1, memory_order_relaxed);
         pthread_cond_wait(&h->cond, &h->lock);
       }
       h->kicked = 0;
@@ -736,6 +742,7 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
 
 void
 wmtr_host_kick(struct wmtr_host *h) {
+  if (cs_state == 1) atomic_fetch_add_explicit(&cs_kicks, 1, memory_order_relaxed);
   pthread_mutex_lock(&h->lock);
   h->kicked = 1;
   pthread_cond_signal(&h->cond);

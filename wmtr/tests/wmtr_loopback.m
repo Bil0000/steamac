@@ -267,6 +267,10 @@ int main(void) {
       }
       if (sf) fclose(sf);
       CHECK(found, "WMTR_CALLSTATS: no snapshot line for call 39");
+      sf = fopen(stats_path, "r"); found = 0;
+      while (sf && fgets(sl, sizeof sl, sf)) if (strstr(sl, ",200,_executor_sleeps,9,")) found = 1;
+      if (sf) fclose(sf);
+      CHECK(found, "WMTR_CALLSTATS: no executor sleep row");
       unlink(stats_path);
     }
   }
