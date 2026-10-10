@@ -67,6 +67,9 @@ struct drm_virtgpu_context_init { uint32_t num_params, pad; uint64_t ctx_set_par
 
 struct vg_priv { int fd; uint32_t ring_bo; };
 
+/* WAIT commands submitted (tests: tests/wmtr_wait_test.c) */
+uint64_t wmtr_vgpu_wait_submits;
+
 static int
 xioctl(int fd, unsigned long req, void *arg) {
   int r;
@@ -152,14 +155,22 @@ v_wait(struct wmtr_transport *t, volatile uint64_t *done, uint64_t seq, uint32_t
   }
   struct vg_priv *p = t->priv;
   uint32_t ring = slot == WMTR_EVENT_SLOT ? 63 : 1 + slot % 62;
+  /* At most one WAIT in flight per waiting thread: the host answers a fenced command only when its
+   * fence completes, so every pending WAIT holds control-queue descriptors. Re-submitting on each
+   * poll timeout (an idle event listener waits indefinitely) filled the queue and stalled every
+   * virtio-gpu client in the guest, Venus and the compositor included. A new WAIT is only sent once
+   * the previous fence has signalled (fences on a shared ring can signal early). */
+  int fence = -1;
   while (__atomic_load_n(done, __ATOMIC_ACQUIRE) < seq) {
-    struct wmtr_vgpu_cmd c = {WMTR_VGPU_WAIT, slot, seq, 0};
-    int fence = -1;
-    if (submit(p, &c, ring, &fence) < 0 || fence < 0) { usleep(200); continue; }
+    if (fence < 0) {
+      struct wmtr_vgpu_cmd c = {WMTR_VGPU_WAIT, slot, seq, 0};
+      if (submit(p, &c, ring, &fence) < 0 || fence < 0) { fence = -1; usleep(200); continue; }
+      __atomic_fetch_add(&wmtr_vgpu_wait_submits, 1, __ATOMIC_RELAXED);
+    }
     struct pollfd pfd = {fence, POLLIN, 0};
-    poll(&pfd, 1, 100);
-    close(fence);
+    if (poll(&pfd, 1, 100) > 0) { close(fence); fence = -1; }
   }
+  if (fence >= 0) close(fence);
 }
 
 struct wmtr_transport *

@@ -6,6 +6,7 @@
 # Linux (x86-64 build box, CC=gcc):
 #   make client-linux  winemetal.so (x86-64 ELF): guest client unixlib (virtio-gpu transport), glibc <= 2.14 symbols
 #   make test-linux    build and run tests/wmtr_ntdll_test against it
+#   make guest-tests   static wmtr_ping_static / wmtr_wait_test for the VM guest (run there under FEX)
 # Inputs: DXMT source at the pinned revision (DXMT=), its native build dir with libairconv.a (DXMT_BUILD=),
 # LLVM 15 static libs (LLVM=).
 DXMT ?= /Volumes/LEANWORK/dxmt
@@ -72,6 +73,11 @@ client-linux: $(OUT)/x86_64-linux/winemetal.so
 $(OUT)/x86_64-linux/winemetal.so: src/wmtr_client.c src/transport_virtgpu.c include/*.h src/*.inc
 	mkdir -p $(OUT)/x86_64-linux
 	$(CC) $(LINUX_CFLAGS) -shared -fPIC -o $@ src/wmtr_client.c src/transport_virtgpu.c -lpthread -ldl
+# guest-only test programs (static, run in the VM under FEX: they need the wmtr virtio-gpu context)
+guest-tests: $(OUT)/x86_64-linux/wmtr_ping_static $(OUT)/x86_64-linux/wmtr_wait_test
+$(OUT)/x86_64-linux/wmtr_%: tests/wmtr_%.c src/wmtr_client.c src/transport_virtgpu.c include/*.h src/*.inc
+	mkdir -p $(OUT)/x86_64-linux
+	$(CC) -O2 -Wall -Wno-unused-function $(INC) -static -pthread -o $@ $< src/wmtr_client.c src/transport_virtgpu.c
 test-linux: $(OUT)/x86_64-linux/winemetal.so
 	mkdir -p $(OUT)/x86_64-linux/standin
 	$(CC) -shared -fPIC -o $(OUT)/x86_64-linux/standin/ntdll.so tests/ntdll_standin.c
@@ -83,4 +89,4 @@ test-linux: $(OUT)/x86_64-linux/winemetal.so
 
 clean:
 	rm -rf $(OUT)
-.PHONY: all host server client-macos client-linux test test-linux clean
+.PHONY: all host server client-macos client-linux guest-tests test test-linux clean

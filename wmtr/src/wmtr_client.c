@@ -823,6 +823,15 @@ __attribute__((visibility("default"))) const void *__wine_unix_call_funcs[146] =
     P(0) P(1) P(2) P(3) P(4) P(5) P(6) P(7) P(8) P(9) P10(1) P10(2) P10(3) P10(4) P10(5) P10(6) P10(7) P10(8) P10(9)
         P10(10) P10(11) P10(12) P10(13) P(140) P(141) P(142) P(143) P(144) P(145)};
 
+/* test hook: wait through the transport for *done >= seq on reply slot `slot` */
+__attribute__((visibility("default"))) int
+wmtr_debug_wait(volatile uint64_t *done, uint64_t seq, uint32_t slot) {
+  pthread_once(&init_once, wmtr_init);
+  if (!init_ok) return -1;
+  T->wait(T, done, seq, slot);
+  return 0;
+}
+
 /* measurement hook: one synchronous no-op round trip through the transport and host executor */
 __attribute__((visibility("default"))) int
 wmtr_debug_ping(void) {
