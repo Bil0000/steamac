@@ -95,7 +95,10 @@ resources not supported (CreateReservedResource E_NOTIMPL), no ray tracing / mes
 conservative rasterization not supported (Metal does not expose it), ROVs reported. Shader-visible heaps,
 PSOs, ExecuteIndirect command signatures work. Known perf issue: ExecuteIndirect with 10000 draws ran at
 0.2 fps vs 369 fps for the same draws issued directly (one run, VM up). D3DMetal (Sikarugir copy, in place)
-crashes in this setup; not pursued (user: focus on D3D11).
+crashes in this setup; not pursued (user: focus on D3D11). Cause found by a side investigation: my
+renderer.sh copied the template's symlinked D3DMetal files (two bridge copies get loaded); with the template's
+symlink layout + its WINEDLLPATH*/CX_* env, D3DMetal 3.0 renders d3d11bench (206.5 fps at 200 draws, one
+run, Mac window fps not comparable). Rule: symlink, never copy, D3DMetal's files.
 
 ## P2 — two-process remoting (measured)
 
@@ -157,6 +160,17 @@ contributed upstream (standalone fork rule); local changes keep the LGPL-2.1 ter
   (based on the coordinator's runwine-s3.sh: Proton Experimental's wine under the Steam FEX tool,
   FEX_ROOTFS=/usr/share/guestos/fex-mesa); proton-lean = hard-linked copy of Proton's files with
   DXMT's PE dlls + winemetal.dll/.so (originals never written).
+
+## P5/P6 plan — VRChat on the lean path without touching the user's setup
+
+* Launch-options wrapper (restored afterwards, like every other run): Steam's command is
+  `<Proton - Experimental>/proton waitforexitandrun …/start_protected_game.exe`; the wrapper replaces the
+  proton path with ~/vrc/lean/proton-lean/proton and sets STEAM_COMPAT_DATA_PATH to a copy of
+  compatdata/438100 (compatdata-lean), so VRChat's real prefix (DXVK dlls, EAC files) and the compat-tool
+  setting are never changed. EAC runs unmodified (PROTON_EAC_RUNTIME as today).
+* proton-lean: hard-linked copy of Proton Experimental; DXMT's d3d11/dxgi/d3d10core replace the files in
+  files/lib/wine/dxvk/x86_64-windows (what proton installs into prefixes) and wine's own builtins;
+  winemetal.dll/.so added; replaced files unlinked first.
 
 ## Dead ends / notes
 

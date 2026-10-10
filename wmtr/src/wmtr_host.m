@@ -7,6 +7,7 @@
 #import <Metal/Metal.h>
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -507,11 +508,45 @@ NTSTATUS NtSetEvent(void *handle, void *prev) { (void)handle; (void)prev; return
  * default presenter: one window per client HWND, created on the main thread of the embedding
  * application (wmtr-server, or the steamac launcher that hosts libkrun). It never activates, so it
  * does not take focus from the user's apps. */
+/* WMTR_PRESENT=overlay (used inside the steamac launcher): the game's CAMetalLayer becomes an aspect-fit
+ * sublayer of the launcher's VM view (class VMView, a layer-backed NSView whose backing layer shows the
+ * guest scanout), so the game appears in the VM window and input keeps going to the guest unchanged.
+ * Otherwise (wmtr-server): one window per HWND. */
+static NSView *
+find_vm_view(NSView *v) {
+  if ([NSStringFromClass([v class]) hasSuffix:@"VMView"]) return v;
+  for (NSView *c in [v subviews]) {
+    NSView *f = find_vm_view(c);
+    if (f) return f;
+  }
+  return nil;
+}
+
 __attribute__((visibility("default"))) uint64_t
 wmtr_present_create_view(void *ctx, uint64_t hwnd, void *device, uint64_t *layer_out) {
+  const char *mode = getenv("WMTR_PRESENT");
+  int overlay = mode && !strcmp(mode, "overlay");
   __block NSView *view = nil;
   __block CAMetalLayer *layer = nil;
   dispatch_sync(dispatch_get_main_queue(), ^{
+    layer = [CAMetalLayer layer];
+    layer.device = (id<MTLDevice>)device;
+    if (overlay) {
+      for (NSWindow *w in [NSApp windows]) {
+        NSView *vm = find_vm_view([w contentView]);
+        if (!vm || !vm.layer) continue;
+        view = [vm retain];
+        layer.frame = vm.layer.bounds;
+        layer.contentsScale = w.backingScaleFactor;
+        layer.contentsGravity = kCAGravityResizeAspect;
+        layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+        layer.opaque = YES;
+        [vm.layer addSublayer:layer];
+        break;
+      }
+      if (!view) NSLog(@"wmtr: no VMView found for the overlay presenter");
+      return;
+    }
     NSRect r = NSMakeRect(80, 80, 1280, 800);
     NSWindow *w = [[NSWindow alloc] initWithContentRect:r
                                               styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
@@ -520,23 +555,33 @@ wmtr_present_create_view(void *ctx, uint64_t hwnd, void *device, uint64_t *layer
     [w setTitle:[NSString stringWithFormat:@"wmtr hwnd %llx", (unsigned long long)hwnd]];
     view = [[NSView alloc] initWithFrame:r];
     view.wantsLayer = YES;
-    layer = [CAMetalLayer layer];
-    layer.device = (id<MTLDevice>)device;
     layer.contentsScale = 1.0;
     view.layer = layer;
     [w setContentView:view];
     [w orderFront:nil]; /* never activate: do not take focus from the user's apps */
   });
+  if (!view) return 0;
   *layer_out = (uint64_t)[layer retain];
-  return (uint64_t)[view retain];
+  /* the handle released by ReleaseMetalView: remember the layer to detach it */
+  objc_setAssociatedObject(view, (const void *)hwnd, layer, OBJC_ASSOCIATION_RETAIN);
+  return (uint64_t)view;
 }
 
 __attribute__((visibility("default"))) void
 wmtr_present_release_view(void *ctx, uint64_t v) {
   NSView *view = (NSView *)v;
-  dispatch_async(dispatch_get_main_queue(), ^{ [[view window] close]; [view release]; });
+  const char *mode = getenv("WMTR_PRESENT");
+  int overlay = mode && !strcmp(mode, "overlay");
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (overlay) {
+      for (CALayer *l in [[view.layer sublayers] copy])
+        if ([l isKindOfClass:[CAMetalLayer class]] && l != view.layer) [l removeFromSuperlayer];
+    } else {
+      [[view window] close];
+    }
+    [view release];
+  });
 }
-
 
 /* ring layout for embedders' tests (offsets within blob 0) */
 __attribute__((visibility("default"))) void
