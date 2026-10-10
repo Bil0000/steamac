@@ -28,6 +28,9 @@ void wmtr_host_kick(struct wmtr_host *h);
 void wmtr_host_destroy(struct wmtr_host *h);
 /* done_seq of reply slot `slot`, or event_head for WMTR_EVENT_SLOT */
 uint64_t wmtr_host_progress(struct wmtr_host *h, uint32_t slot);
+/* default presenter (a window per HWND on the embedder's main thread); usable as create_view/release_view */
+uint64_t wmtr_present_create_view(void *ctx, uint64_t hwnd, void *mtl_device, uint64_t *layer);
+void wmtr_present_release_view(void *ctx, uint64_t view);
 /* counters for measurements */
 struct wmtr_host_stats { uint64_t requests, sync_requests, bytes, worker_calls, idle_sleeps; };
 void wmtr_host_get_stats(struct wmtr_host *h, struct wmtr_host_stats *out);

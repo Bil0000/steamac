@@ -13,11 +13,10 @@
 //! The component only exists when STEAMAC_WMTR=1 and the library loads, so nothing changes for
 //! guests that never ask for the capset.
 
+use log::{error, info};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::ffi::CString;
-use std::os::fd::FromRawFd;
-use std::os::fd::OwnedFd;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -25,7 +24,6 @@ use crate::rutabaga_core::RutabagaComponent;
 use crate::rutabaga_core::RutabagaContext;
 use crate::rutabaga_core::RutabagaResource;
 use crate::rutabaga_os::FromRawDescriptor;
-use crate::rutabaga_os::IntoRawDescriptor;
 use crate::rutabaga_os::SafeDescriptor;
 use crate::rutabaga_utils::*;
 
@@ -228,7 +226,7 @@ impl RutabagaContext for WmtrContext {
         self.shared.blobs.lock().unwrap().insert(blob, (ptr, size));
         self.maps.push((ptr, size));
         // SAFETY: fd is a fresh descriptor we own.
-        let os_handle = unsafe { SafeDescriptor::from_raw_descriptor(OwnedFd::from_raw_fd(fd).into_raw_descriptor()) };
+        let os_handle = unsafe { SafeDescriptor::from_raw_descriptor(fd) };
         Ok(RutabagaResource {
             resource_id,
             handle: Some(Arc::new(RutabagaHandle {
@@ -396,5 +394,112 @@ impl RutabagaComponent for Wmtr {
             pending: BTreeMap::new(),
             maps: Vec::new(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Needs the built host library: STEAMAC_WMTR_LIB=/path/to/libwmtr_host.dylib (skipped when unset).
+    use super::*;
+    use crate::rutabaga_os::AsRawDescriptor;
+
+    type Layout = unsafe extern "C" fn(*mut u64, *mut u64, *mut u64, *mut u64);
+
+    fn layout(path: &str) -> (u64, u64, u64, u64) {
+        let c = CString::new(path).unwrap();
+        // SAFETY: test-only dlopen of the library under test.
+        unsafe {
+            let h = libc::dlopen(c.as_ptr(), libc::RTLD_NOW);
+            assert!(!h.is_null());
+            let f: Layout = std::mem::transmute(libc::dlsym(h, c"wmtr_layout".as_ptr()));
+            let (mut a, mut b, mut cc, mut d) = (0, 0, 0, 0);
+            f(&mut a, &mut b, &mut cc, &mut d);
+            (a, b, cc, d)
+        }
+    }
+
+    /// Blob 0 through context_create_blob, executor start (RING), one synchronous PING request written
+    /// into the ring by hand, KICK, and a WAIT fence that must complete exactly when the reply lands.
+    #[test]
+    fn ring_ping_completes_wait_fence() {
+        let Ok(lib) = std::env::var("STEAMAC_WMTR_LIB") else {
+            eprintln!("STEAMAC_WMTR_LIB unset: skipped");
+            return;
+        };
+        std::env::set_var("STEAMAC_WMTR", "1");
+        let (ring_bytes, data_off, slots_off, slot_size) = layout(&lib);
+        let done: Arc<Mutex<Vec<RutabagaFence>>> = Arc::new(Mutex::new(Vec::new()));
+        let d2 = done.clone();
+        let handler = RutabagaFenceHandler::new(move |f| d2.lock().unwrap().push(f));
+        let comp = Wmtr::init(handler.clone()).expect("component");
+        let mut ctx = comp.create_context(1, RUTABAGA_CAPSET_WMTR, None, handler).unwrap();
+        let res = ctx
+            .context_create_blob(
+                1,
+                ResourceCreateBlob { blob_mem: 2, blob_flags: 3, blob_id: 0, size: ring_bytes },
+                None,
+            )
+            .unwrap();
+        let fd = res.handle.as_ref().unwrap().os_handle.as_raw_descriptor();
+        // SAFETY: maps the blob's shm like the guest does.
+        let base = unsafe {
+            libc::mmap(std::ptr::null_mut(), ring_bytes as usize, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, 0)
+        } as *mut u8;
+        assert_ne!(base as *mut c_void, libc::MAP_FAILED);
+        // SAFETY: offsets come from the host library's own layout.
+        unsafe {
+            *(base as *mut u32) = 0x52544d57; // magic
+            *(base.add(4) as *mut u32) = 1; // version
+        }
+        let cmd = |ty: u32, slot: u32, seq: u64| {
+            let mut v = Vec::with_capacity(CMD_SIZE);
+            v.extend_from_slice(&ty.to_le_bytes());
+            v.extend_from_slice(&slot.to_le_bytes());
+            v.extend_from_slice(&seq.to_le_bytes());
+            v.extend_from_slice(&0u64.to_le_bytes());
+            v
+        };
+        ctx.submit_cmd(&mut cmd(WMTR_VGPU_RING, 0, 0), &[]).unwrap();
+        // WAIT slot 5 seq 1 on ring 6, fence before the request exists: must stay pending
+        ctx.submit_cmd(&mut cmd(WMTR_VGPU_WAIT, 5, 1), &[]).unwrap();
+        let fence = RutabagaFence { flags: RUTABAGA_FLAG_INFO_RING_IDX, fence_id: 77, ctx_id: 1, ring_idx: 6 };
+        ctx.context_create_fence(fence).unwrap();
+        assert!(done.lock().unwrap().is_empty(), "fence completed before the reply");
+        // request: wmtr_req_ext {size 40, call PING=3, flags SYNC|CONTROL, slot 5, params 8, seq 1, 0 relocs, 0 outs, payload 8}
+        let mut req = Vec::new();
+        req.extend_from_slice(&40u32.to_le_bytes());
+        req.extend_from_slice(&3u16.to_le_bytes());
+        req.extend_from_slice(&5u16.to_le_bytes());
+        req.extend_from_slice(&5u32.to_le_bytes());
+        req.extend_from_slice(&8u32.to_le_bytes());
+        req.extend_from_slice(&1u64.to_le_bytes());
+        req.extend_from_slice(&0u16.to_le_bytes());
+        req.extend_from_slice(&0u16.to_le_bytes());
+        req.extend_from_slice(&8u32.to_le_bytes());
+        req.extend_from_slice(&0u64.to_le_bytes()); // payload
+        assert_eq!(req.len(), 40);
+        // SAFETY: as above; head is at offset 8 of struct wmtr_ring, waiting flag at +16 of a slot.
+        unsafe {
+            std::ptr::copy_nonoverlapping(req.as_ptr(), base.add(data_off as usize), 40);
+            *(base.add((slots_off + 5 * slot_size + 16) as usize) as *mut u32) = 1; // slot 5 waiting
+            std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            *(base.add(8) as *mut u64) = 40; // head
+        }
+        ctx.submit_cmd(&mut cmd(WMTR_VGPU_KICK, 0, 0), &[]).unwrap();
+        for _ in 0..2000 {
+            if !done.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let got = done.lock().unwrap().clone();
+        assert_eq!(got.len(), 1, "WAIT fence not completed by the reply");
+        assert_eq!(got[0].fence_id, 77);
+        // SAFETY: done_seq is the first field of slot 5.
+        assert_eq!(unsafe { *(base.add((slots_off + 5 * slot_size) as usize) as *const u64) }, 1);
+        // a fence on a ring with no pending WAIT completes at once
+        ctx.context_create_fence(RutabagaFence { flags: RUTABAGA_FLAG_INFO_RING_IDX, fence_id: 78, ctx_id: 1, ring_idx: 0 }).unwrap();
+        assert_eq!(done.lock().unwrap().len(), 2);
+        drop(ctx);
     }
 }

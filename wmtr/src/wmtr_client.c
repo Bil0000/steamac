@@ -25,6 +25,14 @@ typedef int32_t NTSTATUS;
 #define INLINE_OUT_MAX (48u << 10) /* reply-slot budget for outputs */
 
 static int wmtr_log_level = 1;
+
+/* small decimal parser: libc's atoi binds to a glibc 2.38 symbol in new headers (see wmtr_glibc_compat.h) */
+static int
+env_int(const char *s) {
+  int v = 0, neg = s && *s == '-';
+  for (s += neg; s && *s >= '0' && *s <= '9'; s++) v = v * 10 + (*s - '0');
+  return neg ? -v : v;
+}
 #define LOG(lvl, ...) do { if (wmtr_log_level >= (lvl)) { fprintf(stderr, "wmtr: " __VA_ARGS__); } } while (0)
 
 /* ---------------------------------------------------------------------------------------------
@@ -57,7 +65,7 @@ slot_release(void *p) {
 static void
 wmtr_init(void) {
   const char *l = getenv("WMTR_LOG");
-  if (l) wmtr_log_level = atoi(l);
+  if (l) wmtr_log_level = env_int(l);
   pthread_key_create(&slot_key, slot_release);
   T = wmtr_transport_create();
   if (!T) { LOG(0, "no transport\n"); return; }

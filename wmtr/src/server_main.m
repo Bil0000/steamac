@@ -33,37 +33,7 @@ c_blob_ptr(void *ctx, uint32_t blob, uint64_t *size) {
 static void
 c_wake(void *ctx, uint32_t slot) { (void)ctx; (void)slot; /* clients poll */ }
 
-static uint64_t
-c_create_view(void *ctx, uint64_t hwnd, void *device, uint64_t *layer_out) {
-  __block NSView *view = nil;
-  __block CAMetalLayer *layer = nil;
-  dispatch_sync(dispatch_get_main_queue(), ^{
-    NSRect r = NSMakeRect(80, 80, 1280, 800);
-    NSWindow *w = [[NSWindow alloc] initWithContentRect:r
-                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
-                                                backing:NSBackingStoreBuffered
-                                                  defer:NO];
-    [w setTitle:[NSString stringWithFormat:@"wmtr hwnd %llx", (unsigned long long)hwnd]];
-    view = [[NSView alloc] initWithFrame:r];
-    view.wantsLayer = YES;
-    layer = [CAMetalLayer layer];
-    layer.device = (id<MTLDevice>)device;
-    layer.contentsScale = 1.0;
-    view.layer = layer;
-    [w setContentView:view];
-    [w orderFront:nil]; /* never activate: do not take focus from the user's apps */
-  });
-  *layer_out = (uint64_t)[layer retain];
-  return (uint64_t)[view retain];
-}
-
-static void
-c_release_view(void *ctx, uint64_t v) {
-  NSView *view = (NSView *)v;
-  dispatch_async(dispatch_get_main_queue(), ^{ [[view window] close]; [view release]; });
-}
-
-static const struct wmtr_host_ops ops = {c_blob_ptr, c_wake, c_create_view, c_release_view, NULL};
+static const struct wmtr_host_ops ops = {c_blob_ptr, c_wake, wmtr_present_create_view, wmtr_present_release_view, NULL};
 
 static int
 recv_msg(int s, struct wmtr_sock_msg *m, int *fd) {

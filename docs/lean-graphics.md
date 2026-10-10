@@ -22,7 +22,7 @@ Layers removed: DXVK, Venus (guest and host), virglrenderer, Vulkan→Metal tran
 | P0 baseline | done for VRChat (A/B table below); d3d11bench-in-VM baseline still to do |
 | P1 feasibility (no VM) | DXMT renders d3d11bench on macOS Wine (numbers below); VRChat on Mac Wine and D3D12 not yet; D3DMetal crashes in this setup |
 | P2 cut point | winemetal-level remoting works end to end on macOS (d3d11bench through wmtr-server); sync round trip p50 0.25 µs, p99 11.5 µs; ~48 calls/frame of which ~15 sync |
-| P3 transport | virtio-gpu client transport + libkrun rutabaga context written (wmtr/libkrun/wmtr.rs), not yet built into libkrun |
+| P3 transport | libkrun patch 0020 (rutabaga wmtr context, capset 30) + guest client (Linux x86-64, glibc ≤2.14) built; staged bundle /Volumes/LEANWORK/app-lean; VM test pending |
 | P4 presentation | not started |
 | P5 guest integration | not started |
 | P6 full test | not started |
@@ -139,6 +139,24 @@ Evidence for cutting at DXMT's winemetal unix-call boundary:
 
 Constraint: DXMT's `AGENTS.md` forbids AI-generated code in contributions to DXMT. Nothing here is
 contributed upstream (standalone fork rule); local changes keep the LGPL-2.1 terms.
+
+## P3 — VM transport (in progress)
+
+* libkrun: host/libkrun/patches/0020 adds `RutabagaComponentType::Wmtr` (capset 30), routes context blobs to
+  it like cross-domain, and creates it only with STEAMAC_WMTR=1 + a loadable libwmtr_host.dylib
+  (STEAMAC_WMTR_LIB). Blobs: POSIX shm, mapped into the guest by the existing SHM blob path (patch 0007)
+  and into the VMM for the executor. WAIT fences complete from the executor's reply callback.
+  Unit test in the patch (cargo test, rutabaga): ring blob via context_create_blob, hand-written PING
+  request, KICK, WAIT fence completes exactly when the reply lands.
+* Guest client: wmtr/src/transport_virtgpu.c; capset id must be < 32 because
+  VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs returns only 32 bits of the mask to userspace; blobs are
+  HOST3D + MAPPABLE + SHAREABLE (libkrun's macOS map path exports the blob handle, which consumes a
+  non-shareable one). Built on the x86 box against glibc 2.43 with symbol versions pinned to ≤2.14
+  (wmtr_glibc_compat.h) so it loads in Proton's Steam Runtime.
+* Guest runs (planned): own scratch prefixes ~/vrc/lean/pfx-{dxvk,wmtr}, runner wmtr/guest/lean-run.sh
+  (based on the coordinator's runwine-s3.sh: Proton Experimental's wine under the Steam FEX tool,
+  FEX_ROOTFS=/usr/share/guestos/fex-mesa); proton-lean = hard-linked copy of Proton's files with
+  DXMT's PE dlls + winemetal.dll/.so (originals never written).
 
 ## Dead ends / notes
 

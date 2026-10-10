@@ -60,6 +60,7 @@ struct drm_virtgpu_context_init { uint32_t num_params, pad; uint64_t ctx_set_par
 #define VIRTGPU_EXECBUF_RING_IDX 0x04
 #define VIRTGPU_BLOB_MEM_HOST3D 0x0002
 #define VIRTGPU_BLOB_FLAG_USE_MAPPABLE 0x0001
+#define VIRTGPU_BLOB_FLAG_USE_SHAREABLE 0x0002
 #define VIRTGPU_CONTEXT_PARAM_CAPSET_ID 0x0001
 #define VIRTGPU_CONTEXT_PARAM_NUM_RINGS 0x0002
 #define VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs 7
@@ -89,7 +90,7 @@ static void *
 map_blob(struct vg_priv *p, uint32_t blob, uint64_t size, uint32_t *bo_out) {
   struct drm_virtgpu_resource_create_blob cb = {0};
   cb.blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
-  cb.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE;
+  cb.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE | VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
   cb.size = size;
   cb.blob_id = blob;
   if (xioctl(p->fd, DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB, &cb) < 0) {
