@@ -92,6 +92,15 @@ test-linux: $(OUT)/x86_64-linux/winemetal.so
 	@if readelf -V $< | grep -E 'GLIBC_ABI_|GLIBC_2\.(3[2-9]|[4-9][0-9])'; then echo "FAIL: glibc requirement too new"; exit 1; fi
 	@echo "glibc requirements: ok"
 
+# guest payload for the steamac layer (scripts/steps/30-layer.sh): DXMT's PE dlls (DXMT_PE=, Wine builtins from
+# DXMT's mingw build) and the Linux wmtr client (client-linux, built on an x86_64 Linux host)
+DXMT_PE ?= ../work/out/dxmt-pe
+PAYLOAD ?= ../work/out/dxmt
+dxmt-payload:
+	install -d $(PAYLOAD)/x86_64-windows $(PAYLOAD)/x86_64-unix
+	for f in d3d11 dxgi d3d10core winemetal; do install -m 644 $(DXMT_PE)/$$f.dll $(PAYLOAD)/x86_64-windows/$$f.dll; done
+	install -m 644 $(OUT)/x86_64-linux/winemetal.so $(PAYLOAD)/x86_64-unix/winemetal.so
+
 # the launcher bundle picks the host library up from libkrun's prefix (host/launcher/bundle.sh)
 PREFIX ?= ../work/out/host
 install: $(OUT)/libwmtr_host.dylib
@@ -100,4 +109,4 @@ install: $(OUT)/libwmtr_host.dylib
 
 clean:
 	rm -rf $(OUT)
-.PHONY: all host server client-macos client-linux guest-tests test test-linux install clean
+.PHONY: all host server client-macos client-linux guest-tests test test-linux install dxmt-payload clean
