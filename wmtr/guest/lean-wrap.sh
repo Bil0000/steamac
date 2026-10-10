@@ -15,7 +15,10 @@ for a in "$@"; do
 done
 if [ -n "${STEAM_COMPAT_DATA_PATH:-}" ]; then
   appid=$(basename "$STEAM_COMPAT_DATA_PATH")
+  # never fall back to the real prefix: without the copy (lean-cdcopy.sh) the launch stops here
+  [ -d "$L/compatdata-$appid/pfx" ] || { echo "lean-wrap: no $L/compatdata-$appid" >> "$L/lean-wrap.log"; exit 1; }
   export STEAM_COMPAT_DATA_PATH="$L/compatdata-$appid"
+  "$L/lean-pfx-fix.sh" "$STEAM_COMPAT_DATA_PATH/pfx"
 fi
 echo "lean-wrap: $(date '+%F %T') ${args[*]} (compatdata $STEAM_COMPAT_DATA_PATH)" >> "$L/lean-wrap.log"
 exec "${args[@]}"

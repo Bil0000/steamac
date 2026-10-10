@@ -10,8 +10,13 @@ SRC="$TOOL/files"
 if [ ! -d "$L/proton-lean/files" ]; then cp -al "$TOOL" "$L/proton-lean"; fi
 W="$L/proton-lean/files/lib/wine"
 for f in d3d11.dll dxgi.dll d3d10core.dll winemetal.dll; do rm -f "$W/x86_64-windows/$f"; cp "$DX/$f" "$W/x86_64-windows/$f"; done
-# what `proton` installs into a prefix instead of wine's builtins (its DXVK set) becomes DXMT too
-for f in d3d11.dll dxgi.dll d3d10core.dll; do rm -f "$W/dxvk/x86_64-windows/$f"; cp "$DX/$f" "$W/dxvk/x86_64-windows/$f"; done
+# what `proton` installs into a prefix instead of wine's builtins (its DXVK set) becomes DXMT too.
+# proton loads these native-only (WINEDLLOVERRIDES d3d11=n etc.), so these copies drop the "Wine builtin
+# DLL" marker (16 bytes at 0x40, from winebuild --builtin); winemetal.dll keeps it (it is a unixlib).
+for f in d3d11.dll dxgi.dll d3d10core.dll; do
+  rm -f "$W/dxvk/x86_64-windows/$f"; cp "$DX/$f" "$W/dxvk/x86_64-windows/$f"
+  dd if=/dev/zero of="$W/dxvk/x86_64-windows/$f" bs=1 seek=64 count=16 conv=notrunc status=none
+done
 rm -f "$W/x86_64-unix/winemetal.so"; cp "$SO" "$W/x86_64-unix/winemetal.so"
 # prefixes (wineboot under FEX); dxvk prefix gets Proton's DXVK dlls the way proton installs them
 for m in dxvk wmtr; do

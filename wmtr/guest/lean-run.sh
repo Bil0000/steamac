@@ -18,5 +18,10 @@ export FEX_ROOTFS=/usr/share/guestos/fex-mesa
 export FEX_NEEDSSECCOMP=1 FEX_DISKCACHE=0
 export LD_LIBRARY_PATH="$P/lib/x86_64-linux-gnu:$P/lib:$P/lib64"
 export DISPLAY=${LEAN_DISPLAY:-:1}
+# what Steam gives a game in the gamescope session: the gamescope Vulkan WSI layer (without it DXVK's
+# swapchain creation fails) and, for DXVK, VRChat's dxvk.conf
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+export ENABLE_GAMESCOPE_WSI=1 GAMESCOPE_WAYLAND_DISPLAY=gamescope-0
+[ "$MODE" = dxvk ] && [ -f "$HOME/vrc/dxvk.conf" ] && export DXVK_CONFIG_FILE=$HOME/vrc/dxvk.conf
 export WINEDEBUG=${WINEDEBUG:--all}
 exec "$FEX" "$P/bin/wine" "$@"
