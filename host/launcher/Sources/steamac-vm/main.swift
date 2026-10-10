@@ -39,6 +39,9 @@ setenv("MVK_CONFIG_LOG_LEVEL", "1", 0)
 // present nothing (MoltenVK's) get no HUD. Always loaded, so the HUD can be turned on mid-run; with the
 // setting off it is hidden from the first frame on.
 if Supervisor.isChild && !options.headless { setenv("MTL_HUD_ENABLED", "1", 1) }
+// Mouse motion reaches the guest as AppKit delivers it: no coalescing of moves into one per display frame (up
+// to a refresh of added latency on pointer motion; the guest sees every move as relative input anyway).
+if Supervisor.isChild { PointerInput.configure() }
 
 // Crash reporting (Settings > General; both the supervisor and each VM process).
 CrashReporting.setUp(options: options, settings: settings)

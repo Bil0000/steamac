@@ -1,3 +1,4 @@
+import AppKit
 import QuartzCore
 
 /// --selftest-game-layers: layers added on top of the guest picture (the wmtr game layer) are hidden
@@ -28,6 +29,8 @@ enum GameLayerSelfTest {
         let bare = CAMetalLayer()
         VMView.applyHUD(true, gameVisible: true, main: bare, mainAttached: true)
         check(mode(bare) == "default", "HUD on, no game layer at all (classic path): not on the guest picture")
+        PointerInput.configure()
+        check(!NSEvent.isMouseCoalescingEnabled, "mouse coalescing still on after PointerInput.configure")
         log(failures == 0 ? "selftest-game-layers: PASS" : "selftest-game-layers: \(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }

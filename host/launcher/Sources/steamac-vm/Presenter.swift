@@ -208,3 +208,10 @@ final class VMView: NSView {
         return (min(1, max(0, ux)), min(1, max(0, uy)))
     }
 }
+
+/// Host-side pointer input setup for the VM process.
+enum PointerInput {
+    /// Deliver every mouse move as it comes instead of coalescing moves into one per display frame:
+    /// up to a refresh of latency taken off pointer motion (the guest gets relative input either way).
+    static func configure() { NSEvent.isMouseCoalescingEnabled = false }
+}
