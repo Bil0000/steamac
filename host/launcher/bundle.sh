@@ -118,7 +118,7 @@ cp "$ROOT/scripts/keys/steamdeck-images.pem" "$TMP/Contents/Resources/steamdeck-
 mkdir -p "$TMP/Contents/Resources/licenses"
 cp -R "$OUT/licenses/." "$TMP/Contents/Resources/licenses/"
 for lproj in "$HERE/.build/l10n"/*.lproj; do
-    [[ -d $lproj ]] || { echo "bundle.sh: no compiled localizations in $HERE/.build/l10n (run build.sh)" >&2; exit 1; }
+    [[ -d $lproj ]] || { echo "bundle.sh: warning: no compiled localizations in $HERE/.build/l10n (built without Xcode); English only" >&2; break; }
     cp -R "$lproj" "$TMP/Contents/Resources/"
 done
 
