@@ -59,6 +59,37 @@ static void mat_mvp(float *m, float x, float y, float s, float a) {
   memcpy(m, r, sizeof r);
 }
 
+/* --dump FILE: write frame 30's back buffer as a binary PPM and print its mean colour (correctness check:
+ * the same picture must come out of every D3D11 implementation). Animation then follows the frame number,
+ * not the clock, so the picture is deterministic. */
+static const char *g_dump = nullptr;
+static void dump_frame(ID3D11Device *dev, ID3D11DeviceContext *ctx, IDXGISwapChain *sc) {
+  ID3D11Texture2D *bb; sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&bb);
+  D3D11_TEXTURE2D_DESC d; bb->GetDesc(&d);
+  d.Usage = D3D11_USAGE_STAGING; d.BindFlags = 0; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; d.MiscFlags = 0;
+  ID3D11Texture2D *st; dev->CreateTexture2D(&d, nullptr, &st);
+  ctx->CopyResource(st, bb);
+  D3D11_MAPPED_SUBRESOURCE m;
+  if (FAILED(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m))) { fprintf(stderr, "dump: Map failed\n"); return; }
+  FILE *f = fopen(g_dump, "wb");
+  if (f) fprintf(f, "P6\n%u %u\n255\n", d.Width, d.Height);
+  double sum[3] = {0, 0, 0}; unsigned bright = 0;
+  bool bgra = d.Format == DXGI_FORMAT_B8G8R8A8_UNORM || d.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+  for (unsigned y = 0; y < d.Height; y++) {
+    const unsigned char *row = (const unsigned char *)m.pData + y * m.RowPitch;
+    for (unsigned x = 0; x < d.Width; x++) {
+      unsigned char px[3] = {row[4 * x + (bgra ? 2 : 0)], row[4 * x + 1], row[4 * x + (bgra ? 0 : 2)]};
+      for (int c = 0; c < 3; c++) sum[c] += px[c];
+      if (px[0] + px[1] + px[2] > 96) bright++;
+      if (f) fwrite(px, 1, 3, f);
+    }
+  }
+  ctx->Unmap(st, 0); if (f) fclose(f); st->Release(); bb->Release();
+  double n = double(d.Width) * d.Height;
+  printf("DUMP %s %ux%u format=%d mean_rgb=%.1f,%.1f,%.1f bright_px=%u\n", g_dump, d.Width, d.Height, (int)d.Format,
+         sum[0] / n, sum[1] / n, sum[2] / n, bright);
+}
+
 int main(int argc, char **argv) {
   for (int i = 1; i + 1 < argc; i += 2) {
     if (!strcmp(argv[i], "--draws")) g_draws = atoi(argv[i + 1]);
@@ -69,6 +100,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--overdraw")) g_overdraw = atoi(argv[i + 1]);
     else if (!strcmp(argv[i], "--csv")) g_csv = argv[i + 1];
     else if (!strcmp(argv[i], "--label")) g_label = argv[i + 1];
+    else if (!strcmp(argv[i], "--dump")) g_dump = argv[i + 1];
   }
   WNDCLASSA wc = {}; wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandleA(nullptr); wc.lpszClassName = "d3d11bench";
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -140,6 +172,7 @@ int main(int argc, char **argv) {
     QueryPerformanceCounter(&ta);
     double t = double(ta.QuadPart - t0.QuadPart) / freq.QuadPart;
     if (t > g_seconds) break;
+    if (g_dump) t = frame / 60.0;
     if (frame < 3) step("frame");
     float clear[4] = {0.05f, 0.05f, 0.08f, 1};
     ctx->ClearRenderTargetView(rtv, clear);
@@ -169,6 +202,7 @@ int main(int argc, char **argv) {
       for (int k = 0; k < g_overdraw; k++) ctx->Draw(3, 0);
     }
     QueryPerformanceCounter(&tb);
+    if (g_dump && frame == 30) dump_frame(dev, ctx, sc);
     sc->Present(g_vsync ? 1 : 0, 0);
     QueryPerformanceCounter(&tc);
     double now = double(tc.QuadPart - t0.QuadPart) / freq.QuadPart;
