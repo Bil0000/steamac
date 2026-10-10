@@ -145,8 +145,8 @@ static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void
 callstats_dump(void) {
-  if (!cs_file) return;
   pthread_mutex_lock(&cs_lock);
+  if (!cs_file) { pthread_mutex_unlock(&cs_lock); return; }
   uint64_t t = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
   for (int i = 0; i < 146; i++) {
     uint64_t n = atomic_load(&cs_count[i]);
@@ -161,33 +161,77 @@ callstats_dump(void) {
   pthread_mutex_unlock(&cs_lock);
 }
 
+static int cs_state; /* 1 on, 2 off */
+
+/* Turned on at launch (WMTR_CALLSTATS=<path>) or at runtime: while the trigger file exists (default
+ * $TMPDIR/wmtr-callstats.on, WMTR_CALLSTATS_TRIGGER overrides) statistics are collected into the path written in
+ * it (or <trigger>.csv); removing it writes a last snapshot and stops collecting. The trigger is checked every
+ * 5 s (WMTR_CALLSTATS_POLL_MS) by one otherwise idle thread. */
+static char cs_trigger[1024];
+static int cs_from_env;
+
+static void
+callstats_open(const char *path) {
+  pthread_mutex_lock(&cs_lock);
+  if (!cs_file && path && *path) cs_file = fopen(path, "a");
+  if (cs_file) __atomic_store_n(&cs_state, 1, __ATOMIC_RELEASE);
+  pthread_mutex_unlock(&cs_lock);
+}
+
 static void *
 callstats_thread(void *arg) {
   (void)arg;
   pthread_setname_np("wmtr-callstats");
-  for (;;) { sleep(10); callstats_dump(); }
+  const char *pe = getenv("WMTR_CALLSTATS_POLL_MS");
+  useconds_t poll = (useconds_t)(pe && *pe ? atoi(pe) : 5000) * 1000;
+  uint64_t last = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+  for (;;) {
+    usleep(poll);
+    if (!cs_from_env && cs_trigger[0]) {
+      int want = access(cs_trigger, F_OK) == 0;
+      int on = __atomic_load_n(&cs_state, __ATOMIC_ACQUIRE) == 1;
+      if (want && !on) {
+        char path[1024] = {0};
+        FILE *t = fopen(cs_trigger, "r");
+        if (t) { if (!fgets(path, sizeof path, t)) path[0] = 0; fclose(t); }
+        path[strcspn(path, "\r\n")] = 0;
+        if (!path[0]) snprintf(path, sizeof path, "%s.csv", cs_trigger);
+        callstats_open(path);
+      } else if (!want && on) {
+        callstats_dump();
+        pthread_mutex_lock(&cs_lock);
+        __atomic_store_n(&cs_state, 2, __ATOMIC_RELEASE);
+        fclose(cs_file); cs_file = NULL;
+        pthread_mutex_unlock(&cs_lock);
+      }
+    }
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (now - last >= 10000000000ull) { last = now; callstats_dump(); }
+  }
   return NULL;
 }
 
-static int cs_state; /* 1 on, 2 off */
 static void
 callstats_init(void) {
   const char *p = getenv("WMTR_CALLSTATS");
-  if (p && *p && (cs_file = fopen(p, "a"))) {
-    pthread_t t;
-    pthread_create(&t, NULL, callstats_thread, NULL);
-    pthread_detach(t);
-    __atomic_store_n(&cs_state, 1, __ATOMIC_RELEASE);
-  } else {
-    __atomic_store_n(&cs_state, 2, __ATOMIC_RELEASE);
+  if (p && *p) { cs_from_env = 1; callstats_open(p); }
+  const char *t = getenv("WMTR_CALLSTATS_TRIGGER");
+  if (t && *t) snprintf(cs_trigger, sizeof cs_trigger, "%s", t);
+  else {
+    char tmp[512];
+    if (confstr(_CS_DARWIN_USER_TEMP_DIR, tmp, sizeof tmp)) snprintf(cs_trigger, sizeof cs_trigger, "%swmtr-callstats.on", tmp);
   }
+  if (__atomic_load_n(&cs_state, __ATOMIC_ACQUIRE) != 1) __atomic_store_n(&cs_state, 2, __ATOMIC_RELEASE);
+  pthread_t th;
+  pthread_create(&th, NULL, callstats_thread, NULL);
+  pthread_detach(th);
 }
 
 static int
 callstats_on(void) {
   static pthread_once_t once = PTHREAD_ONCE_INIT;
   if (__builtin_expect(!__atomic_load_n(&cs_state, __ATOMIC_ACQUIRE), 0)) pthread_once(&once, callstats_init);
-  return cs_state == 1;
+  return __atomic_load_n(&cs_state, __ATOMIC_RELAXED) == 1;
 }
 
 static inline void

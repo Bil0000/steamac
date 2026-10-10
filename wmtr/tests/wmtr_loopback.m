@@ -118,13 +118,27 @@ int main(void) {
     setenv("WMTR_FRAMES", frames_path, 1);
     char stats_path[] = "/tmp/wmtr_callstats_XXXXXX";
     close(mkstemp(stats_path));
-    setenv("WMTR_CALLSTATS", stats_path, 1);
+    /* WMTR_TEST_TRIGGER=1: statistics turned on at runtime through the trigger file instead of the environment */
+    int trigger_mode = getenv("WMTR_TEST_TRIGGER") != NULL;
+    char trigger_path[64];
+    snprintf(trigger_path, sizeof trigger_path, "/tmp/wmtr_trigger_%d", (int)getpid());
+    if (trigger_mode) {
+      unsetenv("WMTR_CALLSTATS");
+      setenv("WMTR_CALLSTATS_TRIGGER", trigger_path, 1);
+      setenv("WMTR_CALLSTATS_POLL_MS", "20", 1);
+      FILE *tf = fopen(trigger_path, "w");
+      fprintf(tf, "%s\n", stats_path);
+      fclose(tf);
+    } else {
+      setenv("WMTR_CALLSTATS", stats_path, 1);
+    }
     /* 1. output buffer through a uint64 pointer field */
     char a[32] = {0}, b[32] = {0};
     struct unixcall_nsstring_getcstring pa = {(obj_handle_t)"metal string", (uint64_t)(uintptr_t)a, sizeof a, 4, 0}, pb = pa;
     pb.buffer_ptr = (uint64_t)(uintptr_t)b;
     native(8, &pa); remote(8, &pb);
     CHECK(!strcmp(a, b) && pb.ret == 1 && pb.buffer_ptr == (uint64_t)(uintptr_t)b, "getCString: '%s' vs '%s'", a, b);
+    if (trigger_mode) usleep(200000); /* the first call started the statistics thread; it sees the trigger */
 
     /* 2. C-string input in a uint64 arg, value result */
     struct unixcall_generic_obj_uint64_obj_ret fa = {5, (uint64_t)(uintptr_t)"vertex_main", 0}, fb = fa;
@@ -272,6 +286,7 @@ int main(void) {
       if (sf) fclose(sf);
       CHECK(found, "WMTR_CALLSTATS: no executor sleep row");
       unlink(stats_path);
+      unlink(trigger_path);
     }
   }
   printf(failures ? "wmtr_loopback: %d FAILED\n" : "wmtr_loopback: all passed\n", failures);

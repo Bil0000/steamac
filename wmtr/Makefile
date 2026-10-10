@@ -62,6 +62,7 @@ $(OUT)/x86_64-macos/winemetal.so: src/wmtr_client.c src/transport_sock.c include
 
 test: $(OUT)/wmtr_loopback $(OUT)/wmtr_present_test $(OUT)/wmtr_spin_test
 	./$(OUT)/wmtr_loopback
+	WMTR_TEST_TRIGGER=1 ./$(OUT)/wmtr_loopback
 	./$(OUT)/wmtr_present_test
 	./$(OUT)/wmtr_spin_test
 $(OUT)/wmtr_spin_test: tests/wmtr_spin_test.c include/wmtr_spin.h | $(OUT)
