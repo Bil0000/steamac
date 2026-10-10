@@ -22,9 +22,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  src/rutabaga_gfx/src/lib.rs            |   9 +
  src/rutabaga_gfx/src/rutabaga_core.rs  |  18 +-
  src/rutabaga_gfx/src/rutabaga_utils.rs |   3 +
- src/rutabaga_gfx/src/wmtr.rs           | 518 +++++++++++++++++++++++++
+ src/rutabaga_gfx/src/wmtr.rs           | 518 +++++++++++++++++++++++++++++++++
  5 files changed, 573 insertions(+), 3 deletions(-)
- create mode 100644 src/rutabaga_gfx/src/wmtr.rs
 
 diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
 index cc0f8d4..d1d562e 100644
@@ -696,6 +695,3 @@ index 0000000..e86fcb6
 +        drop(ctx);
 +    }
 +}
--- 
-2.39.5 (Apple Git-154)
-

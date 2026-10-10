@@ -135,7 +135,7 @@ final class VM {
         if shutdownFd < 0 { log("warning: krun_get_shutdown_eventfd: \(shutdownFd)"); shutdownFd = -1 }
     }
 
-    /// Graphics path (Settings > Advanced): DXMT asks libkrun (patch 0020) for the wmtr virtio-gpu context,
+    /// Graphics path (Settings > Advanced): DXMT asks libkrun (patch 0021) for the wmtr virtio-gpu context,
     /// whose host side is libwmtr_host.dylib in the app's Frameworks; the game's CAMetalLayer goes on top
     /// of the VM view (WMTR_PRESENT=overlay). Vulkan clears all of it, also when inherited from a shell.
     static func applyGraphicsEnv(_ o: Options) {

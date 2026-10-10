@@ -194,7 +194,7 @@ DXMT_SHADER_CACHE_PATH in the guest (an absolute guest path would be used on the
 ## P3/P5 — in the VM (2026-10-10)
 
 Fixes needed to get there (each with a test that fails before and passes after):
-* libkrun 0020: num_capsets counted only the five stock capsets, so the guest never saw capset 30.
+* libkrun 0021: num_capsets counted only the five stock capsets, so the guest never saw capset 30.
 * client: NtSetEvent lookup in Wine's RTLD_LOCAL ntdll.so; built with -mtls-dialect=gnu (GCC 16's TLS
   descriptors need GLIBC_ABI_GNU2_TLS, which the Steam Runtime lacks); at most one WAIT in flight per
   thread (re-submitting on poll timeouts filled the virtio-gpu control queue and froze every GPU client

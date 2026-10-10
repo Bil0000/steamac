@@ -205,11 +205,13 @@ final class StallMonitor {
 
     private func text(now: CFTimeInterval, idle: CFTimeInterval) -> (String, String) {
         if notResponding() {
-            return ("SteamOS is not responding…", "waiting (\(Int(idle)) s)")
+            return (String(localized: "SteamOS is not responding…"), String(localized: "waiting (\(Int(idle)) s)"))
         }
-        let title = "Loading…"
-        var detail = "VM CPU \(String(format: "%.1f", currentCPU())) cores"
-        if lastAlive > 0 { detail += " · guest alive" }
+        let title = String(localized: "Loading…")
+        let cores = String(format: "%.1f", currentCPU())
+        let detail = lastAlive > 0
+            ? String(localized: "VM CPU \(cores) cores · guest alive")
+            : String(localized: "VM CPU \(cores) cores")
         return (title, detail)
     }
 
@@ -433,7 +435,7 @@ final class StallIndicatorView: NSView {
     }
 
     private var linkString: NSAttributedString {
-        NSAttributedString(string: "Report…", attributes: [
+        NSAttributedString(string: String(localized: "Report…", comment: "Link to report an unresponsive VM to the developer"), attributes: [
             .font: NSFont.systemFont(ofSize: 13 * scaleFactor, weight: .semibold),
             .foregroundColor: OverlayView.color(0x66c0f4),
             .underlineStyle: NSUnderlineStyle.single.rawValue])

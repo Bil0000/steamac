@@ -53,6 +53,10 @@ vhost-user-device this code came from and do not compile in libkrun (no init_log
 NullBackend, MockSplitQueue); they are disabled so the macOS backend's tests can run.
 rustfmt (stable) was applied to coreaudio.rs.
 
+Output routing (patch 0017): the unit slot carries the OutputRoute and the speaker mixer, so a
+control request builds the device-bound HAL unit and its channel map off `hosts` like any other
+unit; the pump re-routes through the same slot.
+
 Limit: AudioUnit calls the pump thread makes itself (output-device switch, resume after
 pause, latency refresh) still run under `hosts`; a hang there is covered by the watchdog
 and the control deadlines, not prevented.
@@ -60,16 +64,16 @@ and the control deadlines, not prevented.
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 
 ---
- src/devices/src/virtio/snd/audio_backends.rs  |    4 +-
- .../virtio/snd/audio_backends/coreaudio.rs    | 1181 +++++++++++++----
- src/devices/src/virtio/snd/stream.rs          |    4 +-
- 3 files changed, 958 insertions(+), 231 deletions(-)
+ src/devices/src/virtio/snd/audio_backends.rs       |    4 +-
+ .../src/virtio/snd/audio_backends/coreaudio.rs     | 1244 ++++++++++++++++----
+ src/devices/src/virtio/snd/stream.rs               |    4 +-
+ 3 files changed, 990 insertions(+), 262 deletions(-)
 
 diff --git a/src/devices/src/virtio/snd/audio_backends.rs b/src/devices/src/virtio/snd/audio_backends.rs
-index 65aa761..36735f1 100644
+index 3046a90..354b9fa 100644
 --- a/src/devices/src/virtio/snd/audio_backends.rs
 +++ b/src/devices/src/virtio/snd/audio_backends.rs
-@@ -60,7 +60,9 @@ pub fn alloc_audio_backend(
+@@ -62,7 +62,9 @@ pub fn alloc_audio_backend(
      }
  }
  
@@ -81,10 +85,10 @@ index 65aa761..36735f1 100644
      use std::any::TypeId;
  
 diff --git a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs b/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
-index 3edf944..ae1a6e6 100644
+index 74dc5d0..b7b83e7 100644
 --- a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
 +++ b/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
-@@ -26,6 +26,12 @@
+@@ -27,6 +27,12 @@
  // by more data counts as one underrun and is logged by the pump thread. Device and device
  // rate changes are picked up once a second (FIFO, latency and log line follow).
  //
@@ -94,10 +98,10 @@ index 3edf944..ae1a6e6 100644
 +// the device's only worker thread. A watchdog fails queued I/O with IO_ERR once the pump has made
 +// no progress for IO_STALL, so the guest's queues always drain and it can retry.
 +//
- // STEAMAC_SND_DUMP=/path.wav writes every byte handed to CoreAudio for the playback stream
+ // STEAMAC_SND_DUMP=/path.wav writes guest PCM before speaker mapping for the playback stream
  // while it runs (underrun silence included) to a WAV file (a new file per format change).
  // STEAMAC_SND_TRACE=1 logs PCM commands and a per-second heartbeat of the stream state.
-@@ -38,7 +44,7 @@ use std::os::unix::fs::FileExt;
+@@ -39,7 +45,7 @@ use std::os::unix::fs::FileExt;
  use std::path::{Path, PathBuf};
  use std::ptr;
  use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -106,7 +110,7 @@ index 3edf944..ae1a6e6 100644
  use std::thread::JoinHandle;
  use std::time::{Duration, Instant};
  
-@@ -296,6 +302,13 @@ const RING_BYTES: usize = 1 << 20;
+@@ -337,6 +343,13 @@ const RING_BYTES: usize = 1 << 20;
  /// Capture: largest IO slice the input callback accepts (frames).
  const CAPTURE_MAX_FRAMES: usize = 16384;
  const HOUSEKEEPING: Duration = Duration::from_secs(1);
@@ -120,7 +124,7 @@ index 3edf944..ae1a6e6 100644
  /// Non-zero status the converter input proc returns when the ring has no more frames now.
  const NO_MORE_INPUT: OSStatus = 0x6e6f6d6f; // 'nomo'
  
-@@ -550,6 +563,10 @@ struct Shared {
+@@ -591,6 +604,10 @@ struct Shared {
      last_callback: AtomicU64,
      /// Playback: silence bytes the callback filled in while running (priming, underruns).
      silence_bytes: AtomicU64,
@@ -131,7 +135,7 @@ index 3edf944..ae1a6e6 100644
      /// Capture: the running unit, its converter and the device IO rate, or `None` while the
      /// unit is starting/stopped (capture I/O is then completed with silence).
      capture: Mutex<Option<CaptureState>>,
-@@ -562,6 +579,9 @@ struct Shared {
+@@ -603,6 +620,9 @@ struct Shared {
      /// Capture: a stop is pending; the start worker tears its unit down instead of starting it.
      /// Set while `capture` holds no unit.
      stop_pending: AtomicBool,
@@ -140,8 +144,8 @@ index 3edf944..ae1a6e6 100644
 +    start_gate: StartGate<Format>,
      /// Capture: AudioUnitRender target, touched only by the IO thread.
      scratch: UnsafeCell<Box<[u8]>>,
-     wake: Arc<Semaphore>,
-@@ -604,11 +624,13 @@ impl Shared {
+     /// Changed only while the output unit is stopped/uninitialized.
+@@ -650,11 +670,13 @@ impl Shared {
              callbacks: AtomicU64::new(0),
              last_callback: AtomicU64::new(0),
              silence_bytes: AtomicU64::new(0),
@@ -153,9 +157,9 @@ index 3edf944..ae1a6e6 100644
              stop_pending: AtomicBool::new(false),
 +            start_gate: StartGate::default(),
              scratch: UnsafeCell::new(scratch),
+             mixer: UnsafeCell::new(Mixer::default()),
              wake,
-         }
-@@ -1238,22 +1260,79 @@ fn create_input_unit(refcon: *mut c_void) -> Result<Unit> {
+@@ -1469,22 +1491,79 @@ fn create_input_unit(refcon: *mut c_void) -> Result<Unit> {
      Ok(unit)
  }
  
@@ -243,7 +247,7 @@ index 3edf944..ae1a6e6 100644
          if let Some(mut previous) = previous {
              // The stop runs off `hosts`, on this worker thread.
              previous.unit.stop();
-@@ -1263,13 +1342,16 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
+@@ -1494,13 +1573,16 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
          }
          let device: AudioObjectID = input_device()
              .ok_or_else(|| Error::UnexpectedAudioBackendError("no input device".into()))?;
@@ -261,7 +265,7 @@ index 3edf944..ae1a6e6 100644
          unit.set(
              kAudioOutputUnitProperty_CurrentDevice,
              kAudioUnitScope_Global,
-@@ -1300,7 +1382,6 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
+@@ -1531,7 +1613,6 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
          if shared.stop_pending.swap(false, Ordering::AcqRel) {
              return Ok(());
          }
@@ -269,7 +273,7 @@ index 3edf944..ae1a6e6 100644
          let mut state = CaptureState {
              unit,
              converter: Converter {
-@@ -1340,7 +1421,6 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
+@@ -1571,7 +1652,6 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
          shared.unit.store(ptr::null_mut(), Ordering::Release);
          shared.running.store(false, Ordering::Release);
      }
@@ -277,7 +281,7 @@ index 3edf944..ae1a6e6 100644
  }
  
  /// Capture rate/format converter (device Float32 → guest format and rate).
-@@ -1451,23 +1531,119 @@ impl Dump {
+@@ -1682,23 +1762,146 @@ impl Dump {
  }
  
  /// Host side of one virtio-snd PCM stream.
@@ -291,8 +295,8 @@ index 3edf944..ae1a6e6 100644
 +    unit: Option<Unit>,
 +    /// Guest format the unit is configured for.
 +    format: Option<Format>,
-+    /// Device the unit was created for (None = the default-output unit).
-+    output_target: Option<AudioObjectID>,
++    /// Route the unit was created for (device, physical speakers).
++    output_route: Option<OutputRoute>,
 +}
 +
 +impl UnitSlot {
@@ -300,26 +304,18 @@ index 3edf944..ae1a6e6 100644
 +        if self.unit.is_some() {
 +            return Ok(());
 +        }
-+        // A selected device gets a HAL unit bound to it; otherwise the default-output
-+        // unit, which follows the system default device by itself.
-+        self.output_target = control
-+            .output_device()
-+            .as_deref()
-+            .and_then(resolve_output_device);
-+        let unit = match self.output_target {
-+            Some(device) => {
-+                let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
-+                unit.set(
-+                    kAudioOutputUnitProperty_CurrentDevice,
-+                    kAudioUnitScope_Global,
-+                    0,
-+                    &device,
-+                    "CurrentDevice(output)",
-+                )?;
-+                unit
-+            }
-+            None => Unit::new(kAudioUnitSubType_DefaultOutput)?,
-+        };
++        let route = output_route(control).ok_or_else(|| {
++            Error::UnexpectedAudioBackendError("no usable output device".into())
++        })?;
++        let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
++        unit.set(
++            kAudioOutputUnitProperty_CurrentDevice,
++            kAudioUnitScope_Global,
++            0,
++            &route.device,
++            "CurrentDevice(output)",
++        )?;
++        self.output_route = Some(route);
 +        let cb = AURenderCallbackStruct {
 +            inputProc: render_output,
 +            inputProcRefCon: shared as *const Shared as *mut c_void,
@@ -341,13 +337,48 @@ index 3edf944..ae1a6e6 100644
 +        self.create_unit(shared, control)?;
 +        let unit = self.unit.as_mut().unwrap();
 +        unit.uninitialize();
++        let route = self.output_route.as_ref().unwrap();
++        let source = control
++            .playback_maps()
++            .get(fmt.channels as usize - 1)
++            .ok_or(Error::UnexpectedAudioBackendConfiguration)?;
++        let mixer = Mixer::new(fmt.format, source, &route.positions);
 +        unit.set(
 +            kAudioUnitProperty_StreamFormat,
 +            kAudioUnitScope_Input,
 +            0,
-+            &fmt.asbd(),
++            &float_asbd(fmt.rate as f64, mixer.output_channels as u32),
 +            "StreamFormat(output)",
 +        )?;
++        // Identity map over every physical channel. A device wider than the mixer
++        // (stereo route) keeps the HAL's default mapping instead.
++        if route.device_channels == mixer.output_channels {
++            let map: Vec<i32> = (0..mixer.output_channels as i32).collect();
++            // SAFETY: map is a live array of physical output-channel indices.
++            check(
++                unsafe {
++                    AudioUnitSetProperty(
++                        unit.au,
++                        kAudioOutputUnitProperty_ChannelMap,
++                        kAudioUnitScope_Input,
++                        0,
++                        map.as_ptr().cast(),
++                        (map.len() * 4) as u32,
++                    )
++                },
++                "ChannelMap(output)",
++            )?;
++        }
++        // SAFETY: the unit was uninitialized above, so no render callback can read the mixer.
++        unsafe {
++            *shared.mixer.get() = mixer;
++        }
++        log::info!(
++            "snd: routes guest {:?} to '{}' speakers {:?}",
++            source,
++            device_name(route.device),
++            route.positions
++        );
 +        shared
 +            .frame_bytes
 +            .store(fmt.frame_bytes(), Ordering::Relaxed);
@@ -403,16 +434,17 @@ index 3edf944..ae1a6e6 100644
      /// Playback: ring position up to which messages have been completed (the guest's hw_ptr).
      completed: u64,
      /// Playback: host FIFO the guest's hw_ptr runs ahead of the device by (one device IO
-@@ -1481,8 +1657,6 @@ struct HostStream {
+@@ -1712,8 +1915,7 @@ struct HostStream {
      control: Arc<SndControl>,
      /// Control generation last applied.
      seen_generation: u64,
 -    /// Playback: device the unit was created for (None = the default-output unit).
--    output_target: Option<AudioObjectID>,
+-    output_route: Option<OutputRoute>,
++    /// Playback: a device switch interrupted a running unit; start it again once configured.
+     output_restart_pending: bool,
      /// The unit is stopped because the VM is paused (SndControl::paused) and starts again on
      /// resume.
-     suspended: bool,
-@@ -1504,13 +1678,12 @@ impl HostStream {
+@@ -1736,13 +1938,12 @@ impl HostStream {
              id,
              direction,
              shared: Arc::new(Shared::new(direction, dump_path.is_some(), wake)),
@@ -428,15 +460,15 @@ index 3edf944..ae1a6e6 100644
              completed: 0,
              fifo_bytes: 0,
              latency_bytes: 0,
-@@ -1520,7 +1693,6 @@ impl HostStream {
+@@ -1752,7 +1953,6 @@ impl HostStream {
              dump_files: 0,
              control,
              seen_generation: u64::MAX,
--            output_target: None,
+-            output_route: None,
+             output_restart_pending: false,
              suspended: false,
              traced_callbacks: 0,
-         }
-@@ -1540,6 +1712,7 @@ impl HostStream {
+@@ -1773,6 +1973,7 @@ impl HostStream {
              t => ticks_to_nanos(now.saturating_sub(t)) as f64 / 1e6,
          };
          let limit = sh.limit.load(Ordering::Acquire);
@@ -444,7 +476,7 @@ index 3edf944..ae1a6e6 100644
          trace!(
              "stream {} {what}: guest {} | unit {} running {} written {} read {} limit {} \
               completed {} inflight {} (first end {}) | clock {} chunk {} {:.1} ms ago, \
-@@ -1551,7 +1724,7 @@ impl HostStream {
+@@ -1784,7 +1985,7 @@ impl HostStream {
                  g.state,
                  g.buffers.len()
              )),
@@ -453,7 +485,7 @@ index 3edf944..ae1a6e6 100644
                  None => "none",
                  Some(u) if u.started => "started",
                  Some(u) if u.initialized => "stopped",
-@@ -1566,8 +1739,8 @@ impl HostStream {
+@@ -1799,8 +2000,8 @@ impl HostStream {
                  limit.to_string()
              },
              self.completed,
@@ -464,7 +496,7 @@ index 3edf944..ae1a6e6 100644
              consumed,
              chunk,
              ago(time),
-@@ -1591,7 +1764,7 @@ impl HostStream {
+@@ -1824,15 +2025,16 @@ impl HostStream {
              return;
          }
          self.seen_generation = generation;
@@ -472,31 +504,39 @@ index 3edf944..ae1a6e6 100644
 +        let Some(fmt) = self.slot.format else {
              return; // applied by configure()
          };
-         let target = self
-@@ -1599,10 +1772,10 @@ impl HostStream {
-             .output_device()
-             .as_deref()
-             .and_then(resolve_output_device);
--        if target != self.output_target && self.unit.is_some() {
-+        if target != self.slot.output_target && self.slot.unit.is_some() {
-             // Restart the output on the new device; the ring and the guest stream carry on.
--            let started = self.unit.as_ref().is_some_and(|u| u.started);
+         let route = output_route(&self.control);
+-        if route != self.output_route || self.unit.as_ref().is_none_or(|u| !u.initialized) {
++        if route != self.slot.output_route || self.slot.unit.as_ref().is_none_or(|u| !u.initialized)
++        {
+             // Dispose first: no callback may observe the mixer while it is being replaced.
+-            self.output_restart_pending |= self.unit.as_ref().is_some_and(|u| u.started);
 -            self.unit = None;
-+            let started = self.slot.unit.as_ref().is_some_and(|u| u.started);
+-            self.output_route = None;
++            self.output_restart_pending |= self.slot.unit.as_ref().is_some_and(|u| u.started);
 +            self.slot.unit = None;
-             let result =
-                 self.configure(fmt)
-                     .and_then(|()| if started { self.start_unit() } else { Ok(()) });
-@@ -1611,7 +1784,7 @@ impl HostStream {
++            self.slot.output_route = None;
+             if route.is_some() {
+                 let result = self.configure(fmt).and_then(|()| {
+                     if self.output_restart_pending && !self.control.paused() {
+@@ -1843,7 +2045,7 @@ impl HostStream {
+                 });
+                 if let Err(err) = result {
+                     // Retry at the next housekeeping pass; retain queued guest PCM and clock.
+-                    self.unit = None;
++                    self.slot.unit = None;
+                     log::error!("snd: stream {}: switching output device: {err}", self.id);
+                 } else {
+                     self.output_restart_pending = false;
+@@ -1851,7 +2053,7 @@ impl HostStream {
+                 }
              }
-             self.trace_state("output switched", None);
          }
 -        if let Some(unit) = self.unit.as_ref() {
 +        if let Some(unit) = self.slot.unit.as_ref() {
              unit.set_volume(self.control.volume());
          }
          if changed {
-@@ -1622,13 +1795,13 @@ impl HostStream {
+@@ -1862,19 +2064,19 @@ impl HostStream {
      /// Stop the unit while the VM is paused and start it again on resume. The render
      /// callback stops consuming the ring, so the guest's hw_ptr stops (after at most the host
      /// FIFO) and playback carries on from the same sample without an underrun. Capture's state
@@ -507,12 +547,19 @@ index 3edf944..ae1a6e6 100644
              && (self.shared.starting.load(Ordering::Acquire)
                  || self.shared.capture.lock().unwrap().is_some());
          if self.control.paused() {
+             self.suspended |= self.output_restart_pending;
 -            if capture_up || self.unit.as_ref().is_some_and(|u| u.started) {
 +            if capture_up || self.slot.unit.as_ref().is_some_and(|u| u.started) {
                  self.stop_unit();
                  self.suspended = true;
                  self.trace_state("suspended (VM paused)", None);
-@@ -1642,82 +1815,20 @@ impl HostStream {
+             }
+-        } else if self.suspended && self.unit.as_ref().is_some_and(|u| u.initialized) {
++        } else if self.suspended && self.slot.unit.as_ref().is_some_and(|u| u.initialized) {
+             self.suspended = false;
+             if let Err(err) = self.start_unit() {
+                 log::error!("snd: stream {}: restarting after VM pause: {err}", self.id);
+@@ -1883,110 +2085,20 @@ impl HostStream {
          }
      }
  
@@ -525,27 +572,18 @@ index 3edf944..ae1a6e6 100644
 -        if self.unit.is_some() {
 -            return Ok(());
 -        }
--        // A selected device gets a HAL unit bound to it; otherwise the default-output
--        // unit, which follows the system default device by itself.
--        self.output_target = self
--            .control
--            .output_device()
--            .as_deref()
--            .and_then(resolve_output_device);
--        let unit = match self.output_target {
--            Some(device) => {
--                let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
--                unit.set(
--                    kAudioOutputUnitProperty_CurrentDevice,
--                    kAudioUnitScope_Global,
--                    0,
--                    &device,
--                    "CurrentDevice(output)",
--                )?;
--                unit
--            }
--            None => Unit::new(kAudioUnitSubType_DefaultOutput)?,
--        };
+-        let route = output_route(&self.control).ok_or_else(|| {
+-            Error::UnexpectedAudioBackendError("no usable output device".into())
+-        })?;
+-        let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
+-        unit.set(
+-            kAudioOutputUnitProperty_CurrentDevice,
+-            kAudioUnitScope_Global,
+-            0,
+-            &route.device,
+-            "CurrentDevice(output)",
+-        )?;
+-        self.output_route = Some(route);
 -        let cb = AURenderCallbackStruct {
 -            inputProc: render_output,
 -            inputProcRefCon: self.refcon(),
@@ -568,13 +606,50 @@ index 3edf944..ae1a6e6 100644
 -        self.create_unit()?;
 -        let unit = self.unit.as_mut().unwrap();
 -        unit.uninitialize();
+-        let route = self.output_route.as_ref().unwrap();
+-        let source = self
+-            .control
+-            .playback_maps()
+-            .get(fmt.channels as usize - 1)
+-            .ok_or(Error::UnexpectedAudioBackendConfiguration)?;
+-        let mixer = Mixer::new(fmt.format, source, &route.positions);
 -        unit.set(
 -            kAudioUnitProperty_StreamFormat,
 -            kAudioUnitScope_Input,
 -            0,
--            &fmt.asbd(),
+-            &float_asbd(fmt.rate as f64, mixer.output_channels as u32),
 -            "StreamFormat(output)",
 -        )?;
+-        // Identity map over every physical channel. A device wider than the mixer
+-        // (stereo route) keeps the HAL's default mapping instead.
+-        if route.device_channels == mixer.output_channels {
+-            let map: Vec<i32> = (0..mixer.output_channels as i32).collect();
+-            // SAFETY: map is a live array of physical output-channel indices.
+-            check(
+-                unsafe {
+-                    AudioUnitSetProperty(
+-                        unit.au,
+-                        kAudioOutputUnitProperty_ChannelMap,
+-                        kAudioUnitScope_Input,
+-                        0,
+-                        map.as_ptr().cast(),
+-                        (map.len() * 4) as u32,
+-                    )
+-                },
+-                "ChannelMap(output)",
+-            )?;
+-        }
+-        // SAFETY: configure uninitialized the unit, so no render callback can read it.
+-        unsafe {
+-            *self.shared.mixer.get() = mixer;
+-        }
+-        log::info!(
+-            "snd: stream {} routes guest {:?} to '{}' speakers {:?}",
+-            self.id,
+-            source,
+-            device_name(route.device),
+-            route.positions
+-        );
 -        self.shared
 -            .frame_bytes
 -            .store(fmt.frame_bytes(), Ordering::Relaxed);
@@ -600,7 +675,7 @@ index 3edf944..ae1a6e6 100644
              // Started by follow_pause() on resume.
              Some(unit) if unit.initialized && self.control.paused() => {
                  self.suspended = true;
-@@ -1736,7 +1847,7 @@ impl HostStream {
+@@ -2005,7 +2117,7 @@ impl HostStream {
              self.stop_capture();
              return;
          }
@@ -609,7 +684,7 @@ index 3edf944..ae1a6e6 100644
              unit.stop();
          }
      }
-@@ -1757,56 +1868,65 @@ impl HostStream {
+@@ -2026,56 +2138,65 @@ impl HostStream {
          self.stop_capture();
          // `capture` already holds no unit, so capture I/O that arrives while the worker builds
          // the new one is completed with silence.
@@ -696,7 +771,7 @@ index 3edf944..ae1a6e6 100644
          };
          let scope = match self.direction {
              Direction::Output => kAudioObjectPropertyScopeOutput,
-@@ -1842,6 +1962,7 @@ impl HostStream {
+@@ -2111,6 +2232,7 @@ impl HostStream {
              return;
          };
          let unit_secs: f64 = self
@@ -704,7 +779,7 @@ index 3edf944..ae1a6e6 100644
              .unit
              .as_ref()
              .and_then(|u| u.get(kAudioUnitProperty_Latency, kAudioUnitScope_Global, 0))
-@@ -1880,7 +2001,7 @@ impl HostStream {
+@@ -2149,7 +2271,7 @@ impl HostStream {
  
      /// Capture: follow the default input device while recording (the HAL unit does not do it
      /// by itself; START always picks the current default). The unit is checked through the
@@ -713,7 +788,7 @@ index 3edf944..ae1a6e6 100644
      fn follow_input_device(&mut self) {
          if !self.shared.starting.load(Ordering::Acquire)
              && self.shared.capture.lock().unwrap().is_none()
-@@ -1907,7 +2028,7 @@ impl HostStream {
+@@ -2176,7 +2298,7 @@ impl HostStream {
          self.shared.ring.clear();
          self.completed = self.shared.ring.written();
          self.shared.limit.store(self.completed, Ordering::Release);
@@ -722,7 +797,7 @@ index 3edf944..ae1a6e6 100644
              buf.message.latency_bytes.store(0, Ordering::Relaxed);
          }
          for buf in guest.buffers.drain(..) {
-@@ -1935,7 +2056,7 @@ impl HostStream {
+@@ -2204,7 +2326,7 @@ impl HostStream {
      /// bursts. Never beyond what the callback has consumed.
      fn play_position(&self) -> u64 {
          let (time, consumed, chunk) = self.shared.clock.read();
@@ -731,7 +806,7 @@ index 3edf944..ae1a6e6 100644
              return consumed;
          };
          // SAFETY: plain clock read.
-@@ -1947,8 +2068,8 @@ impl HostStream {
+@@ -2216,8 +2338,8 @@ impl HostStream {
  
      /// Time until the oldest in-flight playback message is due, if the device has taken it.
      fn next_completion(&self) -> Option<Duration> {
@@ -742,7 +817,7 @@ index 3edf944..ae1a6e6 100644
          let due_at = end.saturating_sub(self.fifo_bytes);
          if due_at > self.shared.clock.read().1 {
              return None; // the render callback signals when it takes more
-@@ -1965,12 +2086,15 @@ impl HostStream {
+@@ -2234,12 +2356,15 @@ impl HostStream {
          } else {
              0
          };
@@ -764,7 +839,7 @@ index 3edf944..ae1a6e6 100644
          }
  
          let mut streams = streams.write().unwrap();
-@@ -2024,19 +2148,19 @@ impl HostStream {
+@@ -2293,19 +2418,19 @@ impl HostStream {
                  break; // ring full
              }
              let buf = guest.buffers.pop_front().unwrap();
@@ -791,7 +866,7 @@ index 3edf944..ae1a6e6 100644
          let Some(fmt) = self.guest_format else {
              return;
          };
-@@ -2103,9 +2227,14 @@ impl HostStream {
+@@ -2372,9 +2497,14 @@ impl HostStream {
                  }
              }
              let buf = guest.buffers.pop_front().unwrap();
@@ -809,7 +884,7 @@ index 3edf944..ae1a6e6 100644
          }
      }
  
-@@ -2162,7 +2291,7 @@ impl HostStream {
+@@ -2431,7 +2561,7 @@ impl HostStream {
          if self.direction == Direction::Input {
              self.follow_input_device();
          }
@@ -818,7 +893,7 @@ index 3edf944..ae1a6e6 100644
              self.update_latency();
          }
          let xruns = self.shared.xruns.load(Ordering::Relaxed);
-@@ -2182,7 +2311,7 @@ impl HostStream {
+@@ -2451,7 +2581,7 @@ impl HostStream {
              let callbacks = self.shared.callbacks.load(Ordering::Relaxed);
              let guest = &streams.read().unwrap()[self.id];
              if callbacks != self.traced_callbacks
@@ -827,7 +902,7 @@ index 3edf944..ae1a6e6 100644
                  || !guest.buffers.is_empty()
              {
                  self.traced_callbacks = callbacks;
-@@ -2195,15 +2324,79 @@ impl HostStream {
+@@ -2464,17 +2594,24 @@ impl HostStream {
  impl Drop for HostStream {
      fn drop(&mut self) {
          // The unit references `shared`: stop and dispose it first.
@@ -843,13 +918,20 @@ index 3edf944..ae1a6e6 100644
 +    shareds: Vec<Arc<Shared>>,
      wake: Arc<Semaphore>,
      quit: AtomicBool,
+     /// Set by `route_listener`: recheck the output route on the next pass.
+     route_changed: AtomicBool,
 +    /// Pump heartbeat: milliseconds since `epoch` at the start of its last iteration.
 +    epoch: Instant,
 +    beat_ms: AtomicU64,
 +    ctl_deadline: Duration,
 +    io_stall: Duration,
-+}
-+
+ }
+ 
+ /// System properties after which the output route is rechecked at once: the default output
+@@ -2498,12 +2635,70 @@ extern "C" fn route_listener(
+     0
+ }
+ 
 +impl Inner {
 +    /// Lock `hosts` unless the pump (or another control request's unit work) keeps it past
 +    /// `deadline`: the device's single worker thread must not wait for ever.
@@ -905,18 +987,19 @@ index 3edf944..ae1a6e6 100644
 +        }
 +        failed
 +    }
- }
- 
++}
++
  fn pump_thread(inner: Arc<Inner>) {
-@@ -2212,6 +2405,7 @@ fn pump_thread(inner: Arc<Inner>) {
+     utils::macos::set_thread_qos_user_interactive();
+     let mut last = Instant::now();
      let mut timeout = HOUSEKEEPING;
      while !inner.quit.load(Ordering::Acquire) {
          inner.wake.wait(timeout);
 +        inner.beat();
          timeout = HOUSEKEEPING;
          let mut hosts = inner.hosts.lock().unwrap();
-         for host in hosts.iter_mut() {
-@@ -2230,17 +2424,54 @@ fn pump_thread(inner: Arc<Inner>) {
+         let recheck =
+@@ -2524,17 +2719,54 @@ fn pump_thread(inner: Arc<Inner>) {
      }
  }
  
@@ -972,7 +1055,7 @@ index 3edf944..ae1a6e6 100644
              .read()
              .unwrap()
              .iter()
-@@ -2249,18 +2480,28 @@ impl CoreAudioBackend {
+@@ -2543,16 +2775,25 @@ impl CoreAudioBackend {
              .collect();
          let inner = Arc::new(Inner {
              streams,
@@ -980,6 +1063,7 @@ index 3edf944..ae1a6e6 100644
              hosts: Mutex::new(hosts),
              wake,
              quit: AtomicBool::new(false),
+             route_changed: AtomicBool::new(false),
 +            epoch: Instant::now(),
 +            beat_ms: AtomicU64::new(0),
 +            ctl_deadline,
@@ -999,6 +1083,10 @@ index 3edf944..ae1a6e6 100644
 +        };
 +        let pump = spawn("virtio-snd coreaudio", pump_thread)?;
 +        let watchdog = spawn("virtio-snd watchdog", watchdog_thread)?;
+         for selector in ROUTE_SELECTORS {
+             let addr = property_address(selector, kAudioObjectPropertyScopeGlobal);
+             // SAFETY: `inner` outlives the registration; Drop removes it first.
+@@ -2574,6 +2815,7 @@ impl CoreAudioBackend {
          Ok(Self {
              inner,
              pump: Some(pump),
@@ -1006,7 +1094,7 @@ index 3edf944..ae1a6e6 100644
          })
      }
  
-@@ -2292,12 +2533,118 @@ impl CoreAudioBackend {
+@@ -2605,6 +2847,108 @@ impl CoreAudioBackend {
              host.trace_state(what, Some(&self.inner.streams.read().unwrap()[host.id]));
          }
      }
@@ -1115,7 +1203,8 @@ index 3edf944..ae1a6e6 100644
  }
  
  impl Drop for CoreAudioBackend {
-     fn drop(&mut self) {
+@@ -2623,6 +2967,10 @@ impl Drop for CoreAudioBackend {
+         }
          self.inner.quit.store(true, Ordering::Release);
          self.inner.wake.signal();
 +        if let Some(watchdog) = self.watchdog.take() {
@@ -1125,7 +1214,7 @@ index 3edf944..ae1a6e6 100644
          if let Some(pump) = self.pump.take() {
              let _ = pump.join();
          }
-@@ -2351,104 +2698,140 @@ impl AudioBackend for CoreAudioBackend {
+@@ -2676,104 +3024,140 @@ impl AudioBackend for CoreAudioBackend {
              );
              (fmt, buffer)
          };
@@ -1335,7 +1424,7 @@ index 3edf944..ae1a6e6 100644
          self.trace(host, "START");
          self.inner.wake.signal();
          Ok(())
-@@ -2456,15 +2839,23 @@ impl AudioBackend for CoreAudioBackend {
+@@ -2781,15 +3165,23 @@ impl AudioBackend for CoreAudioBackend {
  
      fn stop(&self, stream_id: u32) -> Result<()> {
          self.transition(stream_id, "stop", PCMState::Stop, PCMState::stop)?;
@@ -1366,7 +1455,7 @@ index 3edf944..ae1a6e6 100644
          Ok(())
      }
  
-@@ -2473,3 +2864,335 @@ impl AudioBackend for CoreAudioBackend {
+@@ -2798,3 +3190,335 @@ impl AudioBackend for CoreAudioBackend {
          self
      }
  }
@@ -1717,6 +1806,3 @@ index 99a74f0..859167d 100644
  mod tests {
      use std::fmt::Write;
  
--- 
-2.39.5 (Apple Git-154)
-
