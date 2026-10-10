@@ -2,22 +2,6 @@
   "sourceLanguage" : "en",
   "strings" : {
     "" : {},
-    "\"Still working\" card over the picture after 2 s without GPU work from SteamOS (loading, shader compiles)." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Карточка «Работа продолжается» поверх изображения после 2 с без активности GPU в SteamOS (загрузка, компиляция шейдеров)."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "SteamOS 连续 2 秒没有 GPU 活动时（加载或编译着色器），在画面上显示“仍在工作”提示卡片。"
-          }
-        }
-      }
-    },
     "%@ %lld%%" : {
       "localizations" : {
         "en" : {
@@ -394,6 +378,22 @@
         }
       }
     },
+    "A \"Loading…\" card over the picture after 2 s without GPU work from SteamOS." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Карточка «Загрузка…» поверх изображения после 2 с без активности GPU в SteamOS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 连续 2 秒没有 GPU 活动时，在画面上显示“正在加载…”提示卡片。"
+          }
+        }
+      }
+    },
     "A few errors: guest GPU context lost, shader pipeline compile failures (with an excerpt of the failing Metal shader source), libkrun panics, failed disk creation or first-start setup, VM stopped unexpectedly or killed (with the Mac's memory use), SteamOS not responding." : {
       "localizations" : {
         "ru" : {
@@ -550,6 +550,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在窗口右上角显示 Apple 的帧率叠加层：FPS、帧间隔、GPU 时间和内存（Ctrl+Cmd+P，“显示”菜单）。"
+          }
+        }
+      }
+    },
+    "Applies from the next start." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Применяется при следующем запуске."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次启动时生效。"
           }
         }
       }
@@ -1452,6 +1468,22 @@
         }
       }
     },
+    "DXMT (lean)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DXMT (облегчённый)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DXMT（精简）"
+          }
+        }
+      }
+    },
     "Default (Auto)" : {
       "localizations" : {
         "ru" : {
@@ -1576,6 +1608,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "描述出现的问题。你的描述、电子邮件地址和下方勾选的内容将发送给 FX Steam Launcher 开发者（sentry.fxgam.es）。"
+          }
+        }
+      }
+    },
+    "Direct3D 11 games through DXMT, drawn by Metal on the Mac (games need the Proton-lean compatibility tool, chosen once per game in Steam)." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Игры Direct3D 11 работают через DXMT, а рисует их Metal на Mac (играм нужен инструмент совместимости Proton-lean, который выбирается один раз для каждой игры в Steam)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direct3D 11 游戏通过 DXMT 运行，由 Mac 上的 Metal 绘制（游戏需要 Proton-lean 兼容工具，在 Steam 中为每个游戏选择一次）。"
+          }
+        }
+      }
+    },
+    "Direct3D through DXVK on Vulkan (Venus) and the Vulkan driver below." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direct3D через DXVK поверх Vulkan (Venus) и драйвера Vulkan ниже."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direct3D 通过 DXVK 运行在 Vulkan（Venus）和下方的 Vulkan 驱动之上。"
           }
         }
       }
@@ -2319,6 +2383,22 @@
         }
       }
     },
+    "Graphics path" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Графический путь"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图形路径"
+          }
+        }
+      }
+    },
     "Grow Disk" : {
       "localizations" : {
         "ru" : {
@@ -2686,6 +2766,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在加载 Steam 界面"
+          }
+        }
+      }
+    },
+    "Loading…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载…"
           }
         }
       }
@@ -3260,6 +3356,22 @@
         }
       }
     },
+    "Not available here: %@; Vulkan is used." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Недоступно здесь: %@; используется Vulkan."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此处不可用：%@；将使用 Vulkan。"
+          }
+        }
+      }
+    },
     "Not supported on this Mac's GPU." : {
       "localizations" : {
         "ru" : {
@@ -3304,6 +3416,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭"
+          }
+        }
+      }
+    },
+    "Off (1.0×)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выкл. (1.0×)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭（1.0×）"
           }
         }
       }
@@ -3384,6 +3512,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭：客户机保持分辨率，画面缩放到窗口。"
+          }
+        }
+      }
+    },
+    "Off: the guest renders at the window's pixel size. Below 1 the guest renders fewer pixels and MetalFX super resolution upscales them to the window (only with MetalFX)." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выкл.: гостевая система рендерит в размере окна в пикселях. При значении ниже 1 она рендерит меньше пикселей, а сверхразрешение MetalFX увеличивает их до размера окна (только с MetalFX)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭：客户机按窗口像素大小渲染。低于 1 时，客户机渲染更少的像素，并由 MetalFX 超分辨率放大到窗口（仅在支持 MetalFX 时）。"
           }
         }
       }
@@ -3848,6 +3992,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "稍后提醒"
+          }
+        }
+      }
+    },
+    "Render scale" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Масштаб рендеринга"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "渲染比例"
           }
         }
       }
@@ -5272,22 +5432,6 @@
         }
       }
     },
-    "Still working — loading or compiling shaders…" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Работа продолжается — загрузка или компиляция шейдеров…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仍在工作 — 正在加载或编译着色器…"
-          }
-        }
-      }
-    },
     "Stop" : {
       "localizations" : {
         "ru" : {
@@ -5573,6 +5717,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "客户机使用屏幕的完整像素密度（Retina 屏幕上每个点对应 2 × 2 像素），界面缩放至相同尺寸：文字清晰，但游戏需渲染 4 倍的像素。建议关闭此项并开启 MetalFX 超分辨率，以较低开销将客户机画面放大 2 倍以适应 Retina 屏幕。"
+          }
+        }
+      }
+    },
+    "The guest renders %@ of the window's pixels and MetalFX super resolution upscales them to the window: much cheaper for the guest, sharper than plain scaling. UI stays at real-world size (the EDID DPI is kept)." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Гостевая система рендерит %@ пикселей окна, а сверхразрешение MetalFX увеличивает их до размера окна: гораздо дешевле для гостя и чётче обычного масштабирования. Интерфейс остаётся реального размера (DPI в EDID сохраняется)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "客户机只渲染窗口像素的 %@，再由 MetalFX 超分辨率放大到窗口：客户机开销小得多，比普通缩放更清晰。界面保持实际尺寸（保留 EDID 的 DPI）。"
           }
         }
       }
@@ -5935,6 +6095,22 @@
         }
       }
     },
+    "Upscale lower game resolutions" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Увеличивать меньшие разрешения игр"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放大较低的游戏分辨率"
+          }
+        }
+      }
+    },
     "Use Default" : {
       "localizations" : {
         "ru" : {
@@ -6208,6 +6384,22 @@
         }
       }
     },
+    "Vulkan (classic)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vulkan (классический)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vulkan（经典）"
+          }
+        }
+      }
+    },
     "Vulkan driver" : {
       "localizations" : {
         "ru" : {
@@ -6366,6 +6558,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭窗口时"
+          }
+        }
+      }
+    },
+    "When the game renders below the window's size (its own resolution setting), the guest sends the game's size and the Mac upscales it to fill the window, instead of the guest upscaling it to the full Retina size. MetalFX up to 1.5×, bilinear beyond. The guest display's maximum is unchanged. Off: no change." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Если игра рендерит с разрешением меньше окна (своя настройка разрешения), гостевая система передаёт размер игры, а Mac увеличивает картинку до размера окна, вместо того чтобы гость растягивал её до полного размера Retina. MetalFX до 1.5×, дальше билинейно. Максимум гостевого дисплея не меняется. Выкл.: без изменений."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当游戏以低于窗口的分辨率渲染（游戏自身的分辨率设置）时，客户机会发送游戏的尺寸，由 Mac 将其放大填满窗口，而不是由客户机放大到完整的 Retina 尺寸。最高 1.5× 使用 MetalFX，超过则使用双线性。客户机显示器的最大分辨率不变。关闭：无变化。"
           }
         }
       }
