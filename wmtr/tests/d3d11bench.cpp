@@ -1,6 +1,13 @@
 // d3d11bench: small, deterministic D3D11 load for comparing graphics paths.
 // Usage: d3d11bench.exe [--draws N] [--seconds S] [--width W] [--height H] [--vsync 0|1]
-//                       [--overdraw K] [--csv path] [--label text]
+//                       [--overdraw K] [--csv path] [--label text] [--probe MS]
+// --probe MS (input-to-photon probe): on every key press or mouse motion the next frame is held back MS
+// milliseconds (and the clear colour flips). The host sees the gap in its presented-frame timestamps
+// (WMTR_FRAMES / STEAMAC_PERF_FRAMES); the first frame after the gap is the response to the input, so
+// latency = its time - input time - MS (wmtr/tools/probe_latency.py). No content readback needed.
+// --probe-every SEC: the probe triggers itself every SEC seconds instead of waiting for input and prints
+// "probe-trigger <unix ns>" (guest wall clock through Wine) to --probe-log PATH (stdout is not kept under Steam's
+// launch chain): app-reaction-to-present latency, no input focus needed.
 // Per frame: N draws of an instanced-free textured cube grid, each with its own constant buffer
 // update (Map WRITE_DISCARD), plus K full-screen overdraw passes with a moderately heavy pixel
 // shader (fill-rate/GPU load). Writes one CSV row per frame: frame,cpu_ms,present_ms,t_s.
@@ -21,10 +28,15 @@ static int g_draws = 2000, g_seconds = 20, g_width = 1280, g_height = 800, g_vsy
 static const char *g_csv = "d3d11bench.csv";
 static const char *g_label = "run";
 static bool g_quit = false;
+static int g_probe_ms = 0;
+static double g_probe_every = 0;
+static const char *g_probe_log = "probe-triggers.txt";
+static volatile LONG g_input = 0; /* inputs seen since the last frame (probe mode) */
 static void step(const char *s) { fprintf(stderr, "step: %s\n", s); fflush(stderr); }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
   if (m == WM_CLOSE || (m == WM_KEYDOWN && w == VK_ESCAPE)) { g_quit = true; return 0; }
+  if (g_probe_ms && (m == WM_KEYDOWN || m == WM_MOUSEMOVE || m == WM_INPUT)) InterlockedIncrement(&g_input);
   return DefWindowProcA(h, m, w, l);
 }
 
@@ -101,6 +113,9 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--csv")) g_csv = argv[i + 1];
     else if (!strcmp(argv[i], "--label")) g_label = argv[i + 1];
     else if (!strcmp(argv[i], "--dump")) g_dump = argv[i + 1];
+    else if (!strcmp(argv[i], "--probe")) g_probe_ms = atoi(argv[i + 1]);
+    else if (!strcmp(argv[i], "--probe-every")) g_probe_every = atof(argv[i + 1]);
+    else if (!strcmp(argv[i], "--probe-log")) g_probe_log = argv[i + 1];
   }
   WNDCLASSA wc = {}; wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandleA(nullptr); wc.lpszClassName = "d3d11bench";
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -174,7 +189,22 @@ int main(int argc, char **argv) {
     if (t > g_seconds) break;
     if (g_dump) t = frame / 60.0;
     if (frame < 3) step("frame");
-    float clear[4] = {0.05f, 0.05f, 0.08f, 1};
+    static bool flip = false;
+    static double next_trigger = 5;
+    bool self = g_probe_ms && g_probe_every > 0 && t >= next_trigger;
+    if (self) {
+      next_trigger = t + g_probe_every;
+      FILETIME ft; GetSystemTimePreciseAsFileTime(&ft);
+      unsigned long long ns = ((((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime) - 116444736000000000ULL) * 100ULL;
+      static FILE *pl = fopen(g_probe_log, "w");
+      if (pl) { fprintf(pl, "probe-trigger %llu\n", ns); fflush(pl); }
+    }
+    if (self || (g_probe_ms && InterlockedExchange(&g_input, 0))) {
+      fprintf(stderr, "probe: input at frame %u\n", frame);
+      Sleep(g_probe_ms); /* the gap the host looks for */
+      flip = !flip;
+    }
+    float clear[4] = {0.05f, flip ? 0.6f : 0.05f, 0.08f, 1};
     ctx->ClearRenderTargetView(rtv, clear);
     D3D11_VIEWPORT vp = {0, 0, (float)g_width, (float)g_height, 0, 1};
     ctx->RSSetViewports(1, &vp); ctx->OMSetRenderTargets(1, &rtv, nullptr);
