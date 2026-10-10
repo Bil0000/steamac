@@ -42,7 +42,7 @@ lopts_off() { [ "$LOPTS" = 1 ] || return 0
   $G "$GUEST_ENV ~/vrc/lean/lean-launchopts.sh off" >> "$R/driver.log" 2>&1 && { LOPTS=0; log "launch options restored"; } || log "WARN: launch options NOT restored"; }
 close_game() {
   $G "$GUEST_ENV steam steam://close/438100" >/dev/null 2>&1
-  local i; for i in $(seq 1 $((POLL / 2 + 1))); do $G 'pgrep -f "VRChat[.]exe" >/dev/null' 2>/dev/null || { log "game exited"; return 0; }; $SLEEP 2; done
+  local i; for i in $(seq 1 $((POLL * 2 + 1))); do $G 'pgrep -f "VRChat[.]exe" >/dev/null' 2>/dev/null || { log "game exited"; return 0; }; $SLEEP 2; done
   log "WARN: game still running after close"; return 1; }
 poweroff() {
   [ -n "$VMPID" ] || return 0
@@ -95,6 +95,8 @@ log "steam up; free guest /home: $($G "df -h /home | tail -1" 2>/dev/null)"
 # guest-host clock offset (guest log times -> host clock), ssh round trip midpoint
 h0=$(nowms); gm=$($G 'date +%s%3N'); h1=$(nowms); need_int guest-clock "$gm"; OFS=$(( (h0 + h1) / 2 - gm )); log "clock: host-guest ${OFS} ms"
 $G "echo $MODE > ~/vrc/lean/MODE; rm -f ~/vrc/lean/TRACE; mkdir -p ~/vrc/route" || die "guest setup"
+# GUEST_PREP: one guest shell command before the launch (e.g. pick the wmtr client build under test)
+if [ -n "${GUEST_PREP:-}" ]; then $G "$GUEST_PREP" || die "guest prep"; log "guest prep: $GUEST_PREP"; fi
 if [ "$MODE" = wmtr ]; then LOPTS=1; $G "$GUEST_ENV ~/vrc/lean/lean-launchopts.sh on" >> "$R/driver.log" 2>&1 || die "launch options on"
   for _ in $(seq 1 30); do $G 'pgrep -x steamwebhelper >/dev/null' 2>/dev/null && break; $SLEEP 4; done; $SLEEP 20; fi
 $SCP "$TOOLS/vrc-route.py" "$TOOLS/vrc-route-square.json" vrc-guest:vrc/route/ || die "route copy"
