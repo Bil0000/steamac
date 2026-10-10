@@ -8,6 +8,7 @@
 #include "wmtr_host.h"
 
 @interface TestVMView : NSView
+@property BOOL gameLayersVisible;
 @end
 @implementation TestVMView
 - (CALayer *)makeBackingLayer { return [CAMetalLayer layer]; }
@@ -37,6 +38,7 @@ int main(void) {
         CHECK(layer && [vm.layer.sublayers containsObject:(CALayer *)layer], "game layer not attached to the VMView layer");
         CHECK(layer && ((CAMetalLayer *)layer).device == dev, "layer device");
         CHECK(layer && NSEqualRects(NSRectFromCGRect(((CALayer *)layer).frame), NSRectFromCGRect(vm.layer.bounds)), "layer frame");
+        CHECK(layer && ((CALayer *)layer).hidden, "game layer shown although no game has the guest's focus");
       });
       wmtr_present_release_view(NULL, view);
       dispatch_async(dispatch_get_main_queue(), ^{

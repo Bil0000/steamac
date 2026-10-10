@@ -706,6 +706,9 @@ wmtr_present_create_view(void *ctx, uint64_t hwnd, void *device, uint64_t *layer
         layer.contentsGravity = kCAGravityResizeAspect;
         layer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
         layer.opaque = YES;
+        /* the launcher shows game layers only while a game has the guest's focus (VMView.gameLayersVisible) */
+        if ([vm respondsToSelector:@selector(gameLayersVisible)])
+          layer.hidden = ![[vm valueForKey:@"gameLayersVisible"] boolValue];
         [vm.layer addSublayer:layer];
         break;
       }
