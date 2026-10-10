@@ -6,10 +6,14 @@
 # compat-tool setting are untouched. Everything else (EAC runtime env, game args) passes through unchanged.
 set -u
 L=$HOME/vrc/lean
-# ~/vrc/lean/MODE selects the path per launch without touching Steam's settings again: "wmtr" = lean path,
-# anything else = today's path, the command unchanged (A/B runs)
-if [ "$(cat "$L/MODE" 2>/dev/null)" != wmtr ]; then
-  echo "lean-wrap: $(date '+%F %T') passthrough (MODE=$(cat "$L/MODE" 2>/dev/null))" >> "$L/lean-wrap.log"
+# The launcher's Settings > Advanced "Graphics path" (kernel command line steamac.gfx=dxmt|vulkan) picks the path
+# per boot; without it (older launcher), ~/vrc/lean/MODE does: "wmtr" = lean path, anything else = today's
+# path, the command unchanged
+mode=
+for w in $(cat "${LEAN_CMDLINE:-/proc/cmdline}" 2>/dev/null); do case $w in steamac.gfx=dxmt) mode=wmtr ;; steamac.gfx=*) mode=passthrough ;; esac; done
+[ -n "$mode" ] || mode=$(cat "$L/MODE" 2>/dev/null)
+if [ "$mode" != wmtr ]; then
+  echo "lean-wrap: $(date '+%F %T') passthrough (mode ${mode:-unset})" >> "$L/lean-wrap.log"
   exec "$@"
 fi
 args=()
