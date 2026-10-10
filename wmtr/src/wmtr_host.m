@@ -127,6 +127,72 @@ frames_out(void) {
   return f;
 }
 
+/* per-call statistics (WMTR_CALLSTATS=<path>): cumulative count, synchronous count and host execution
+ * time per call, written every 10 s (and when a client goes away) as CSV snapshots
+ * t_ns,call,name,class,count,sync,exec_ns; consecutive snapshots give the per-frame call profile of a
+ * running game (presentDrawable = calls 47/48) without touching the guest. Off (one getenv) unless set. */
+static const char *const call_name[146] = {
+#define X(i, n, t, c) [i] = #n,
+#include "wmtr_calls.inc"
+#undef X
+};
+static _Atomic uint64_t cs_count[146], cs_sync[146], cs_ns[146];
+static FILE *cs_file;
+static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void
+callstats_dump(void) {
+  if (!cs_file) return;
+  pthread_mutex_lock(&cs_lock);
+  uint64_t t = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+  for (int i = 0; i < 146; i++) {
+    uint64_t n = atomic_load(&cs_count[i]);
+    if (!n) continue;
+    fprintf(cs_file, "%llu,%d,%s,%u,%llu,%llu,%llu\n", (unsigned long long)t, i, call_name[i] ? call_name[i] : "?",
+            call_class[i], (unsigned long long)n, (unsigned long long)atomic_load(&cs_sync[i]),
+            (unsigned long long)atomic_load(&cs_ns[i]));
+  }
+  fflush(cs_file);
+  pthread_mutex_unlock(&cs_lock);
+}
+
+static void *
+callstats_thread(void *arg) {
+  (void)arg;
+  pthread_setname_np("wmtr-callstats");
+  for (;;) { sleep(10); callstats_dump(); }
+  return NULL;
+}
+
+static int cs_state; /* 1 on, 2 off */
+static void
+callstats_init(void) {
+  const char *p = getenv("WMTR_CALLSTATS");
+  if (p && *p && (cs_file = fopen(p, "a"))) {
+    pthread_t t;
+    pthread_create(&t, NULL, callstats_thread, NULL);
+    pthread_detach(t);
+    __atomic_store_n(&cs_state, 1, __ATOMIC_RELEASE);
+  } else {
+    __atomic_store_n(&cs_state, 2, __ATOMIC_RELEASE);
+  }
+}
+
+static int
+callstats_on(void) {
+  static pthread_once_t once = PTHREAD_ONCE_INIT;
+  if (__builtin_expect(!__atomic_load_n(&cs_state, __ATOMIC_ACQUIRE), 0)) pthread_once(&once, callstats_init);
+  return cs_state == 1;
+}
+
+static inline void
+callstats_add(uint16_t call, int sync, uint64_t ns) {
+  if (call >= 146) return;
+  atomic_fetch_add_explicit(&cs_count[call], 1, memory_order_relaxed);
+  if (sync) atomic_fetch_add_explicit(&cs_sync[call], 1, memory_order_relaxed);
+  atomic_fetch_add_explicit(&cs_ns[call], ns, memory_order_relaxed);
+}
+
 static void
 frame_record_on_completion(id<MTLCommandBuffer> cb) {
   [cb addCompletedHandler:^(id<MTLCommandBuffer> b) {
@@ -490,9 +556,12 @@ execute(struct wmtr_host *h, uint8_t *rec, uint32_t len) {
         sigjmp_buf jb;
         if (sigsetjmp(jb, 1) == 0) {
           fault_jmp = &jb;
+          int cs = callstats_on();
+          uint64_t t0 = cs ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW) : 0;
           @autoreleasepool {
             st = host_call(h, r->h.call, payload, r, relocs, orig);
           }
+          if (cs) callstats_add(r->h.call, r->h.flags & WMTR_F_SYNC, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
           fault_jmp = NULL;
           uint32_t ti = atomic_fetch_add(&h->trace_n, 1) % 128;
           h->trace[ti].call = r->h.call; h->trace[ti].slot = r->h.slot; h->trace[ti].st = (uint32_t)st;
@@ -641,6 +710,7 @@ wmtr_host_destroy(struct wmtr_host *h) {
   pthread_cond_signal(&h->cond);
   pthread_mutex_unlock(&h->lock);
   pthread_join(h->thread, NULL);
+  callstats_dump();
   /* let queued compile/blocking jobs finish: they call back into the embedder */
   dispatch_barrier_sync(h->compile_q, ^{});
   dispatch_barrier_sync(h->block_q, ^{});

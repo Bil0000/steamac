@@ -116,6 +116,9 @@ int main(void) {
     snprintf(frames_path, sizeof frames_path, "/tmp/wmtr_frames_%d.csv", (int)getpid());
     unlink(frames_path);
     setenv("WMTR_FRAMES", frames_path, 1);
+    char stats_path[] = "/tmp/wmtr_callstats_XXXXXX";
+    close(mkstemp(stats_path));
+    setenv("WMTR_CALLSTATS", stats_path, 1);
     /* 1. output buffer through a uint64 pointer field */
     char a[32] = {0}, b[32] = {0};
     struct unixcall_nsstring_getcstring pa = {(obj_handle_t)"metal string", (uint64_t)(uintptr_t)a, sizeof a, 4, 0}, pb = pa;
@@ -254,6 +257,17 @@ int main(void) {
       CHECK(fs == (NTSTATUS)0xC0000005 && fs2 == (NTSTATUS)0xC0000005, "fault containment: %x then %x", fs, fs2);
       wmtr_host_destroy(H);
       CHECK(n_released == 2 && released[1] == v2.ret_view, "destroy did not release the leftover view (%d releases)", n_released);
+      /* WMTR_CALLSTATS: destroy wrote a snapshot; call 39 (sync, above) is in it with its sync count */
+      FILE *sf = fopen(stats_path, "r");
+      char sl[256]; int found = 0;
+      while (sf && fgets(sl, sizeof sl, sf)) {
+        unsigned long long t, n, sy, ns; int call; char name[96]; unsigned cls;
+        if (sscanf(sl, "%llu,%d,%95[^,],%u,%llu,%llu,%llu", &t, &call, name, &cls, &n, &sy, &ns) == 7 && call == 39 && n >= 1 && sy >= 1)
+          found = 1;
+      }
+      if (sf) fclose(sf);
+      CHECK(found, "WMTR_CALLSTATS: no snapshot line for call 39");
+      unlink(stats_path);
     }
   }
   printf(failures ? "wmtr_loopback: %d FAILED\n" : "wmtr_loopback: all passed\n", failures);
