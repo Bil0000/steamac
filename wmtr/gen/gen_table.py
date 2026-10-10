@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Generate wmtr_calls.inc: X(index, name, params_type, class) for DXMT 4ddb20e winemetal unix calls.
 class: A = async (no outputs), S = sync, B = sync and may block (host runs it on a helper thread),
-C = sync and heavy (shader/pipeline compile; host runs it on a worker pool)."""
+C = sync and heavy (shader/pipeline compile; host runs it on a worker pool).
+
+Usage (reproduces src/wmtr_calls.inc byte-for-byte from a DXMT tree at the pinned revision):
+
+  D=<dxmt>/src/winemetal
+  python3 gen/gen_table.py gen/scan_thunks.py \\
+      $D/winemetal_thunks.c $D/airconv_thunks.c $D/unix/winemetal_unix.c src/wmtr_calls.inc
+"""
 import re, subprocess, sys
 out = subprocess.run([sys.executable, '-I', sys.argv[1], sys.argv[2], sys.argv[3]], capture_output=True, text=True).stdout
 airconv_idx = {}  # airconv codes are enum names; resolve from the unix table order
