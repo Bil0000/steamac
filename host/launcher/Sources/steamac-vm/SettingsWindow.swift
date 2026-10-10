@@ -263,7 +263,7 @@ private struct GeneralTab: View {
                 }
                 Toggle(isOn: $settings.showStallIndicator) {
                     Label2(title: "Show indicator when the GPU goes idle",
-                           detail: "\"Still working\" card over the picture after 2 s without GPU work from SteamOS (loading, shader compiles).",
+                           detail: "A \"Loading…\" card over the picture after 2 s without GPU work from SteamOS.",
                            now: true)
                 }
                 Toggle(isOn: $settings.openFullscreen) {

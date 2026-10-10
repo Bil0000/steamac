@@ -31,7 +31,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     private var subscriptions: [AnyCancellable] = []
     /// FX boot/shutdown overlay, layered over the Metal view.
     let overlay: OverlayView
-    /// "Still working" card shown when the guest GPU goes idle (StallMonitor), above the overlay.
+    /// "Loading…" card shown when the guest GPU goes idle (StallMonitor), above the overlay.
     let stallView: StallIndicatorView
     private var stall: StallMonitor?
     /// Compact boot / shutdown progress while the full overlay is not up before `ready`, and the

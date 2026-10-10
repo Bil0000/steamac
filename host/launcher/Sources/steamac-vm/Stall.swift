@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import QuartzCore
 
-/// "Still working" indicator (Settings > General). Shown after `ready`, never during the
+/// "Loading…" indicator (Settings > General). Shown after `ready`, never during the
 /// boot/shutdown overlay, when the guest sends no GPU work for `idleThreshold` while a game has
 /// focus (`focus game <appid>`; the idle Steam UI legitimately sends none for minutes), or —
 /// whatever has focus — when the guest's heartbeat has also stopped for `heartbeatTimeout`.
@@ -17,7 +17,7 @@ import QuartzCore
 /// The idle window starts at the latest of: last GPU work, gate opening (overlay gone, setting
 /// on), the game getting focus — so stale idle time never fires at once. The wording comes from
 /// the guest agent's heartbeat (`alive <uptime_ms> <loadavg1>` once a second over fx.progress)
-/// and this process's CPU time (vCPU threads included): alive → "Still working…" + CPU, no
+/// and this process's CPU time (vCPU threads included): alive → "Loading…" + CPU, no
 /// heartbeat for `heartbeatTimeout` → "SteamOS is not responding…". With perf stats on it also
 /// logs the counter rates and the longest idle stretch every 5 s. Main thread only.
 final class StallMonitor {
@@ -207,7 +207,7 @@ final class StallMonitor {
         if notResponding() {
             return ("SteamOS is not responding…", "waiting (\(Int(idle)) s)")
         }
-        let title = "Still working — loading or compiling shaders…"
+        let title = "Loading…"
         var detail = "VM CPU \(String(format: "%.1f", currentCPU())) cores"
         if lastAlive > 0 { detail += " · guest alive" }
         return (title, detail)

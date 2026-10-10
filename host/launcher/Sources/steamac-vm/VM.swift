@@ -101,6 +101,7 @@ final class VM {
         setenv("VKR_VULKAN_DRIVER", "@rpath/" + o.vulkanDriver.library, 1)
         setenv("VKR_GPU_BUDGET_MIB", String(o.gpuBudgetMiB), 1)
         OverlayView.vulkanDriver = o.vulkanDriver
+        OverlayView.graphicsPath = o.graphicsPath
         log("gpu: Venus → \(o.vulkanDriver.name), \(o.gpuBudgetMiB) MiB advertised memory budget")
         let flags = o.gpuFlags ?? (STEAMAC_VIRGL_VENUS | STEAMAC_VIRGL_NO_VIRGL)
         try krun("krun_set_gpu_options2", krun_set_gpu_options2(ctx, flags, UInt64(o.shmMiB) << 20))

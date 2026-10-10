@@ -81,7 +81,7 @@ enum StallSelfTest {
         let view = wc.stallView
         // The card's "Report…" link (only with the not-responding wording).
         view.onReport = { log("stall selftest: Report… link activated") }
-        let working = "Still working — loading or compiling shaders…"
+        let working = "Loading…"
         func expectHidden(_ what: String) -> String? {
             !monitor.indicatorShown && !view.shown ? nil : "\(what): indicator should be hidden"
         }
