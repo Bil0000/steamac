@@ -8,16 +8,24 @@
 #include "wmtr_host.h"
 
 @interface TestVMView : NSView
-@property BOOL gameLayersVisible;
+@property(nonatomic) BOOL gameLayersVisible;
+@property int policyApplied; /* the launcher's didSet re-applies visibility and Metal HUD placement */
 @end
 @implementation TestVMView
 - (CALayer *)makeBackingLayer { return [CAMetalLayer layer]; }
+- (void)setGameLayersVisible:(BOOL)v { _gameLayersVisible = v; _policyApplied++; }
 @end
 
+int wmtr_debug_layer_policy_frames(void *layer, int frames);
 static int failures;
 #define CHECK(c, m) do { if (!(c)) { failures++; fprintf(stderr, "FAIL: %s\n", m); } } while (0)
 
 int main(void) {
+  { /* the view re-applies its layer policy (Metal HUD) on a game layer's 1st, 10th and 60th frames only */
+    CAMetalLayer *l = [CAMetalLayer layer];
+    int n = wmtr_debug_layer_policy_frames((__bridge void *)l, 100);
+    if (n != 3) { failures++; fprintf(stderr, "FAIL: policy re-applied %d times in 100 frames, want 3\n", n); }
+  }
   @autoreleasepool {
     setenv("WMTR_PRESENT", "overlay", 1);
     [NSApplication sharedApplication];
@@ -39,6 +47,7 @@ int main(void) {
         CHECK(layer && ((CAMetalLayer *)layer).device == dev, "layer device");
         CHECK(layer && NSEqualRects(NSRectFromCGRect(((CALayer *)layer).frame), NSRectFromCGRect(vm.layer.bounds)), "layer frame");
         CHECK(layer && ((CALayer *)layer).hidden, "game layer shown although no game has the guest's focus");
+        CHECK(((TestVMView *)vm).policyApplied >= 1, "view's layer policy not re-applied after adding the game layer");
       });
       wmtr_present_release_view(NULL, view);
       dispatch_async(dispatch_get_main_queue(), ^{

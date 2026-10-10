@@ -193,6 +193,42 @@ callstats_add(uint16_t call, int sync, uint64_t ns) {
   atomic_fetch_add_explicit(&cs_ns[call], ns, memory_order_relaxed);
 }
 
+/* The launcher's layer policy (VMView: game layer visibility, Metal HUD placement) acts on a layer's Metal
+ * HUD only once libMTLHud attached to it, which happens when the layer's first drawable reached the screen.
+ * So the view re-applies its policy when a game layer's 1st, 10th and 60th frames are done. */
+static char policy_frames_key;
+static int
+layer_policy_due(CALayer *layer) {
+  NSNumber *n = objc_getAssociatedObject(layer, &policy_frames_key);
+  int c = n.intValue + 1;
+  if (c > 60) return 0;
+  objc_setAssociatedObject(layer, &policy_frames_key, @(c), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  return c == 1 || c == 10 || c == 60;
+}
+
+static void
+layer_policy_on_present(id<MTLCommandBuffer> cb, id drawable) {
+  if (![drawable respondsToSelector:@selector(layer)]) return;
+  CALayer *layer = [drawable layer];
+  if (!layer || !layer_policy_due(layer)) return;
+  [cb addCompletedHandler:^(id<MTLCommandBuffer> b) {
+    (void)b;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      id view = layer.superlayer.delegate;
+      if ([view respondsToSelector:@selector(gameLayersVisible)])
+        [view setValue:[view valueForKey:@"gameLayersVisible"] forKey:@"gameLayersVisible"];
+    });
+  }];
+}
+
+/* test hook: how many of `frames` presents of `layer` re-apply the view's policy */
+__attribute__((visibility("default"))) int
+wmtr_debug_layer_policy_frames(void *layer, int frames) {
+  int n = 0;
+  for (int i = 0; i < frames; i++) n += layer_policy_due((__bridge CALayer *)layer);
+  return n;
+}
+
 static void
 frame_record_on_completion(id<MTLCommandBuffer> cb) {
   [cb addCompletedHandler:^(id<MTLCommandBuffer> b) {
@@ -511,8 +547,11 @@ host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr
   }
   impl_fn f = (impl_fn)wmtr_impl_funcs[call];
   if (!f) return STATUS_UNSUCCESSFUL;
-  if ((call == 47 || call == 48) && frames_out()) /* presentDrawable: record when the frame is done */
-    frame_record_on_completion((id<MTLCommandBuffer>)((struct unixcall_generic_obj_obj_noret *)params)->handle);
+  if (call == 47 || call == 48) { /* presentDrawable (both param structs start with buffer, drawable) */
+    id<MTLCommandBuffer> cb = (id<MTLCommandBuffer>)((struct unixcall_generic_obj_obj_noret *)params)->handle;
+    if (frames_out()) frame_record_on_completion(cb); /* record when the frame is done */
+    layer_policy_on_present(cb, (id)((struct unixcall_generic_obj_obj_noret *)params)->arg);
+  }
   NTSTATUS st = f(params);
   keep_autoreleased(r->h.slot, call, params);
   return st;
@@ -780,6 +819,9 @@ wmtr_present_create_view(void *ctx, uint64_t hwnd, void *device, uint64_t *layer
         if ([vm respondsToSelector:@selector(gameLayersVisible)])
           layer.hidden = ![[vm valueForKey:@"gameLayersVisible"] boolValue];
         [vm.layer addSublayer:layer];
+        /* re-apply the view's layer policy (visibility, Metal HUD placement) now that the layer exists */
+        if ([vm respondsToSelector:@selector(gameLayersVisible)])
+          [vm setValue:[vm valueForKey:@"gameLayersVisible"] forKey:@"gameLayersVisible"];
         break;
       }
       if (!view) NSLog(@"wmtr: no VMView found for the overlay presenter");
