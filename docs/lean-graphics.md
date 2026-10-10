@@ -210,3 +210,20 @@ d3d11bench A/B in the VM (Steam launch chain, scratch prefixes, 8192 MiB, one 20
 Mac swapping 9.3 GB; raw p3/ab2/): fill-bound 100 draws/16 passes 21.3 vs 30.1 fps (1% low 14.1 vs
 28.4); 100/32 10.8 vs 14.8; 10000 draws 67.4 vs 120.0 (wmtr display-capped); 2000/4 60.5 vs 120.1
 (capped); 200/0 not comparable (gamescope does not display most DXVK frames at 1100 fps).
+
+## Graphics path setting and the guest (2026-10-10, option C)
+
+* Launcher: Settings > Advanced "Graphics path" (`--graphics-path`); DXMT sets the wmtr env for libkrun and
+  `steamac.gfx=dxmt` on the kernel command line (1679dc1).
+* Guest: `steam-gfx-path` (layer, ExecStartPre of steam.service + `steamac-gfx-path.service --watch`) swaps every
+  installed Proton's DXVK set (d3d11, dxgi, d3d10core) for DXMT's, adds winemetal next to Wine's builtins and links it
+  into Proton's prefix template; Vulkan restores Proton's files byte for byte (10e1c0f). An env-only route does not
+  work: Proton appends its own `d3d11=n;dxgi=n` after the user's WINEDLLOVERRIDES (Wine keeps the later entry) and
+  searches its own lib/wine before WINEDLLPATH.
+* Layer: `make -C wmtr dxmt-payload` stages work/out/dxmt (DXMT PE dlls from DXMT_PE=, the Linux client), then
+  `scripts/build-image.sh layer` (builder container) includes it. Without the container (this Mac has no Docker),
+  a trial layer = the shipped layer extracted with `fsck.erofs --extract` + the steam-gfx-path files + payload,
+  packed with `mkfs.erofs -b 4096 -zlz4hc ... --all-root` (the guest kernel mounts only 4 KiB blocks; mkfs.erofs on
+  macOS defaults to the 16 KiB page size).
+* Measuring a played session: `WMTR_CALLSTATS=<csv>` in the launcher's environment; `wmtr/tools/callstats_report.py`
+  gives calls, sync calls, host time, executor sleeps and kicks per frame.
