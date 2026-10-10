@@ -8,6 +8,7 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#include <mach/mach_time.h>
 #include <pthread.h>
 #include <time.h>
 #include <setjmp.h>
@@ -63,6 +64,8 @@ struct wmtr_host {
   uint64_t *views;
   uint32_t n_views, cap_views;
   _Atomic uint64_t n_req, n_sync, n_bytes, n_worker, n_sleep;
+  /* how long the executor polls an empty ring before it sleeps, in mach ticks (WMTR_HOST_SPIN_US) */
+  _Atomic uint64_t spin_ticks;
 };
 
 static int log_level = 1;
@@ -703,12 +706,14 @@ executor(void *arg) {
     uint64_t tail = R->tail;
     uint64_t head = __atomic_load_n(&R->head, __ATOMIC_ACQUIRE);
     if (tail == head) {
-      /* spin briefly, then sleep until kicked */
+      /* poll for the spin budget, then sleep until kicked: a sleeping executor costs the next request a kick
+       * (a virtio-gpu submission and a VM exit in the guest), a polling one costs host CPU */
       int got = 0;
-      for (int i = 0; i < 2000 && !got; i++) {
-        if (__atomic_load_n(&R->head, __ATOMIC_ACQUIRE) != tail) got = 1;
-        else __asm__ __volatile__("yield");
-      }
+      uint64_t end = mach_absolute_time() + atomic_load_explicit(&h->spin_ticks, memory_order_relaxed);
+      do {
+        if (__atomic_load_n(&R->head, __ATOMIC_ACQUIRE) != tail) { got = 1; break; }
+        __asm__ __volatile__("yield");
+      } while (mach_absolute_time() < end);
       if (got) continue;
       pthread_mutex_lock(&h->lock);
       __atomic_store_n(&R->host_idle, 1, __ATOMIC_SEQ_CST);
@@ -773,6 +778,8 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
   h->slots = (struct wmtr_slot *)((uint8_t *)ring + WMTR_SLOTS_OFFSET);
   h->ops = ops; h->ctx = ctx;
   pthread_mutex_init(&h->lock, NULL); pthread_cond_init(&h->cond, NULL);
+  const char *sp = getenv("WMTR_HOST_SPIN_US");
+  wmtr_host_set_spin(h, (uint64_t)(sp && *sp ? atoll(sp) : WMTR_HOST_SPIN_US_DEFAULT) * 1000);
   pthread_mutex_init(&h->free_lock, NULL); pthread_mutex_init(&h->event_lock, NULL);
   pthread_mutex_init(&h->view_lock, NULL);
   h->compile_q = dispatch_queue_create("wmtr.compile", DISPATCH_QUEUE_CONCURRENT);
@@ -782,6 +789,13 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
   pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INTERACTIVE, 0);
   pthread_create(&h->thread, &a, executor, h);
   return h;
+}
+
+void
+wmtr_host_set_spin(struct wmtr_host *h, uint64_t ns) {
+  static mach_timebase_info_data_t tb;
+  if (!tb.denom) mach_timebase_info(&tb);
+  atomic_store(&h->spin_ticks, ns * tb.denom / tb.numer);
 }
 
 void

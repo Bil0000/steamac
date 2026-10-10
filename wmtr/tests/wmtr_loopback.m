@@ -269,6 +269,21 @@ int main(void) {
       struct unixcall_generic_obj_uint64_ret pf4 = {0};
       NTSTATUS fs2 = remote(39, &pf4);
       CHECK(fs == (NTSTATUS)0xC0000005 && fs2 == (NTSTATUS)0xC0000005, "fault containment: %x then %x", fs, fs2);
+      { /* executor spin budget: with a budget longer than the gaps between requests it never sleeps */
+        struct wmtr_host_stats st0, st1, st2;
+        wmtr_host_set_spin(H, 0);
+        wmtr_host_get_stats(H, &st0);
+        for (int i = 0; i < 20; i++) { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); usleep(300); }
+        wmtr_host_get_stats(H, &st1);
+        wmtr_host_set_spin(H, 20000000);
+        { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); }
+        wmtr_host_get_stats(H, &st1);
+        for (int i = 0; i < 20; i++) { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); usleep(300); }
+        wmtr_host_get_stats(H, &st2);
+        CHECK(st1.idle_sleeps - st0.idle_sleeps >= 15, "no spin: %llu sleeps in 20 gaps", st1.idle_sleeps - st0.idle_sleeps);
+        CHECK(st2.idle_sleeps - st1.idle_sleeps <= 1, "20 ms spin: %llu sleeps in 20 gaps of 0.3 ms", st2.idle_sleeps - st1.idle_sleeps);
+        wmtr_host_set_spin(H, WMTR_HOST_SPIN_US_DEFAULT * 1000);
+      }
       wmtr_host_destroy(H);
       CHECK(n_released == 2 && released[1] == v2.ret_view, "destroy did not release the leftover view (%d releases)", n_released);
       /* WMTR_CALLSTATS: destroy wrote a snapshot; call 39 (sync, above) is in it with its sync count */
