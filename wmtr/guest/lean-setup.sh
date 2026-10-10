@@ -19,4 +19,7 @@ for m in dxvk wmtr; do
 done
 for f in d3d11 dxgi d3d10core; do cp "$SRC/lib/wine/dxvk/x86_64-windows/$f.dll" "$L/pfx-dxvk/drive_c/windows/system32/$f.dll"; done
 for f in d3d11.dll dxgi.dll d3d10core.dll winemetal.dll; do cp "$DX/$f" "$L/pfx-wmtr/drive_c/windows/system32/$f"; done
+# proton also installs vkd3d's dlls (wined3d and d3dcompiler_47 import them; test programs that compile
+# HLSL at run time need them)
+for m in dxvk wmtr; do cp "$SRC"/lib/vkd3d/x86_64-windows/libvkd3d*.dll "$L/pfx-$m/drive_c/windows/system32/"; done
 md5sum "$W/x86_64-windows/d3d11.dll" "$SRC/lib/wine/x86_64-windows/d3d11.dll" "$L/pfx-dxvk/drive_c/windows/system32/d3d11.dll" "$L/pfx-wmtr/drive_c/windows/system32/d3d11.dll"

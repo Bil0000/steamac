@@ -3,6 +3,9 @@
 #   make server   wmtr-server (arm64): standalone executor for the two-process prototype
 #   make client-macos  winemetal.so (x86_64 Mach-O): client unixlib for macOS Wine (socket transport)
 #   make test     build and run tests/wmtr_loopback
+# Linux (x86-64 build box, CC=gcc):
+#   make client-linux  winemetal.so (x86-64 ELF): guest client unixlib (virtio-gpu transport), glibc <= 2.14 symbols
+#   make test-linux    build and run tests/wmtr_ntdll_test against it
 # Inputs: DXMT source at the pinned revision (DXMT=), its native build dir with libairconv.a (DXMT_BUILD=),
 # LLVM 15 static libs (LLVM=).
 DXMT ?= /Volumes/LEANWORK/dxmt
@@ -62,6 +65,17 @@ $(OUT)/wmtr_present_test: tests/wmtr_present_test.m $(OUT)/libwmtr_host.dylib
 $(OUT)/wmtr_loopback: tests/wmtr_loopback.m src/wmtr_host.m src/wmtr_client.c include/*.h | $(OUT)
 	$(CC) $(CFLAGS) -o $@ tests/wmtr_loopback.m src/wmtr_host.m src/wmtr_client.c -framework Foundation -framework Metal -framework Cocoa -framework QuartzCore
 
+LINUX_CFLAGS = -O2 -g -Wall -Wno-unused-function $(INC) -include include/wmtr_glibc_compat.h
+client-linux: $(OUT)/x86_64-linux/winemetal.so
+$(OUT)/x86_64-linux/winemetal.so: src/wmtr_client.c src/transport_virtgpu.c include/*.h src/*.inc
+	mkdir -p $(OUT)/x86_64-linux
+	$(CC) $(LINUX_CFLAGS) -shared -fPIC -o $@ src/wmtr_client.c src/transport_virtgpu.c -lpthread -ldl
+test-linux: $(OUT)/x86_64-linux/winemetal.so
+	mkdir -p $(OUT)/x86_64-linux/standin
+	$(CC) -shared -fPIC -o $(OUT)/x86_64-linux/standin/ntdll.so tests/ntdll_standin.c
+	$(CC) -O2 -o $(OUT)/x86_64-linux/wmtr_ntdll_test tests/wmtr_ntdll_test.c -ldl
+	./$(OUT)/x86_64-linux/wmtr_ntdll_test $(abspath $(OUT))/x86_64-linux/standin/ntdll.so $(abspath $(OUT))/x86_64-linux/winemetal.so
+
 clean:
 	rm -rf $(OUT)
-.PHONY: all host server client-macos test clean
+.PHONY: all host server client-macos client-linux test test-linux clean

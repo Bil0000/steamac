@@ -432,10 +432,36 @@ region_bytes(obj_handle_t texture, struct WMTSize size, uint64_t bytes_per_row, 
 typedef NTSTATUS (*pNtSetEvent)(void *handle, void *prev);
 static pthread_mutex_t event_lock = PTHREAD_MUTEX_INITIALIZER;
 
+#ifdef __linux__
+#include <link.h>
+/* Wine on Linux loads ntdll.so RTLD_LOCAL, so its symbols are not in the global scope: find the
+ * loaded ntdll.so and look the symbol up in it (RTLD_NOLOAD: never loads a second copy). */
+static int
+find_ntdll(struct dl_phdr_info *info, size_t size, void *out) {
+  (void)size;
+  const char *n = info->dlpi_name;
+  size_t l = n ? strlen(n) : 0;
+  if (l < 9 || strcmp(n + l - 9, "/ntdll.so")) return 0;
+  *(void **)out = dlopen(n, RTLD_NOW | RTLD_NOLOAD);
+  return *(void **)out != NULL;
+}
+#endif
+
+/* ntdll's NtSetEvent in this process (exported for tests) */
+__attribute__((visibility("default"))) void *
+wmtr_find_nt_set_event(void) {
+  void *f = dlsym(RTLD_DEFAULT, "NtSetEvent");
+#ifdef __linux__
+  void *h = NULL;
+  if (!f && dl_iterate_phdr(find_ntdll, &h) && h) f = dlsym(h, "NtSetEvent");
+#endif
+  return f;
+}
+
 static NTSTATUS
 listener_run(uint64_t listener) {
   static pNtSetEvent set_event;
-  if (!set_event) set_event = (pNtSetEvent)dlsym(RTLD_DEFAULT, "NtSetEvent");
+  if (!set_event) set_event = (pNtSetEvent)wmtr_find_nt_set_event();
   if (!set_event) { LOG(0, "NtSetEvent not found\n"); return STATUS_UNSUCCESSFUL; }
   LOG(2, "listener %llx running\n", (unsigned long long)listener);
   for (;;) {
