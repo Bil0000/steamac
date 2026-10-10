@@ -1051,6 +1051,18 @@ private struct AdvancedTab: View {
                                    " Not available here: \($0); MoltenVK is used." } ?? ""),
                            now: false, key: .vulkanDriver)
                 }
+                Picker(selection: $settings.graphicsPath) {
+                    ForEach(LauncherSettings.GraphicsPath.allCases) { g in
+                        Text(g.title).tag(g)
+                            .disabled(g.unavailableReason != nil && g != settings.graphicsPath)
+                    }
+                } label: {
+                    Label2(title: "Graphics path",
+                           detail: settings.graphicsPath.detail + " " + LauncherSettings.GraphicsPath.switchNote
+                               + (settings.graphicsPath.unavailableReason.map {
+                                   " Not available here: \($0); Vulkan is used." } ?? ""),
+                           now: false, key: .graphicsPath)
+                }
             }
             Section {
                 HStack {

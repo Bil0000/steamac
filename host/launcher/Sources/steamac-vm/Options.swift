@@ -74,6 +74,8 @@ struct Options {
     var macTime = true
     /// Host Vulkan driver of this boot (virglrenderer opens it; VM.start).
     var vulkanDriver = LauncherSettings.VulkanDriver.moltenvk
+    var graphicsPath = LauncherSettings.GraphicsPath.vulkan
+    var selftestGraphicsPath = false
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
     var gvproxyPath: String?
@@ -115,6 +117,7 @@ struct Options {
     var acceptLicense = false
     var selftestProvision = false
     var selftestMetalCache = false
+    var selftestGameLayers = false
     var referenceDisk: String?
     /// --ssh-password DISK: print the disk's generated guest password (GuestPassword) and exit.
     var showSSHPassword: String?
@@ -134,7 +137,7 @@ struct Options {
                       [--mouse auto|tablet|capture] [--no-gamepad] [--pad auto|xbox360|dualsense|dualshock4]
                       [--krun-log-level 0-5] [--perf-stats]
                       [--no-crash-reports] [--steam-client frame|deck|deckbeta]
-                      [--vulkan-driver moltenvk|kosmickrisp] [--lan-remote-play | --no-lan-remote-play]
+                      [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan] [--lan-remote-play | --no-lan-remote-play]
            steamac-vm --selftest-display [--headless] [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-overlay [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-stall [--selftest-out DIR] [--display WxH]
@@ -143,6 +146,8 @@ struct Options {
            steamac-vm --selftest-provision [--reference-disk IMG]
            steamac-vm --selftest-remote-play
            steamac-vm --selftest-metal-cache
+           steamac-vm --selftest-game-layers
+           steamac-vm --selftest-graphics-path [--graphics-path dxmt|vulkan]
            steamac-vm --create-disk PATH [--branch stable|rc] [--home-gib N]
                       [--password PW] [--keep-cache] [--accept-eula]
            steamac-vm --ssh-password DISK
@@ -361,6 +366,13 @@ struct Options {
                     throw OptionError("--steam-client: frame, deck or deckbeta")
                 }
                 o.steamClient = c
+            case "--graphics-path":
+                let v = try value(a)
+                guard let g = LauncherSettings.GraphicsPath(rawValue: v) else {
+                    throw OptionError("--graphics-path: dxmt or vulkan")
+                }
+                o.graphicsPath = g
+            case "--selftest-graphics-path": o.selftestGraphicsPath = true
             case "--vulkan-driver":
                 let v = try value(a)
                 guard let d = LauncherSettings.VulkanDriver(rawValue: v) else {
@@ -410,6 +422,7 @@ struct Options {
             case "--selftest-remote-play": o.selftestRemotePlay = true
             case "--selftest-provision": o.selftestProvision = true
             case "--selftest-metal-cache": o.selftestMetalCache = true
+            case "--selftest-game-layers": o.selftestGameLayers = true
             case "--reference-disk": o.referenceDisk = try value(a)
             case "--create-disk": o.createDisk = try value(a)
             case "--grow-disk": o.growDisk = try value(a)
@@ -455,7 +468,7 @@ struct Options {
 
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
-            || selftestMetalCache || createDisk != nil || growDisk != nil
+            || selftestMetalCache || selftestGameLayers || createDisk != nil || growDisk != nil
             || showSSHPassword != nil
     }
 
@@ -464,6 +477,13 @@ struct Options {
     static func resolve(_ argv: [String], settings: LauncherSettings) throws -> (Options, [LauncherSettings.Key: String]) {
         var o = try parse(argv)
         var overrides = o.applySettings(settings)
+        if let reason = o.graphicsPath.unavailableReason {
+            guard !o.explicit.contains("--graphics-path") else {
+                throw OptionError("--graphics-path \(o.graphicsPath.rawValue): \(o.graphicsPath.name) \(reason)")
+            }
+            log("gpu: \(o.graphicsPath.name) \(reason); using Vulkan")
+            o.graphicsPath = .vulkan
+        }
         if !o.isSelftest, let reason = o.vulkanDriver.unavailableReason {
             guard !o.explicit.contains("--vulkan-driver") else {
                 throw OptionError("--vulkan-driver \(o.vulkanDriver.rawValue): \(o.vulkanDriver.name) \(reason)")
@@ -483,6 +503,8 @@ struct Options {
             add("steamac.ssh", o.sshPort == 0 ? "0" : "1")
             add("steamac.steam_client", o.steamClient.rawValue)
             add("steamac.gpu_mib", String(VMSizing.gpuBudgetMiB(memMiB: o.memMiB)))
+            // the guest's Proton-lean tool uses DXMT only when the host offers the wmtr context
+            add("steamac.gfx", o.graphicsPath.rawValue)
             if o.macTime {
                 add("steamac.tz", MacTime.zone)
                 add("steamac.clock24", MacTime.clock24.map { $0 ? "1" : "0" })
@@ -536,6 +558,7 @@ struct Options {
         macTime = s.followMacTime
         if given("--steam-client") { ov[.steamClient] = "--steam-client \(steamClient.rawValue)" } else { steamClient = s.steamClient }
         if given("--vulkan-driver") { ov[.vulkanDriver] = "--vulkan-driver \(vulkanDriver.rawValue)" } else { vulkanDriver = s.vulkanDriver }
+        if given("--graphics-path") { ov[.graphicsPath] = "--graphics-path \(graphicsPath.rawValue)" } else { graphicsPath = s.graphicsPath }
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }

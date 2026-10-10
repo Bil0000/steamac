@@ -90,6 +90,12 @@ test-linux: $(OUT)/x86_64-linux/winemetal.so
 	@if readelf -V $< | grep -E 'GLIBC_ABI_|GLIBC_2\.(3[2-9]|[4-9][0-9])'; then echo "FAIL: glibc requirement too new"; exit 1; fi
 	@echo "glibc requirements: ok"
 
+# the launcher bundle picks the host library up from libkrun's prefix (host/launcher/bundle.sh)
+PREFIX ?= ../work/out/host
+install: $(OUT)/libwmtr_host.dylib
+	install -d $(PREFIX)/lib
+	install -m 755 $< $(PREFIX)/lib/libwmtr_host.dylib
+
 clean:
 	rm -rf $(OUT)
-.PHONY: all host server client-macos client-linux guest-tests test test-linux clean
+.PHONY: all host server client-macos client-linux guest-tests test test-linux install clean

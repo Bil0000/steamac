@@ -770,6 +770,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         guestFocus = f
         // The agent sends the new game's `game-size` right after `focus game`; until then none is known.
         focusedGameSize = nil
+        view.gameLayersVisible = focusedGame != nil
         stall?.gameFocused = focusedGame != nil
         updateNoPictureGate()
         log("input: guest focus \(f)")

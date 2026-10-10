@@ -340,6 +340,7 @@ enum CrashReporting {
         if let rev = Bundle.main.object(forInfoDictionaryKey: "SteamacMVKPatchRevision") as? String { t["mvk_patch"] = rev }
         if let rev = Bundle.main.object(forInfoDictionaryKey: "SteamacKosmicKrispRevision") as? String { t["kk_patch"] = rev }
         t["vulkan_driver"] = options.vulkanDriver.rawValue
+        t["graphics_path"] = options.graphicsPath.rawValue
         for (tag, lib) in [("libkrun", "libkrun.1.dylib"), ("virglrenderer", "libvirglrenderer.1.dylib"),
                            ("moltenvk", "libMoltenVK.dylib"), ("kosmickrisp", "libvulkan_kosmickrisp.dylib")] {
             if let uuid = loadedImageUUID(suffix: "/" + lib) { t[tag] = uuid }
@@ -418,7 +419,7 @@ enum CrashReporting {
         env[runIdEnv] = run
         setTags(["run": run, "boot": String(boot), "vm_cpus": String(o.cpus), "vm_mem_mib": String(o.memMiB),
                  "vm_cpus_auto": String(o.cpusSource == .auto), "vm_mem_auto": String(o.memSource == .auto),
-                 "vulkan_driver": o.vulkanDriver.rawValue])
+                 "vulkan_driver": o.vulkanDriver.rawValue, "graphics_path": o.graphicsPath.rawValue])
         memoryWatch.reset()
         followSetting()
     }

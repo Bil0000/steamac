@@ -32,14 +32,15 @@ final class LauncherSettings: ObservableObject {
         // Sound
         case soundEnabled, soundOutputUID, soundVolume, soundMute, soundLatency
         // Advanced
-        case cpus, memMiB, sshEnabled, sshPort, network, lanRemotePlay, diskImage, steamosBranch, steamClient, vulkanDriver
+        case cpus, memMiB, sshEnabled, sshPort, network, lanRemotePlay, diskImage, steamosBranch, steamClient, vulkanDriver,
+             graphicsPath
 
         var nextStart: Bool {
             switch self {
             case .openFullscreen, .dpiSource, .fixedDPI, .fixedWidthMM, .fixedHeightMM, .refreshRate,
                  .windowWidth, .windowHeight, .windowSizePreset, .retinaResolution, .renderScale, .soundEnabled, .cpus, .memMiB, .sshEnabled,
                  .sshPort, .network, .lanRemotePlay,
-                 .diskImage, .steamClient, .followMacTime, .vulkanDriver:
+                 .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath:
                 return true
             default:
                 return false
@@ -187,6 +188,61 @@ final class LauncherSettings: ObservableObject {
         }
     }
 
+    /// How Windows games draw: through DXMT and the wmtr remoting context straight to Metal (lean), or
+    /// through DXVK, Venus and the host Vulkan driver (classic). The VM process enables the wmtr
+    /// virtio-gpu context (libkrun patch 0020) for the lean path; in the guest, the Proton-lean
+    /// compatibility tool uses DXMT only when that context is there and plain Proton otherwise.
+    enum GraphicsPath: String, CaseIterable, Identifiable {
+        case dxmt
+        case vulkan
+        var id: String { rawValue }
+
+        var name: String {
+            switch self {
+            case .dxmt: return "DXMT"
+            case .vulkan: return "Vulkan"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .dxmt: return "DXMT (lean)"
+            case .vulkan: return "Vulkan (classic)"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .dxmt:
+                return "Direct3D 11 games through DXMT, drawn by Metal on the Mac (games need the Proton-lean "
+                    + "compatibility tool, chosen once per game in Steam)."
+            case .vulkan:
+                return "Direct3D through DXVK on Vulkan (Venus) and the Vulkan driver below."
+            }
+        }
+
+        /// The host side of the remoting context, in the app's Frameworks.
+        static let hostLibrary = "libwmtr_host.dylib"
+
+        /// Absolute path of hostLibrary in this bundle (libkrun dlopens STEAMAC_WMTR_LIB), nil if absent.
+        static var hostLibraryPath: String? {
+            guard let dir = Bundle.main.privateFrameworksPath else { return nil }
+            let p = (dir as NSString).appendingPathComponent(hostLibrary)
+            return FileManager.default.fileExists(atPath: p) ? p : nil
+        }
+
+        /// Why this build cannot use the path; nil if it can.
+        var unavailableReason: String? {
+            guard self == .dxmt else { return nil }
+            return Self.hostLibraryPath == nil ? "not included in this build (\(Self.hostLibrary))" : nil
+        }
+
+        /// Classic until the lean path is measured ahead of it in VRChat (same world, EAC, hitch counts).
+        static let preferred: GraphicsPath = .vulkan
+
+        static let switchNote = "Applies from the next start."
+    }
+
     /// Default window size choices (window points = guest pixels).
     struct SizePreset: Identifiable {
         let width: Int, height: Int, label: String
@@ -320,6 +376,8 @@ final class LauncherSettings: ObservableObject {
     @Published var steamClient = SteamClient.deck { didSet { save(.steamClient, steamClient.rawValue) } }
     /// Host Vulkan driver of the next start (VulkanDriver).
     @Published var vulkanDriver = VulkanDriver.preferred { didSet { save(.vulkanDriver, vulkanDriver.rawValue) } }
+    /// Graphics path of the next start (GraphicsPath).
+    @Published var graphicsPath = GraphicsPath.preferred { didSet { save(.graphicsPath, graphicsPath.rawValue) } }
 
     init() {
         let domain = LauncherSettings.domain
@@ -402,6 +460,7 @@ final class LauncherSettings: ObservableObject {
         }
         if let s = d.string(forKey: Key.steamClient.rawValue).flatMap(SteamClient.init(rawValue:)) { steamClient = s }
         if let v = d.string(forKey: Key.vulkanDriver.rawValue).flatMap(VulkanDriver.init(rawValue:)) { vulkanDriver = v }
+        if let v = d.string(forKey: Key.graphicsPath.rawValue).flatMap(GraphicsPath.init(rawValue:)) { graphicsPath = v }
         reloadGames()
     }
 
@@ -476,6 +535,7 @@ final class LauncherSettings: ObservableObject {
         case .steamosBranch: guard DiskCreator.branches.contains(text) else { return false }; steamosBranch = text
         case .steamClient: guard let v = SteamClient(rawValue: text) else { return false }; steamClient = v
         case .vulkanDriver: guard let v = VulkanDriver(rawValue: text) else { return false }; vulkanDriver = v
+        case .graphicsPath: guard let v = GraphicsPath(rawValue: text) else { return false }; graphicsPath = v
         }
         return true
     }
@@ -508,6 +568,7 @@ final class LauncherSettings: ObservableObject {
         lanRemotePlay = fresh.lanRemotePlay
         diskImage = fresh.diskImage; steamosBranch = fresh.steamosBranch; steamClient = fresh.steamClient
         vulkanDriver = fresh.vulkanDriver
+        graphicsPath = fresh.graphicsPath
         loading = false
         reloadGames()
         log("settings: reset to defaults")
@@ -541,7 +602,7 @@ final class LauncherSettings: ObservableObject {
             .soundEnabled: soundEnabled, .cpus: cpus, .memMiB: memMiB, .sshEnabled: sshEnabled, .sshPort: sshPort,
             .network: network, .lanRemotePlay: lanRemotePlay,
             .diskImage: diskImage, .steamClient: steamClient.rawValue, .followMacTime: followMacTime,
-            .vulkanDriver: vulkanDriver.rawValue,
+            .vulkanDriver: vulkanDriver.rawValue, .graphicsPath: graphicsPath.rawValue,
         ]
         var s: [Key: String] = [:]
         for (k, v) in values where k.nextStart && overrides[k] == nil { s[k] = "\(v)" }

@@ -24,6 +24,8 @@ do {
 }
 
 if options.selftestMetalCache { MetalCompilerCache.selfTest() }
+if options.selftestGameLayers { GameLayerSelfTest.run() }
+if options.selftestGraphicsPath { GraphicsPathSelfTest.run(options) }
 // Before CrashReporting's GPU tags, the window or either Vulkan driver can initialise Metal.
 MetalCompilerCache.prepare()
 
@@ -31,12 +33,12 @@ MetalCompilerCache.prepare()
 // level, which buries the guest console. Errors only, unless the user asks for more.
 setenv("MVK_CONFIG_LOG_LEVEL", "1", 0)
 // Metal Performance HUD (Settings > Display, View menu, Ctrl+Cmd+P): loads libMTLHud for this VM
-// process before Metal is first used; the window's layer then shows or hides it at runtime
-// (developerHUDProperties `mode`, default "off" in WindowController). Without this variable
-// macOS 15 ignores those properties. Command buffers that present nothing (MoltenVK's) get no HUD.
-// Only when the saved setting is on: with it off libMTLHud stays unloaded, so turning the HUD on
-// mid-run shows nothing until the next boot.
-if Supervisor.isChild && !options.headless && settings.metalHUD { setenv("MTL_HUD_ENABLED", "1", 1) }
+// process before Metal is first used; the window's layers then show or hide it at runtime
+// (developerHUDProperties `mode`, VMView.applyHUD: on the remoted game's layer on the DXMT path, else
+// on the guest picture). Without this variable macOS 15 ignores those properties. Command buffers that
+// present nothing (MoltenVK's) get no HUD. Always loaded, so the HUD can be turned on mid-run; with the
+// setting off it is hidden from the first frame on.
+if Supervisor.isChild && !options.headless { setenv("MTL_HUD_ENABLED", "1", 1) }
 
 // Crash reporting (Settings > General; both the supervisor and each VM process).
 CrashReporting.setUp(options: options, settings: settings)
