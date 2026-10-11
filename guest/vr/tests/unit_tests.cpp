@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// Unit tests for the runtime's pure parts: JSON, binding parsing and evaluation, pose math.
+// Unit tests for the runtime's pure parts: JSON, binding parsing and evaluation, pose math, the hand skeleton
+// and the overlay state.
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <map>
 #include <string>
 
 #include "input_bindings.h"
+#include "interfaces.h"
 #include "json.h"
+#include "skeleton.h"
 #include "vrmath.h"
 
 using namespace svr;
@@ -135,7 +139,218 @@ static void test_math() {
   CHECK(near(pm.m[0][0], 1) && near(pm.m[1][1], 1) && near(pm.m[3][2], -1));
 }
 
+static float dist(const vr::VRBoneTransform_t &a, const vr::VRBoneTransform_t &b) {
+  float d = 0;
+  for (int i = 0; i < 3; i++) d += (a.position.v[i] - b.position.v[i]) * (a.position.v[i] - b.position.v[i]);
+  return sqrtf(d);
+}
+
+static void test_skeleton() {
+  // hierarchy: 31 bones, one root, parents first, the documented order
+  int roots = 0;
+  for (int i = 0; i < kHandBoneCount; i++) {
+    roots += hand_bone_parent(i) < 0;
+    CHECK(hand_bone_parent(i) < i);
+    CHECK(hand_bone_name(0, i) && hand_bone_name(1, i));
+  }
+  CHECK(kHandBoneCount == 31 && roots == 1 && hand_bone_parent(kBoneWrist) == kBoneRoot);
+  CHECK(hand_bone_parent(kBoneIndex0) == kBoneWrist && hand_bone_parent(kBoneIndex4) == kBoneIndex3);
+  CHECK(hand_bone_parent(kBoneAuxPinky) == kBoneRoot && kBoneAuxThumb == 26 && kBonePinky0 == 21);
+  CHECK(!strcmp(hand_bone_name(0, kBoneWrist), "wrist_l") && !strcmp(hand_bone_name(1, kBoneIndex4), "finger_index_r_end"));
+  CHECK(!hand_bone_name(0, kHandBoneCount) && hand_bone_parent(99) == -1);
+
+  const float open[5] = {0, 0, 0, 0, 0}, fist[5] = {1, 1, 1, 1, 1}, splay0[5] = {0, 0, 0, 0, 0};
+  for (int hand = 0; hand < 2; hand++) {
+    vr::VRBoneTransform_t o[kHandBoneCount], f[kHandBoneCount], om[kHandBoneCount], fm[kHandBoneCount];
+    hand_pose(hand, open, splay0, o);
+    hand_pose(hand, fist, splay0, f);
+    hand_to_model_space(o, om);
+    hand_to_model_space(f, fm);
+    for (int i = 0; i < kHandBoneCount; i++) {
+      const vr::HmdQuaternionf_t &q = f[i].orientation;
+      CHECK(near(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z, 1, 1e-4f));
+      CHECK(near(f[i].position.v[3], 1));
+      // bones do not stretch: the parent-space offset has the same length open and closed
+      if (i < kBoneAuxThumb) CHECK(near(dist(o[i], o[kBoneRoot]), dist(f[i], f[kBoneRoot]), 1e-5f));
+    }
+    CHECK(near(o[kBoneRoot].orientation.w, 1) && near(dist(o[kBoneRoot], om[kBoneRoot]), 0));
+    CHECK(near(dist(om[kBoneWrist], om[kBoneRoot]), 0.1721f, 1e-3f));  // wrist sits behind the controller origin
+    // proximal bone lengths of the model (index 73 mm, middle 91 mm)
+    CHECK(near(dist(om[kBoneIndex1], om[kBoneIndex2]), 0.045f, 1e-4f) && near(dist(om[kBoneMiddle0], om[kBoneMiddle1]), 0.091f, 1e-4f));
+    for (int d = 0; d < 5; d++) {
+      int tip = d == 0 ? kBoneThumb3 : kBoneIndex4 + (d - 1) * 5;
+      int knuckle = d == 0 ? kBoneThumb2 : kBoneIndex3 + (d - 1) * 5;
+      // closing the hand brings every fingertip towards the wrist; an open finger is nearly straight
+      CHECK(dist(fm[tip], fm[kBoneWrist]) < dist(om[tip], om[kBoneWrist]) - 0.02f);
+      if (d) CHECK(dist(om[tip], om[kBoneWrist]) > 0.15f && dist(fm[tip], fm[kBoneWrist]) < 0.11f);
+      // aux bone = the last knuckle in root space, in both spaces
+      CHECK(near(dist(f[kBoneAuxThumb + d], fm[knuckle]), 0) && near(dist(fm[kBoneAuxThumb + d], fm[knuckle]), 0));
+      CHECK(near(f[kBoneAuxThumb + d].orientation.w, fm[knuckle].orientation.w));
+    }
+    // fingers fan out in order: index tip next to middle, pinky furthest from index
+    CHECK(dist(om[kBoneIndex4], om[kBoneMiddle4]) < dist(om[kBoneIndex4], om[kBoneRing4]) &&
+          dist(om[kBoneIndex4], om[kBoneRing4]) < dist(om[kBoneIndex4], om[kBonePinky4]));
+    // curl is monotonic
+    float prev = 1e9f;
+    for (int step = 0; step <= 10; step++) {
+      float c[5] = {0, step / 10.0f, 0, 0, 0};
+      vr::VRBoneTransform_t t[kHandBoneCount];
+      hand_pose(hand, c, splay0, t);
+      hand_to_model_space(t, t);
+      float d = dist(t[kBoneIndex4], t[kBoneWrist]);
+      CHECK(d < prev);
+      prev = d;
+      CHECK(near(dist(t[kBoneMiddle4], om[kBoneMiddle4]), 0, 1e-6f));  // other fingers stay
+    }
+    // splay moves the index tip sideways without changing its distance to its knuckle
+    float sp[5] = {0, 1, 0, 0, 0};
+    vr::VRBoneTransform_t s[kHandBoneCount];
+    hand_pose(hand, open, sp, s);
+    hand_to_model_space(s, s);
+    CHECK(dist(s[kBoneIndex4], om[kBoneIndex4]) > 0.02f && near(dist(s[kBoneIndex4], s[kBoneIndex1]), dist(om[kBoneIndex4], om[kBoneIndex1]), 1e-5f));
+
+    // motion ranges and reference poses
+    float lim[5], full[5];
+    hand_limit_curls(vr::VRSkeletalMotionRange_WithController, fist, lim);
+    hand_limit_curls(vr::VRSkeletalMotionRange_WithoutController, fist, full);
+    CHECK(lim[1] < full[1] && near(full[1], 1) && lim[1] > 0.5f);
+    const float wild[5] = {-1, 2, 0.5f, 0, 1};
+    hand_limit_curls(vr::VRSkeletalMotionRange_WithoutController, wild, full);
+    CHECK(near(full[0], 0) && near(full[1], 1) && near(full[2], 0.5f));
+    vr::VRBoneTransform_t ref[kHandBoneCount], grip[kHandBoneCount];
+    hand_reference_pose(hand, vr::VRSkeletalReferencePose_Fist, ref);
+    CHECK(near(dist(ref[kBoneAuxIndex], f[kBoneAuxIndex]), 0));
+    hand_reference_pose(hand, vr::VRSkeletalReferencePose_OpenHand, ref);
+    CHECK(near(dist(ref[kBoneAuxIndex], o[kBoneAuxIndex]), 0));
+    hand_reference_pose(hand, vr::VRSkeletalReferencePose_GripLimit, grip);
+    hand_to_model_space(grip, grip);
+    float dg = dist(grip[kBoneIndex4], grip[kBoneWrist]);
+    CHECK(dg < dist(om[kBoneIndex4], om[kBoneWrist]) && dg > dist(fm[kBoneIndex4], fm[kBoneWrist]));
+  }
+  // the right hand is the mirror image of the left (x -> -x in model space)
+  vr::VRBoneTransform_t l[kHandBoneCount], r[kHandBoneCount];
+  const float some[5] = {0.3f, 0.8f, 0.5f, 0.2f, 1.0f}, sp[5] = {0.5f, -0.5f, 0, 0.3f, 1};
+  hand_pose(0, some, sp, l);
+  hand_pose(1, some, sp, r);
+  hand_to_model_space(l, l);
+  hand_to_model_space(r, r);
+  for (int i = 0; i < kHandBoneCount; i++)
+    CHECK(near(l[i].position.v[0], -r[i].position.v[0], 1e-5f) && near(l[i].position.v[1], r[i].position.v[1], 1e-5f) &&
+          near(l[i].position.v[2], r[i].position.v[2], 1e-5f));
+}
+
+static void test_overlay() {
+  vr::IVROverlay *ov = (vr::IVROverlay *)overlay_iface();
+  vr::VROverlayHandle_t h = 0, h2 = 0, thumb = 0, found = 0;
+  CHECK(ov->FindOverlay("test.a", &found) == vr::VROverlayError_UnknownOverlay && found == vr::k_ulOverlayHandleInvalid);
+  CHECK(ov->CreateOverlay("test.a", "Overlay A", &h) == vr::VROverlayError_None && h != vr::k_ulOverlayHandleInvalid);
+  CHECK(ov->CreateOverlay("test.a", "again", &h2) == vr::VROverlayError_KeyInUse && h2 == vr::k_ulOverlayHandleInvalid);
+  CHECK(ov->CreateOverlay(std::string(200, 'k').c_str(), "x", &h2) == vr::VROverlayError_KeyTooLong);
+  CHECK(ov->CreateOverlay("test.n", std::string(200, 'n').c_str(), &h2) == vr::VROverlayError_NameTooLong);
+  CHECK(ov->CreateOverlay(nullptr, "x", &h2) == vr::VROverlayError_InvalidParameter);
+  CHECK(ov->FindOverlay("test.a", &found) == vr::VROverlayError_None && found == h);
+  char buf[vr::k_unVROverlayMaxKeyLength];
+  vr::EVROverlayError e = vr::VROverlayError_RequestFailed;
+  CHECK(ov->GetOverlayKey(h, buf, sizeof(buf), &e) == 7 && e == vr::VROverlayError_None && !strcmp(buf, "test.a"));
+  CHECK(ov->GetOverlayName(h, buf, 4, &e) == 10 && e == vr::VROverlayError_ArrayTooSmall);
+  CHECK(ov->SetOverlayName(h, "Renamed") == vr::VROverlayError_None);
+  CHECK(ov->GetOverlayName(h, buf, sizeof(buf), &e) == 8 && !strcmp(buf, "Renamed"));
+  CHECK(ov->GetOverlayKey(h + 100, buf, sizeof(buf), &e) == 0 && e == vr::VROverlayError_InvalidHandle);
+
+  // SteamVR's defaults, then every property reads back
+  float f = 0, r = 0, g = 0, b = 0;
+  bool flag = true;
+  uint32_t u = 99;
+  CHECK(ov->GetOverlayWidthInMeters(h, &f) == vr::VROverlayError_None && near(f, 1));
+  CHECK(ov->GetOverlayAlpha(h, &f) == vr::VROverlayError_None && near(f, 1));
+  CHECK(ov->GetOverlayColor(h, &r, &g, &b) == vr::VROverlayError_None && near(r, 1) && near(g, 1) && near(b, 1));
+  CHECK(!ov->IsOverlayVisible(h) && ov->GetOverlayFlags(h, &u) == vr::VROverlayError_None && u == 0);
+  CHECK(ov->SetOverlayWidthInMeters(h, 2.5f) == vr::VROverlayError_None && ov->GetOverlayWidthInMeters(h, &f) == vr::VROverlayError_None && near(f, 2.5f));
+  CHECK(ov->SetOverlayAlpha(h, 0.5f) == vr::VROverlayError_None && ov->GetOverlayAlpha(h, &f) == vr::VROverlayError_None && near(f, 0.5f));
+  CHECK(ov->SetOverlayColor(h, 0.1f, 0.2f, 0.3f) == vr::VROverlayError_None && ov->GetOverlayColor(h, &r, &g, &b) == vr::VROverlayError_None && near(g, 0.2f));
+  CHECK(ov->SetOverlaySortOrder(h, 7) == vr::VROverlayError_None && ov->GetOverlaySortOrder(h, &u) == vr::VROverlayError_None && u == 7);
+  CHECK(ov->SetOverlayCurvature(h, 0.25f) == vr::VROverlayError_None && ov->GetOverlayCurvature(h, &f) == vr::VROverlayError_None && near(f, 0.25f));
+  CHECK(ov->SetOverlayTexelAspect(h, 2) == vr::VROverlayError_None && ov->GetOverlayTexelAspect(h, &f) == vr::VROverlayError_None && near(f, 2));
+  CHECK(ov->SetOverlayFlag(h, vr::VROverlayFlags_SortWithNonSceneOverlays, true) == vr::VROverlayError_None);
+  CHECK(ov->SetOverlayFlag(h, vr::VROverlayFlags_NoDashboardTab, true) == vr::VROverlayError_None);
+  CHECK(ov->SetOverlayFlag(h, vr::VROverlayFlags_NoDashboardTab, false) == vr::VROverlayError_None);
+  CHECK(ov->GetOverlayFlag(h, vr::VROverlayFlags_SortWithNonSceneOverlays, &flag) == vr::VROverlayError_None && flag);
+  CHECK(ov->GetOverlayFlag(h, vr::VROverlayFlags_NoDashboardTab, &flag) == vr::VROverlayError_None && !flag);
+  CHECK(ov->GetOverlayFlags(h, &u) == vr::VROverlayError_None && u == vr::VROverlayFlags_SortWithNonSceneOverlays);
+  vr::VRTextureBounds_t tb{0.1f, 0.2f, 0.9f, 0.8f}, tb2{};
+  CHECK(ov->SetOverlayTextureBounds(h, &tb) == vr::VROverlayError_None && ov->GetOverlayTextureBounds(h, &tb2) == vr::VROverlayError_None && near(tb2.vMax, 0.8f));
+  vr::EColorSpace cs = vr::ColorSpace_Auto;
+  CHECK(ov->SetOverlayTextureColorSpace(h, vr::ColorSpace_Linear) == vr::VROverlayError_None && ov->GetOverlayTextureColorSpace(h, &cs) == vr::VROverlayError_None && cs == vr::ColorSpace_Linear);
+  vr::VROverlayInputMethod im = vr::VROverlayInputMethod_Mouse;
+  CHECK(ov->GetOverlayInputMethod(h, &im) == vr::VROverlayError_None && im == vr::VROverlayInputMethod_None);
+  vr::HmdVector2_t ms{{640, 480}}, ms2{};
+  CHECK(ov->SetOverlayMouseScale(h, &ms) == vr::VROverlayError_None && ov->GetOverlayMouseScale(h, &ms2) == vr::VROverlayError_None && near(ms2.v[1], 480));
+  CHECK(ov->SetOverlayAlpha(h + 100, 1) == vr::VROverlayError_InvalidHandle && ov->GetOverlayAlpha(h, nullptr) == vr::VROverlayError_InvalidParameter);
+
+  // transforms: the type follows the last setter, getters of another type refuse
+  vr::VROverlayTransformType tt = vr::VROverlayTransform_Invalid;
+  vr::ETrackingUniverseOrigin org = vr::TrackingUniverseSeated;
+  vr::HmdMatrix34_t m = identity34(), m2{};
+  m.m[0][3] = 1, m.m[1][3] = 2, m.m[2][3] = -3;
+  CHECK(ov->GetOverlayTransformType(h, &tt) == vr::VROverlayError_None && tt == vr::VROverlayTransform_Absolute);
+  CHECK(ov->SetOverlayTransformAbsolute(h, vr::TrackingUniverseStanding, &m) == vr::VROverlayError_None);
+  CHECK(ov->GetOverlayTransformAbsolute(h, &org, &m2) == vr::VROverlayError_None && org == vr::TrackingUniverseStanding && near(m2.m[2][3], -3));
+  vr::TrackedDeviceIndex_t dev = 0;
+  CHECK(ov->GetOverlayTransformTrackedDeviceRelative(h, &dev, &m2) == vr::VROverlayError_WrongTransformType);
+  CHECK(ov->SetOverlayTransformTrackedDeviceRelative(h, 1, &m) == vr::VROverlayError_None);
+  CHECK(ov->SetOverlayTransformTrackedDeviceRelative(h, 1000, &m) == vr::VROverlayError_InvalidTrackedDevice);
+  CHECK(ov->GetOverlayTransformTrackedDeviceRelative(h, &dev, &m2) == vr::VROverlayError_None && dev == 1 && near(m2.m[1][3], 2));
+  CHECK(ov->GetOverlayTransformType(h, &tt) == vr::VROverlayError_None && tt == vr::VROverlayTransform_TrackedDeviceRelative);
+  CHECK(ov->GetOverlayTransformAbsolute(h, &org, &m2) == vr::VROverlayError_WrongTransformType);
+  CHECK(ov->SetOverlayTransformTrackedDeviceComponent(h, 2, "tip") == vr::VROverlayError_None);
+  CHECK(ov->GetOverlayTransformTrackedDeviceComponent(h, &dev, buf, 2) == vr::VROverlayError_ArrayTooSmall);
+  CHECK(ov->GetOverlayTransformTrackedDeviceComponent(h, &dev, buf, sizeof(buf)) == vr::VROverlayError_None && dev == 2 && !strcmp(buf, "tip"));
+
+  // visibility and image: accepted, size remembered, nothing is composited
+  CHECK(ov->ShowOverlay(h) == vr::VROverlayError_None && ov->IsOverlayVisible(h));
+  CHECK(ov->HideOverlay(h) == vr::VROverlayError_None && !ov->IsOverlayVisible(h));
+  CHECK(ov->ShowOverlay(h + 100) == vr::VROverlayError_InvalidHandle && !ov->IsOverlayVisible(h + 100));
+  uint32_t pixels[4 * 2] = {}, w = 0, ht = 0;
+  CHECK(ov->SetOverlayRaw(h, pixels, 4, 2, 4) == vr::VROverlayError_None);
+  CHECK(ov->GetOverlayTextureSize(h, &w, &ht) == vr::VROverlayError_None && w == 4 && ht == 2);
+  CHECK(ov->SetOverlayRaw(h, pixels, 4, 2, 3) == vr::VROverlayError_InvalidParameter);
+  int fake_texture = 0;
+  vr::Texture_t tex{&fake_texture, vr::TextureType_DirectX, vr::ColorSpace_Auto}, none{nullptr, vr::TextureType_DirectX, vr::ColorSpace_Auto};
+  CHECK(ov->SetOverlayTexture(h, &tex) == vr::VROverlayError_None && ov->SetOverlayTexture(h, &none) == vr::VROverlayError_InvalidTexture);
+  CHECK(ov->SetOverlayFromFile(h, "/nonexistent/overlay.png") == vr::VROverlayError_UnableToLoadFile);
+  CHECK(ov->ClearOverlayTexture(h) == vr::VROverlayError_None && ov->GetOverlayTextureSize(h, &w, &ht) == vr::VROverlayError_None && w == 0);
+  // coordinates on a 2 m wide quad with a 200x100 image: the right edge centre is 1 m along the quad's x axis
+  CHECK(ov->SetOverlayTransformAbsolute(h, vr::TrackingUniverseStanding, &m) == vr::VROverlayError_None);
+  CHECK(ov->SetOverlayWidthInMeters(h, 2) == vr::VROverlayError_None && ov->SetOverlayTexelAspect(h, 1) == vr::VROverlayError_None);
+  CHECK(ov->SetOverlayRaw(h, pixels, 200, 100, 4) == vr::VROverlayError_None);
+  CHECK(ov->GetTransformForOverlayCoordinates(h, vr::TrackingUniverseStanding, vr::HmdVector2_t{{200, 50}}, &m2) == vr::VROverlayError_None &&
+        near(m2.m[0][3], 2) && near(m2.m[1][3], 2) && near(m2.m[2][3], -3));
+  CHECK(ov->GetTransformForOverlayCoordinates(h, vr::TrackingUniverseStanding, vr::HmdVector2_t{{100, 100}}, &m2) == vr::VROverlayError_None &&
+        near(m2.m[0][3], 1) && near(m2.m[1][3], 2.5f));
+
+  // no dashboard, no input, no keyboard
+  vr::VREvent_t ev;
+  CHECK(!ov->PollNextOverlayEvent(h, &ev, sizeof(ev)) && !ov->IsDashboardVisible() && !ov->IsHoverTargetOverlay(h));
+  CHECK(ov->ShowKeyboard(vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine, 0, "d", 16, "", 0) == vr::VROverlayError_RequestFailed);
+  CHECK(ov->GetPrimaryDashboardDevice() == vr::k_unTrackedDeviceIndexInvalid && ov->WaitFrameSync(10) == vr::VROverlayError_None);
+  CHECK(!strcmp(ov->GetOverlayErrorNameFromEnum(vr::VROverlayError_KeyInUse), "VROverlayError_KeyInUse"));
+
+  // dashboard overlay: main + thumbnail; the thumbnail goes with its overlay and cannot be destroyed alone
+  CHECK(ov->CreateDashboardOverlay("test.dash", "Dash", &h2, &thumb) == vr::VROverlayError_None && h2 != thumb && thumb != vr::k_ulOverlayHandleInvalid);
+  CHECK(ov->GetOverlayTransformType(h2, &tt) == vr::VROverlayError_None && tt == vr::VROverlayTransform_DashboardTab);
+  CHECK(ov->GetOverlayTransformType(thumb, &tt) == vr::VROverlayError_None && tt == vr::VROverlayTransform_DashboardThumb);
+  CHECK(ov->ShowOverlay(h2) == vr::VROverlayError_None && !ov->IsOverlayVisible(h2) && !ov->IsActiveDashboardOverlay(h2));
+  CHECK(ov->SetDashboardOverlaySceneProcess(h2, 42) == vr::VROverlayError_None && ov->GetDashboardOverlaySceneProcess(h2, &u) == vr::VROverlayError_None && u == 42);
+  CHECK(ov->DestroyOverlay(thumb) == vr::VROverlayError_ThumbnailCantBeDestroyed);
+  CHECK(ov->DestroyOverlay(h2) == vr::VROverlayError_None && ov->GetOverlayAlpha(thumb, &f) == vr::VROverlayError_InvalidHandle);
+  CHECK(ov->DestroyOverlay(h) == vr::VROverlayError_None && ov->DestroyOverlay(h) == vr::VROverlayError_InvalidHandle);
+  CHECK(ov->FindOverlay("test.a", &found) == vr::VROverlayError_UnknownOverlay);
+  CHECK(ov->CreateOverlay("test.a", "back", &h) == vr::VROverlayError_None && ov->DestroyOverlay(h) == vr::VROverlayError_None);
+}
+
 int main() {
+  test_skeleton();
+  test_overlay();
   test_json();
   test_bindings();
   test_math();
