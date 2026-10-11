@@ -1,0 +1,923 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Parts adapted from WiVRn v26.9 (GPL-3.0-or-later): server/driver/wivrn_connection.cpp (handshake sequence),
+// server/driver/clock_offset.cpp (clock regression), server/encoder/idr_handler.cpp (IDR state machine),
+// server/encoder/video_encoder.cpp (SendData sharding and timing).
+#include "wivrn/wivrn_session.h"
+
+#include "encoder/vt_encoder.h"
+#include "session/clock.h"
+#include "wivrn/dnssd_publisher.h"
+
+#include "protocol_version.h"
+#include "wivrn_packets.h"
+#include "wivrn_sockets.h"
+
+#include <CoreVideo/CoreVideo.h>
+#include <arpa/inet.h>
+#include <algorithm>
+#include <cinttypes>
+#include <cmath>
+#include <condition_variable>
+#include <cstdio>
+#include <map>
+#include <poll.h>
+#include <random>
+#include <unistd.h>
+
+using namespace std::chrono_literals;
+
+namespace vrhost
+{
+using control_socket = wivrn::typed_socket<wivrn::TCP, wivrn::from_headset::packets, wivrn::to_headset::packets>;
+using stream_socket = wivrn::typed_socket<wivrn::UDP, wivrn::from_headset::packets, wivrn::to_headset::packets>;
+namespace fh = wivrn::from_headset;
+namespace th = wivrn::to_headset;
+
+// ---- clock offset: host = x, headset = y = x + b (WiVRn clock_offset_estimator, host clock instead of Monado's) ----
+class ClockOffset
+{
+	struct sample
+	{
+		int64_t query, response, received;
+	};
+	static constexpr size_t num_samples = 100;
+	std::mutex mutex;
+	std::vector<sample> samples;
+	size_t index = 0;
+	std::atomic<int64_t> b{0};
+	std::atomic<int> interval_ms{10};
+
+public:
+	int interval() const { return interval_ms; }
+	void reset()
+	{
+		std::lock_guard lock(mutex);
+		samples.clear();
+		index = 0;
+		b = 0;
+		interval_ms = 10;
+	}
+	void add(int64_t query, int64_t response)
+	{
+		int64_t now = now_ns();
+		std::lock_guard lock(mutex);
+		sample s{query, response, now};
+		if (samples.size() < num_samples)
+			samples.push_back(s);
+		else
+		{
+			interval_ms = 100;
+			int64_t latency = 0;
+			for (auto & x: samples)
+				latency += x.received - x.query;
+			latency /= int64_t(samples.size());
+			if (s.received - s.query > 3 * latency)
+				return; // likely retransmitted / delayed
+			samples[index] = s;
+			index = (index + 1) % num_samples;
+		}
+		double x0 = 0, y0 = 0;
+		for (auto & x: samples)
+		{
+			x0 += (x.query + x.received) * 0.5;
+			y0 += x.response;
+		}
+		x0 /= samples.size();
+		y0 /= samples.size();
+		b = int64_t(y0 - x0);
+	}
+	bool stable() const
+	{
+		return b != 0;
+	}
+	int64_t to_headset(int64_t t) const { return t + b; }
+	int64_t from_headset(int64_t t) const { return t - b; }
+};
+
+// ---- IDR state machine (WiVRn default_idr_handler without non-reference frames) ----
+class IdrState
+{
+	enum
+	{
+		need_idr,
+		wait_feedback,
+		idr_received,
+		running
+	} state = need_idr;
+	uint64_t ref = 0;
+	std::mutex mutex;
+
+public:
+	void reset()
+	{
+		std::lock_guard l(mutex);
+		state = need_idr;
+	}
+	bool request()
+	{
+		std::lock_guard l(mutex);
+		bool was = state != need_idr;
+		state = need_idr;
+		return was;
+	}
+	// Returns true when this frame must be an IDR.
+	bool frame_is_idr(uint64_t frame)
+	{
+		std::lock_guard l(mutex);
+		switch (state)
+		{
+			case need_idr:
+				state = wait_feedback;
+				ref = frame;
+				return true;
+			case wait_feedback:
+				if (frame > ref + 100) // feedback for the IDR never came
+				{
+					state = wait_feedback;
+					ref = frame;
+					return true;
+				}
+				return false;
+			case idr_received:
+				state = running;
+				ref = frame;
+				return false;
+			case running:
+				return false;
+		}
+		return false;
+	}
+	// Returns true if an IDR became necessary.
+	bool on_feedback(uint64_t frame, bool sent_to_decoder)
+	{
+		std::lock_guard l(mutex);
+		if (state == wait_feedback and frame == ref)
+		{
+			state = sent_to_decoder ? idr_received : need_idr;
+			return not sent_to_decoder;
+		}
+		if (state == running and not sent_to_decoder and frame >= ref)
+		{
+			state = need_idr;
+			return true;
+		}
+		return false;
+	}
+};
+
+static Device to_device(wivrn::device_id id, bool & ok)
+{
+	ok = true;
+	switch (id)
+	{
+		case wivrn::device_id::HEAD:
+			return Device::head;
+		case wivrn::device_id::LEFT_GRIP:
+			return Device::left_grip;
+		case wivrn::device_id::LEFT_AIM:
+			return Device::left_aim;
+		case wivrn::device_id::RIGHT_GRIP:
+			return Device::right_grip;
+		case wivrn::device_id::RIGHT_AIM:
+			return Device::right_aim;
+		default:
+			ok = false;
+			return Device::count;
+	}
+}
+
+static wivrn::device_id from_device(Device d)
+{
+	switch (d)
+	{
+		case Device::left_grip:
+		case Device::left_aim:
+			return wivrn::device_id::LEFT_CONTROLLER_HAPTIC;
+		case Device::right_grip:
+		case Device::right_aim:
+			return wivrn::device_id::RIGHT_CONTROLLER_HAPTIC;
+		default:
+			return wivrn::device_id::HEAD;
+	}
+}
+
+static XrPosef to_xr(const Pose & p)
+{
+	return XrPosef{
+	        .orientation = {p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3]},
+	        .position = {p.position[0], p.position[1], p.position[2]},
+	};
+}
+
+static Pose from_xr(const XrPosef & p)
+{
+	return Pose{
+	        .orientation = {p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w},
+	        .position = {p.position.x, p.position.y, p.position.z},
+	};
+}
+
+static Fov from_xr(const XrFovf & f)
+{
+	return Fov{f.angleLeft, f.angleRight, f.angleUp, f.angleDown};
+}
+
+static XrFovf to_xr(const Fov & f)
+{
+	return XrFovf{f.left, f.right, f.up, f.down};
+}
+
+struct WivrnSession::impl
+{
+	WivrnConfig cfg;
+	SessionListener * listener = nullptr;
+	WivrnStats stats;
+
+	std::unique_ptr<wivrn::TCPListener> tcp_listener;
+	int bound_port = 0;
+	std::unique_ptr<DnssdPublisher> publisher;
+	std::string cookie;
+
+	std::atomic<bool> quit{false};
+	std::thread accept_thread;
+
+	// connection state (valid while connected)
+	mutable std::mutex cnx_mutex;
+	std::unique_ptr<control_socket> control;
+	std::unique_ptr<stream_socket> stream;
+	std::optional<HeadsetInfo> info;
+	std::atomic<bool> is_connected{false};
+	std::atomic<float> refresh{72};
+
+	ClockOffset clock;
+	std::array<PoseHistory, size_t(Device::count)> history;
+	std::mutex view_mutex;
+	std::array<Pose, 2> view_pose{};  // eye relative to head
+	std::array<Fov, 2> view_fov{};
+
+	// encoder state
+	std::mutex encode_mutex;          // encoder (re)creation
+	std::array<std::mutex, 2> eye_mutex; // per-eye encode
+	std::array<std::unique_ptr<VtEncoder>, 2> encoders;
+	std::array<IdrState, 2> idr;
+	EncoderConfig::Codec codec = EncoderConfig::Codec::hevc;
+
+	// pacing
+	ns next_wake = 0;
+
+	void log(const std::string & s)
+	{
+		if (cfg.log)
+			cfg.log(s);
+	}
+
+	void accept_loop();
+	void run_connection(wivrn::TCP && tcp);
+	void handshake(control_socket & ctl, stream_socket & strm, fh::headset_info_packet & out);
+	void on_headset_info(const fh::headset_info_packet &);
+	void handle(fh::packets && packet);
+	void send_frame_eye(int eye, const Frame & f, CVPixelBufferRef buf);
+};
+
+// Throwing receive helper for the handshake phase.
+template <typename T>
+static T expect(control_socket & ctl, stream_socket * strm, std::chrono::milliseconds timeout, int * udp_port = nullptr,
+                const sockaddr_in6 * peer = nullptr)
+{
+	auto deadline = std::chrono::steady_clock::now() + timeout;
+	while (std::chrono::steady_clock::now() < deadline)
+	{
+		if (auto pending = ctl.receive_pending())
+		{
+			if (auto * v = std::get_if<T>(&*pending))
+				return std::move(*v);
+			throw std::runtime_error("unexpected packet during handshake (index " + std::to_string(pending->index()) + ")");
+		}
+		pollfd fds[2] = {{.fd = ctl.get_fd(), .events = POLLIN}, {.fd = strm ? strm->get_fd() : -1, .events = POLLIN}};
+		int r = ::poll(fds, strm ? 2 : 1, 100);
+		if (r < 0)
+			throw std::system_error(errno, std::system_category());
+		if (fds[0].revents & (POLLHUP | POLLERR))
+			throw std::runtime_error("control socket closed during handshake");
+		if (strm and (fds[1].revents & POLLIN))
+		{
+			// Not UDP::receive_from_raw(): it sizes the buffer with recvfrom(MSG_PEEK | MSG_TRUNC), which returns the
+			// datagram length on Linux but 0 on macOS. Unencrypted (M0), so a plain recvfrom is equivalent.
+			sockaddr_in6 from{};
+			socklen_t from_len = sizeof(from);
+			auto buffer = std::make_shared<uint8_t[]>(65536);
+			ssize_t n = recvfrom(strm->get_fd(), buffer.get(), 65536, 0, (sockaddr *)&from, &from_len);
+			if (n <= 0)
+				continue;
+			if (peer and memcmp(&from.sin6_addr, &peer->sin6_addr, sizeof(from.sin6_addr)) != 0)
+				continue; // wrong sender, like wivrn_connection
+			wivrn::deserialization_packet raw{buffer, std::span<uint8_t>(buffer.get(), size_t(n))};
+			auto pkt = raw.deserialize<fh::packets>();
+			if (auto * v = std::get_if<T>(&pkt))
+			{
+				if (udp_port)
+					*udp_port = ntohs(from.sin6_port);
+				return std::move(*v);
+			}
+		}
+		if (fds[0].revents & POLLIN)
+		{
+			auto pkt = ctl.receive();
+			if (not pkt)
+				continue;
+			if (auto * v = std::get_if<T>(&*pkt))
+				return std::move(*v);
+			throw std::runtime_error("unexpected packet during handshake (index " + std::to_string(pkt->index()) + ")");
+		}
+	}
+	throw std::runtime_error("handshake timeout");
+}
+
+void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, fh::headset_info_packet & out)
+{
+	sockaddr_in6 server_address{}, client_address{};
+	socklen_t len = sizeof(server_address);
+	getsockname(ctl.get_fd(), (sockaddr *)&server_address, &len);
+	len = sizeof(client_address);
+	getpeername(ctl.get_fd(), (sockaddr *)&client_address, &len);
+
+	int port = ntohs(server_address.sin6_port);
+	if (cfg.tcp_only)
+		port = -1;
+	else
+		strm.bind(server_address);
+
+	auto hs = expect<fh::crypto_handshake>(ctl, nullptr, 10s);
+	if (hs.protocol_version != wivrn::protocol_version)
+	{
+		ctl.send(th::crypto_handshake{.state = th::crypto_handshake::crypto_state::incompatible_version});
+		char buf[96];
+		snprintf(buf, sizeof buf, "incompatible protocol %016" PRIx64 " (ours %016" PRIx64 ")", hs.protocol_version, wivrn::protocol_version);
+		throw std::runtime_error(buf);
+	}
+	log("headset '" + hs.name + "' connected, protocol ok");
+
+	// M0 bring-up: encryption disabled (LAN only). PIN pairing (X448 + SMP + AES-CTR) is the next step; the
+	// vendored crypto/smp/secrets code is already built in.
+	ctl.send(th::crypto_handshake{.state = th::crypto_handshake::crypto_state::encryption_disabled});
+	expect<fh::crypto_handshake>(ctl, nullptr, 10s); // client confirms its (absent) encryption setup
+
+	ctl.send(th::handshake{.stream_port = port});
+	int client_port = -1;
+	if (port >= 0)
+	{
+		expect<fh::handshake>(ctl, &strm, 10s, &client_port, &client_address);
+		if (client_port >= 0)
+		{
+			client_address.sin6_port = htons(client_port);
+			strm.connect(client_address);
+			strm.set_send_buffer_size(1024 * 1024 * 5);
+		}
+	}
+	else
+		expect<fh::handshake>(ctl, nullptr, 10s);
+	ctl.send(th::handshake{.stream_port = port});
+	try
+	{
+		out = expect<fh::headset_info_packet>(ctl, nullptr, 10s);
+	}
+	catch (std::exception & e)
+	{
+		throw std::runtime_error(std::string("headset info: ") + e.what());
+	}
+}
+
+void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
+{
+	HeadsetInfo h;
+	h.render_eye_width = hi.render_eye_width;
+	h.render_eye_height = hi.render_eye_height;
+	h.eye_width = (cfg.width ? cfg.width : hi.stream_eye_width) & ~1u;
+	h.eye_height = (cfg.height ? cfg.height : hi.stream_eye_height) & ~1u;
+	h.refresh_rates = hi.available_refresh_rates;
+	h.preferred_refresh_rate = hi.settings.preferred_refresh_rate;
+	if (h.preferred_refresh_rate <= 0)
+		h.preferred_refresh_rate = h.refresh_rates.empty() ? 72 : h.refresh_rates.front();
+	for (int i = 0; i < 2; ++i)
+		h.fov[i] = from_xr(hi.fov[i]);
+	for (auto c: hi.supported_codecs)
+	{
+		switch (c)
+		{
+			case wivrn::h264:
+				h.codecs.push_back(Codec::h264);
+				break;
+			case wivrn::h265:
+				h.codecs.push_back(Codec::hevc);
+				break;
+			case wivrn::av1:
+				h.codecs.push_back(Codec::av1);
+				break;
+			case wivrn::raw:
+				h.codecs.push_back(Codec::raw);
+				break;
+		}
+	}
+	h.hand_tracking = hi.hand_tracking;
+	h.eye_gaze = hi.eye_gaze;
+	h.name = hi.system_name;
+	refresh = h.preferred_refresh_rate;
+
+	// HEVC when the client lists it (all Quest/Pico/Frame clients do), else H.264.
+	bool hevc = std::ranges::contains(h.codecs, Codec::hevc);
+	bool h264 = std::ranges::contains(h.codecs, Codec::h264);
+	if (not hevc and not h264)
+		throw std::runtime_error("headset supports neither HEVC nor H.264");
+	codec = hevc ? EncoderConfig::Codec::hevc : EncoderConfig::Codec::h264;
+	{
+		std::scoped_lock lock(encode_mutex, eye_mutex[0], eye_mutex[1]);
+		for (int i = 0; i < 2; ++i)
+		{
+			encoders[i] = std::make_unique<VtEncoder>(EncoderConfig{
+			        .codec = codec,
+			        .width = h.eye_width,
+			        .height = h.eye_height,
+			        .fps = h.preferred_refresh_rate,
+			        .bitrate_bps = cfg.bitrate_bps / 2,
+			});
+			idr[i].reset();
+		}
+	}
+	{
+		std::lock_guard lock(view_mutex);
+		view_fov = h.fov;
+	}
+
+	auto wc = hevc ? wivrn::video_codec::h265 : wivrn::video_codec::h264;
+	control->send(th::video_stream_description{
+	        .width = uint16_t(h.eye_width),
+	        .height = uint16_t(h.eye_height),
+	        .codec = {wc, wc, wc},
+	        .frame_rate = h.preferred_refresh_rate,
+	        .refresh_rate = h.preferred_refresh_rate,
+	});
+
+	// Ask for head and controller poses predicted around the expected motion-to-photon time
+	// (WiVRn's tracking_control::resolve pattern: 3 ms steps for head/hands).
+	th::tracking_control tc{};
+	const XrDuration latency = 40'000'000;
+	for (auto dev: {wivrn::device_id::HEAD, wivrn::device_id::LEFT_GRIP, wivrn::device_id::LEFT_AIM,
+	                wivrn::device_id::RIGHT_GRIP, wivrn::device_id::RIGHT_AIM})
+	{
+		for (XrDuration t = 0; t <= latency; t += (dev == wivrn::device_id::HEAD ? 3'000'000 : 10'000'000))
+			tc.pattern.push_back({.device = dev, .prediction_ns = t});
+	}
+	tc.motions_to_photons = latency;
+	control->send(std::move(tc));
+
+	{
+		std::lock_guard lock(cnx_mutex);
+		info = h;
+	}
+	char buf[160];
+	snprintf(buf, sizeof buf, "headset '%s': stream %ux%u per eye, %.0f Hz, %s", h.name.c_str(), h.eye_width,
+	         h.eye_height, h.preferred_refresh_rate, hevc ? "HEVC" : "H.264");
+	log(buf);
+}
+
+void WivrnSession::impl::handle(fh::packets && packet)
+{
+	std::visit(
+	        [this](auto && pkt) {
+		        using T = std::decay_t<decltype(pkt)>;
+		        if constexpr (std::is_same_v<T, fh::timesync_response>)
+		        {
+			        clock.add(pkt.query, pkt.response);
+			        stats.timesync++;
+		        }
+		        else if constexpr (std::is_same_v<T, fh::tracking>)
+		        {
+			        stats.tracking++;
+			        ns t = clock.from_headset(pkt.timestamp);
+			        std::vector<TrackedPose> poses;
+			        for (auto & dp: pkt.device_poses)
+			        {
+				        bool ok;
+				        Device d = to_device(dp.device, ok);
+				        if (not ok)
+					        continue;
+				        TrackedPose tp{
+				                .device = d,
+				                .time = t,
+				                .pose = from_xr(dp.pose),
+				                .linear_velocity = {dp.linear_velocity.x, dp.linear_velocity.y, dp.linear_velocity.z},
+				                .angular_velocity = {dp.angular_velocity.x, dp.angular_velocity.y, dp.angular_velocity.z},
+				                .orientation_valid = bool(dp.flags & wivrn::from_headset::orientation_valid),
+				                .position_valid = bool(dp.flags & wivrn::from_headset::position_valid),
+				        };
+				        if (tp.orientation_valid)
+					        history[size_t(d)].add(tp);
+				        poses.push_back(tp);
+			        }
+			        {
+				        std::lock_guard lock(view_mutex);
+				        for (int i = 0; i < 2; ++i)
+				        {
+					        view_pose[i] = from_xr(pkt.views[i].pose);
+					        view_fov[i] = from_xr(pkt.views[i].fov);
+				        }
+			        }
+			        if (listener and not poses.empty())
+				        listener->on_tracking(poses);
+		        }
+		        else if constexpr (std::is_same_v<T, fh::feedback>)
+		        {
+			        stats.feedback++;
+			        if (pkt.received_from_decoder and pkt.received_first_packet)
+				        stats.last_feedback_decode_ns = pkt.received_from_decoder - pkt.received_first_packet;
+			        if (pkt.stream_index < 2 and idr[pkt.stream_index].on_feedback(pkt.frame_index, pkt.sent_to_decoder != 0))
+			        {
+				        stats.idr_requests++;
+				        log("IDR needed on stream " + std::to_string(pkt.stream_index) + " (frame " + std::to_string(pkt.frame_index) + " lost)");
+			        }
+		        }
+		        else if constexpr (std::is_same_v<T, fh::inputs>)
+		        {
+			        if (listener)
+			        {
+				        std::vector<InputValue> v;
+				        for (auto & i: pkt.values)
+					        v.push_back({uint32_t(i.id), i.value, clock.from_headset(i.last_change_time)});
+				        listener->on_input(v);
+			        }
+		        }
+		        else if constexpr (std::is_same_v<T, fh::settings_changed>)
+		        {
+			        if (pkt.bitrate_bps)
+			        {
+				        std::scoped_lock lock(encode_mutex, eye_mutex[0], eye_mutex[1]);
+				        for (auto & e: encoders)
+					        if (e)
+						        e->set_bitrate(pkt.bitrate_bps / 2);
+			        }
+		        }
+		        else if constexpr (std::is_same_v<T, fh::refresh_rate_changed>)
+		        {
+			        refresh = pkt.to;
+			        if (listener)
+				        listener->on_refresh_rate(pkt.to);
+		        }
+		        else
+		        {
+			        // Remaining packets (audio, hand/body/face tracking, app launcher, battery, ...) are not used by M0.
+		        }
+	        },
+	        std::move(packet));
+}
+
+void WivrnSession::impl::run_connection(wivrn::TCP && tcp)
+{
+	auto ctl = std::make_unique<control_socket>(std::move(tcp));
+	auto strm = std::make_unique<stream_socket>();
+	fh::headset_info_packet hi;
+	handshake(*ctl, *strm, hi);
+	if (not strm->get_fd() or cfg.tcp_only)
+		strm.reset();
+	{
+		std::lock_guard lock(cnx_mutex);
+		control = std::move(ctl);
+		stream = std::move(strm);
+	}
+	clock.reset();
+	for (auto & h: history)
+		h.clear();
+	on_headset_info(hi);
+	is_connected = true;
+	if (listener)
+		listener->on_connected(*info);
+
+	auto next_sync = std::chrono::steady_clock::now();
+	while (not quit)
+	{
+		auto now = std::chrono::steady_clock::now();
+		if (now >= next_sync)
+		{
+			next_sync = now + std::chrono::milliseconds(clock.interval());
+			th::timesync_query q{.query = now_ns()};
+			if (stream)
+				stream->send(std::move(q));
+			else
+				control->send(std::move(q));
+		}
+		pollfd fds[2] = {{.fd = control->get_fd(), .events = POLLIN}, {.fd = stream ? stream->get_fd() : -1, .events = POLLIN}};
+		int r = ::poll(fds, 2, 5);
+		if (r < 0 and errno != EINTR)
+			throw std::system_error(errno, std::system_category());
+		if (fds[0].revents & (POLLHUP | POLLERR))
+			throw wivrn::socket_shutdown();
+		if (fds[0].revents & POLLIN)
+		{
+			if (auto pkt = control->receive())
+				handle(std::move(*pkt));
+			while (auto pkt = control->receive_pending())
+				handle(std::move(*pkt));
+		}
+		if (stream and (fds[1].revents & POLLIN))
+		{
+			if (auto pkt = stream->receive())
+				handle(std::move(*pkt));
+			while (auto pkt = stream->receive_pending())
+				handle(std::move(*pkt));
+		}
+	}
+}
+
+void WivrnSession::impl::accept_loop()
+{
+	while (not quit)
+	{
+		pollfd pfd{.fd = tcp_listener->get_fd(), .events = POLLIN};
+		if (::poll(&pfd, 1, 100) <= 0)
+			continue;
+		try
+		{
+			auto [tcp, addr] = tcp_listener->accept();
+			char host[INET6_ADDRSTRLEN] = {};
+			inet_ntop(AF_INET6, &addr.sin6_addr, host, sizeof host);
+			log(std::string("connection from ") + host);
+			run_connection(std::move(tcp));
+		}
+		catch (wivrn::socket_shutdown &)
+		{
+			log("headset disconnected");
+		}
+		catch (std::exception & e)
+		{
+			log(std::string("connection ended: ") + e.what());
+		}
+		bool was = is_connected.exchange(false);
+		{
+			std::lock_guard lock(cnx_mutex);
+			control.reset();
+			stream.reset();
+			info.reset();
+		}
+		{
+			std::scoped_lock lock(encode_mutex, eye_mutex[0], eye_mutex[1]);
+			for (auto & e: encoders)
+				e.reset();
+		}
+		if (was and listener)
+			listener->on_disconnected();
+	}
+}
+
+void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferRef buf)
+{
+	VtEncoder * enc;
+	bool idr_frame;
+	EncodedFrame out;
+	uint16_t width, height;
+	{
+		std::lock_guard lock(eye_mutex[eye]);
+		enc = encoders[eye].get();
+		if (not enc)
+			return;
+		width = uint16_t(enc->config().width);
+		height = uint16_t(enc->config().height);
+		idr_frame = idr[eye].frame_is_idr(f.frame_id);
+		out = enc->encode(buf, f.display_time, idr_frame);
+	}
+	if (out.annexb.empty())
+		return; // dropped by the encoder
+	stats.last_encode_ns = out.encode_end - out.encode_begin;
+
+	th::video_stream_data_shard shard{};
+	shard.stream_item_idx = uint8_t(eye);
+	shard.frame_idx = f.frame_id;
+	shard.shard_idx = 0;
+	th::video_stream_data_shard::view_info_t vi{};
+	vi.display_time = clock.to_headset(f.display_time);
+	for (int i = 0; i < 2; ++i)
+	{
+		vi.pose[i] = to_xr(f.pose[i]);
+		vi.fov[i] = to_xr(f.fov[i]);
+		// Identity foveation: one 1:1 band covering the whole axis (stream_defoveator::defoveated_size = W x H).
+		vi.foveation[i].x = {width};
+		vi.foveation[i].y = {height};
+	}
+	vi.alpha = false;
+	shard.view_info = vi;
+
+	th::video_stream_data_shard::timing_info_t timing{
+	        .encode_begin = clock.to_headset(out.encode_begin),
+	        .encode_end = clock.to_headset(out.encode_end),
+	        .send_begin = clock.to_headset(now_ns()),
+	        .send_end = 0,
+	};
+
+	std::unique_lock lock(cnx_mutex);
+	bool use_stream = stream and not cfg.tcp_only;
+	// IDR frames go on the reliable channel (WiVRn's `control` flag for SendData), P frames on UDP.
+	bool on_control = not use_stream or out.idr;
+	ssize_t max_payload = on_control ? std::numeric_limits<uint32_t>::max() : th::video_stream_data_shard::max_payload_size;
+	auto begin = out.annexb.begin(), end = out.annexb.end();
+	while (begin != end)
+	{
+		size_t payload_size = std::max<ssize_t>(0, max_payload - ssize_t(wivrn::serialized_size(shard.view_info)));
+		auto next = end - begin > ssize_t(payload_size) ? begin + payload_size : end;
+		if (next == end)
+		{
+			timing.send_end = clock.to_headset(now_ns());
+			shard.timing_info = timing;
+		}
+		shard.payload = {&*begin, size_t(next - begin)};
+		try
+		{
+			if (on_control)
+				control->send(th::video_stream_data_shard{shard});
+			else
+				stream->send(th::video_stream_data_shard{shard});
+		}
+		catch (...)
+		{
+			// network errors are handled by the receive loop
+		}
+		stats.bytes_sent += next - begin;
+		++shard.shard_idx;
+		shard.view_info.reset();
+		begin = next;
+	}
+	stats.frames_sent++;
+	if (out.idr)
+		stats.idr_sent++;
+}
+
+// ---- public ----
+
+WivrnSession::WivrnSession(WivrnConfig cfg) :
+        p(std::make_unique<impl>())
+{
+	p->cfg = std::move(cfg);
+	std::random_device rd;
+	char buf[17];
+	snprintf(buf, sizeof buf, "%08x%08x", rd(), rd());
+	p->cookie = buf;
+}
+
+WivrnSession::~WivrnSession()
+{
+	stop();
+}
+
+uint64_t WivrnSession::protocol_version()
+{
+	return wivrn::protocol_version;
+}
+
+void WivrnSession::start(SessionListener * l)
+{
+	p->listener = l;
+	p->tcp_listener = std::make_unique<wivrn::TCPListener>(p->cfg.port);
+	sockaddr_in6 a{};
+	socklen_t len = sizeof a;
+	getsockname(p->tcp_listener->get_fd(), (sockaddr *)&a, &len);
+	p->bound_port = ntohs(a.sin6_port);
+	if (p->cfg.advertise)
+	{
+		char proto[17];
+		snprintf(proto, sizeof proto, "%016" PRIx64, wivrn::protocol_version);
+		char host[256] = {};
+		gethostname(host, sizeof host - 1);
+		p->publisher = std::make_unique<DnssdPublisher>(host, "_wivrn._tcp", p->bound_port,
+		                                                std::map<std::string, std::string>{
+		                                                        {"protocol", proto},
+		                                                        {"version", "steamac-vrhost (WiVRn v26.9 protocol)"},
+		                                                        {"cookie", p->cookie},
+		                                                });
+	}
+	p->quit = false;
+	p->accept_thread = std::thread([this] { p->accept_loop(); });
+}
+
+void WivrnSession::stop()
+{
+	p->quit = true;
+	if (p->accept_thread.joinable())
+		p->accept_thread.join();
+	p->publisher.reset();
+	p->tcp_listener.reset();
+}
+
+bool WivrnSession::connected() const
+{
+	return p->is_connected;
+}
+
+std::optional<HeadsetInfo> WivrnSession::headset() const
+{
+	std::lock_guard lock(p->cnx_mutex);
+	return p->info;
+}
+
+int WivrnSession::port() const
+{
+	return p->bound_port;
+}
+
+const WivrnStats & WivrnSession::stats() const
+{
+	return p->stats;
+}
+
+FrameTiming WivrnSession::next_frame_timing()
+{
+	// M0 pacing: fixed period at the headset refresh rate; the frame is predicted to be displayed one motion-to-photon
+	// budget later. WiVRn's feedback-driven pacer (compositor/pacer.cpp) replaces this in M1.
+	ns period = ns(1e9 / std::max(1.0f, p->refresh.load()));
+	ns now = now_ns();
+	if (p->next_wake == 0 or p->next_wake < now - period)
+		p->next_wake = now;
+	ns wake = p->next_wake;
+	p->next_wake += period;
+	if (wake > now)
+	{
+		timespec ts{.tv_sec = time_t((wake - now) / 1'000'000'000), .tv_nsec = long((wake - now) % 1'000'000'000)};
+		nanosleep(&ts, nullptr);
+	}
+	return {wake, wake + 40'000'000};
+}
+
+std::optional<TrackedPose> WivrnSession::pose_at(Device d, ns t)
+{
+	if (d >= Device::count)
+		return std::nullopt;
+	return p->history[size_t(d)].at(t);
+}
+
+bool WivrnSession::views_at(ns t, std::array<Pose, 2> & pose, std::array<Fov, 2> & fov)
+{
+	auto head = pose_at(Device::head, t);
+	std::lock_guard lock(p->view_mutex);
+	fov = p->view_fov;
+	for (int i = 0; i < 2; ++i)
+		pose[i] = head ? multiply(head->pose, p->view_pose[i]) : p->view_pose[i];
+	return head.has_value();
+}
+
+void WivrnSession::submit(const Frame & f)
+{
+	if (not p->is_connected)
+		return;
+	std::array<CVPixelBufferRef, 2> buf{};
+	for (int eye = 0; eye < 2; ++eye)
+		if (f.eye[eye].surface and CVPixelBufferCreateWithIOSurface(nullptr, f.eye[eye].surface, nullptr, &buf[eye]) != kCVReturnSuccess)
+			buf[eye] = nullptr;
+	// Both eyes are encoded concurrently (two VideoToolbox sessions); the media engine serialises them partly, but
+	// the second eye no longer waits for the first eye's send.
+	std::exception_ptr err;
+	std::thread right([&] {
+		try
+		{
+			if (buf[1])
+				p->send_frame_eye(1, f, buf[1]);
+		}
+		catch (...)
+		{
+			err = std::current_exception();
+		}
+	});
+	try
+	{
+		if (buf[0])
+			p->send_frame_eye(0, f, buf[0]);
+	}
+	catch (...)
+	{
+		if (not err)
+			err = std::current_exception();
+	}
+	right.join();
+	for (auto b: buf)
+		if (b)
+			CVPixelBufferRelease(b);
+	if (err)
+		std::rethrow_exception(err);
+}
+
+void WivrnSession::haptics(Device d, float duration_s, float frequency, float amplitude)
+{
+	std::lock_guard lock(p->cnx_mutex);
+	th::haptics h{
+	        .id = from_device(d),
+	        .duration = std::chrono::nanoseconds(int64_t(duration_s * 1e9)),
+	        .frequency = frequency,
+	        .amplitude = amplitude,
+	};
+	if (p->stream)
+		p->stream->send(std::move(h));
+	else if (p->control)
+		p->control->send(std::move(h));
+}
+
+void WivrnSession::request_idr()
+{
+	for (auto & i: p->idr)
+		i.request();
+}
+} // namespace vrhost

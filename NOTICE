@@ -65,6 +65,10 @@ fork are listed in docs/fork.md. New files added by this fork:
   docs/fork.md             fork documentation, Apache-2.0
   wmtr/                    the DXMT remoting layer, BSD-3-Clause (LICENSES/BSD-3-Clause.txt)
   host/dxmt/patches/       patches to DXMT, LGPL-2.1-or-later (the license of DXMT)
+  host/vrhost/             steamac-vrhost, the experimental VR host: GPL-3.0-or-later (host/vrhost/COPYING),
+                           because it contains WiVRn code (github.com/WiVRn/WiVRn, GPL-3.0-or-later). It is a
+                           separate executable; steamac-vm does not link it. magic_enum (vendored by WiVRn) is MIT.
+  docs/vr.md, docs/vr-interfaces.md  fork documentation, Apache-2.0
   docs/upstream/           upstream steamac's README text, reorganised into pages
                            (upstream text, Apache-2.0, © 2026 FX GAMES FZ LLC)
 
