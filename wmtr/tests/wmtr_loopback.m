@@ -18,6 +18,7 @@
 #include "wmtr_host.h"
 #include "wmtr_vr.h"
 #include "vrlink.h"
+#include "steamac_vr_guest.h"
 #include <IOSurface/IOSurface.h>
 #include <servers/bootstrap.h>
 #include <sys/socket.h>
@@ -26,6 +27,7 @@
 typedef int NTSTATUS;
 typedef NTSTATUS (*fn_t)(void *);
 extern const void *__wine_unix_call_funcs[];
+extern int wmtr_vr_call(const void *req, uint32_t req_size, void *rep, uint32_t rep_cap);
 
 static int failures;
 #define CHECK(c, ...) do { if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while (0)
@@ -160,6 +162,55 @@ static int surface_matches(IOSurfaceRef s, int eye, uint32_t ox, uint32_t oy, ui
   IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
   return ok;
 }
+/* guest OpenVR runtime polls (WMTR_CTL_VR_QUERY through the ring, answered from the newest host packets) */
+static void test_vr_query(struct wmtr_vr *vr, int host_fd) {
+  struct svr_hello_req hq = {{SVR_HELLO, sizeof hq}, SVR_VERSION, 1, "test"};
+  struct svr_hello_rep hr;
+  CHECK(wmtr_vr_call(&hq, sizeof hq, &hr, sizeof hr) == 0 && hr.h.op == SVR_HELLO && hr.version == SVR_VERSION &&
+        !hr.connected, "hello before any host state");
+  struct svr_frame_req fq = {{SVR_FRAME, sizeof fq}, 0};
+  struct svr_frame_rep fr;
+  CHECK(wmtr_vr_call(&fq, sizeof fq, &fr, sizeof fr) == 0 && fr.frame_id == 1 && fr.refresh_hz == 90.0f &&
+        fr.wake_up <= fr.predicted_display, "frame without a headset keeps a local cadence");
+
+  struct vrl_state st = {{VRL_STATE, sizeof st}, 1, 1832, 1920, 72.0f, 0.065f, {{-0.9f, 0.8f, 0.85f, -0.85f}, {-0.8f, 0.9f, 0.85f, -0.85f}},
+                         VRL_PROFILE_INDEX, 0, "Quest 3"};
+  struct vrl_timing tm = {{VRL_TIMING, sizeof tm}, 500, 1000000, 1000000 + 27777778, 72.0f, 0};
+  struct vrl_poses po = {{VRL_POSES, sizeof po}, 1000000 + 27777778};
+  for (int d = 0; d < VRL_DEV_COUNT; d++) {
+    po.pose[d].orientation[3] = 1;
+    po.pose[d].position[0] = (float)d;
+    po.pose[d].flags = VRL_POSE_VALID | VRL_POSE_TRACKED;
+  }
+  struct vrl_input in = {{VRL_INPUT, sizeof in}, 999, VRL_PROFILE_INDEX, 0};
+  in.value[1][SVR_IN_TRIGGER_VALUE] = 0.5f;
+  in.value[0][SVR_IN_THUMBSTICK_X] = -1.0f;
+  send(host_fd, &st, sizeof st, 0); send(host_fd, &tm, sizeof tm, 0);
+  send(host_fd, &po, sizeof po, 0); send(host_fd, &in, sizeof in, 0);
+
+  CHECK(wmtr_vr_call(&hq, sizeof hq, &hr, sizeof hr) == 0 && hr.connected && hr.eye_width == 1832 && hr.refresh_hz == 72.0f &&
+        hr.profile == SVR_PROFILE_INDEX && !strcmp(hr.name, "Quest 3") && hr.fov[1][1] == 0.9f, "hello from VRL_STATE");
+  fq.last_frame_id = 0;
+  CHECK(wmtr_vr_call(&fq, sizeof fq, &fr, sizeof fr) == 0 && fr.frame_id == 500 && fr.wake_up == 1000000 &&
+        fr.predicted_display == 1000000 + 27777778 && fr.pose_time == po.time && fr.pose[SVR_DEV_RIGHT_AIM].position[0] == 4.0f &&
+        fr.input[1][SVR_IN_TRIGGER_VALUE] == 0.5f && fr.input[0][SVR_IN_THUMBSTICK_X] == -1.0f && fr.connected,
+        "frame from VRL_TIMING/POSES/INPUT");
+  fq.last_frame_id = 500; /* the guest already rendered it: continue the cadence */
+  CHECK(wmtr_vr_call(&fq, sizeof fq, &fr, sizeof fr) == 0 && fr.frame_id == 501 &&
+        fr.predicted_display == 1000000 + 27777778 + (int64_t)(1e9f / 72.0f), "frame after the pacer's");
+
+  struct svr_haptic_req hp = {{SVR_HAPTIC, sizeof hp}, 1, 0.05f, 160.0f, 0.75f};
+  struct svr_ack ack;
+  CHECK(wmtr_vr_call(&hp, sizeof hp, &ack, sizeof ack) == 0 && ack.status == 0, "haptic ack");
+  union { struct vrl_header h; struct vrl_haptics hx; uint8_t raw[1024]; } u;
+  CHECK(vr_next(host_fd, VRL_HAPTICS, &u, sizeof u) && u.hx.hand == 1 && u.hx.duration_s == 0.05f && u.hx.amplitude == 0.75f,
+        "VRL_HAPTICS not sent");
+  struct svr_hdr bogus = {77, sizeof bogus};
+  CHECK(wmtr_vr_call(&bogus, sizeof bogus, &ack, sizeof ack) != 0, "unknown op accepted");
+  struct wmtr_vr_stats s; wmtr_vr_get_stats(vr, &s);
+  CHECK(s.queries >= 6 && s.haptics == 1, "query stats %llu/%llu", s.queries, s.haptics);
+}
+
 static void test_vr(id<MTLDevice> dev) {
   struct unixcall_wmtvr_submit sub;
   memset(&sub, 0, sizeof sub);
@@ -244,6 +295,7 @@ static void test_vr(id<MTLDevice> dev) {
   CHECK(wmtr_vr_submit(vr, &sub.info) == (int)0xC000000D, "null eye texture accepted");
   wmtr_vr_get_stats(vr, &st);
   CHECK(st.errors == errs + 1, "error not counted");
+  test_vr_query(vr, sv[1]);
   wmtr_host_set_vr(H, NULL);
   wmtr_vr_destroy(vr);
   close(sv[1]);

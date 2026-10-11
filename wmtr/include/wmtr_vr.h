@@ -21,6 +21,12 @@ void wmtr_vr_destroy(struct wmtr_vr *vr);
 /* returns an NTSTATUS (0 = queued or dropped, see stats) */
 int wmtr_vr_submit(struct wmtr_vr *vr, const struct WMTVRSubmitInfo *info);
 
+/* WMTR_CTL_VR_QUERY: `buf` holds one request of the guest VR protocol (guest/vr/include/steamac_vr_guest.h:
+ * SVR_HELLO, SVR_FRAME, SVR_HAPTIC) in `size` bytes and is overwritten with the reply. Answered from the newest
+ * VRL_STATE/VRL_TIMING/VRL_POSES/VRL_INPUT the host sent, without waiting; SVR_HAPTIC becomes VRL_HAPTICS.
+ * vr == NULL (no VR host attached) answers HELLO with connected = 0. Returns an NTSTATUS. */
+int wmtr_vr_query(struct wmtr_vr *vr, void *buf, uint32_t size);
+
 struct wmtr_vr_stats {
   uint64_t submits;   /* WMTVRSubmit calls */
   uint64_t sent;      /* VRL_SUBMIT packets sent */
@@ -28,6 +34,8 @@ struct wmtr_vr_stats {
   uint64_t released;  /* VRL_RELEASE received */
   uint64_t errors;    /* bad textures, unsupported formats, link errors */
   uint64_t swapchains;/* swapchains (re)created */
+  uint64_t queries;   /* WMTR_CTL_VR_QUERY requests answered */
+  uint64_t haptics;   /* VRL_HAPTICS sent */
 };
 void wmtr_vr_get_stats(struct wmtr_vr *vr, struct wmtr_vr_stats *out);
 

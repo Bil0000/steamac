@@ -16,7 +16,16 @@
 #define WINEMETAL_API
 #include "winemetal_thunks.h"
 #include "vrlink.h"
+#include "steamac_vr_guest.h"
 #include "wmtr_vr.h"
+
+_Static_assert(VRL_INPUT_COUNT == SVR_IN_COUNT, "vrlink.h and the guest protocol disagree on input ids");
+_Static_assert((int)VRL_DEV_COUNT == (int)SVR_DEV_COUNT && sizeof(struct vrl_pose) == sizeof(struct svr_pose), "pose layout");
+/* the guest runtime builds WMTVRSubmitInfo from its own mirror of the struct */
+_Static_assert(sizeof(struct svr_wmtvr_submit) == sizeof(struct WMTVRSubmitInfo) &&
+                   offsetof(struct svr_wmtvr_submit, wait_value) == offsetof(struct WMTVRSubmitInfo, wait_value) &&
+                   offsetof(struct svr_wmtvr_submit, fov) == offsetof(struct WMTVRSubmitInfo, fov),
+               "svr_wmtvr_submit must match DXMT's WMTVRSubmitInfo");
 
 #define STATUS_SUCCESS 0
 #define STATUS_INVALID_PARAMETER ((int)0xC000000D)
@@ -43,6 +52,12 @@ struct wmtr_vr {
   _Atomic uint64_t submits, sent, dropped, released, errors, swapchains;
   int warned;
   _Atomic int inflight; /* command buffers whose completion handler has not run */
+  /* newest host state for the guest's polls (executor thread only) */
+  struct vrl_state state;
+  struct vrl_timing timing;
+  struct vrl_poses poses;
+  struct vrl_input input;
+  _Atomic uint64_t queries, haptics;
 };
 
 static int64_t
@@ -146,17 +161,109 @@ swapchain_make(struct wmtr_vr *vr, int eye, uint32_t w, uint32_t h, uint32_t for
   return 1;
 }
 
-/* VRL_RELEASE packets: mark images free (executor thread, non-blocking) */
+/* host packets (executor thread, non-blocking): VRL_RELEASE marks images free; state, timing, poses and input
+ * replace the cached copies the guest's polls are answered from */
 static void
 drain_releases(struct wmtr_vr *vr) {
-  union { struct vrl_header h; struct vrl_release r; uint8_t raw[512]; } u;
+  union {
+    struct vrl_header h; struct vrl_release r; struct vrl_state s; struct vrl_timing t; struct vrl_poses p;
+    struct vrl_input i; uint8_t raw[2048];
+  } u;
   for (;;) {
     ssize_t n = recv(vr->fd, &u, sizeof u, MSG_DONTWAIT);
     if (n <= 0) return;
-    if (n < (ssize_t)sizeof u.h || u.h.type != VRL_RELEASE || n < (ssize_t)sizeof u.r) continue;
-    for (int e = 0; e < 2; e++)
-      if (vr->sc[e].id == u.r.swapchain && u.r.image < VR_IMAGES) atomic_store(&vr->sc[e].busy[u.r.image], 0);
-    atomic_fetch_add(&vr->released, 1);
+    if (n < (ssize_t)sizeof u.h || u.h.size != (uint32_t)n) continue;
+    switch (u.h.type) {
+    case VRL_RELEASE:
+      if (n < (ssize_t)sizeof u.r) break;
+      for (int e = 0; e < 2; e++)
+        if (vr->sc[e].id == u.r.swapchain && u.r.image < VR_IMAGES) atomic_store(&vr->sc[e].busy[u.r.image], 0);
+      atomic_fetch_add(&vr->released, 1);
+      break;
+    case VRL_STATE: if (n == sizeof u.s) vr->state = u.s; break;
+    case VRL_TIMING: if (n == sizeof u.t) vr->timing = u.t; break;
+    case VRL_POSES: if (n == sizeof u.p) vr->poses = u.p; break;
+    case VRL_INPUT: if (n == sizeof u.i) vr->input = u.i; break;
+    default: break;
+    }
+  }
+}
+
+static void
+fill_view(const struct vrl_state *st, float fov[2][4], float *ipd) {
+  memcpy(fov, st->fov, sizeof st->fov);
+  *ipd = st->ipd_m;
+}
+
+int
+wmtr_vr_query(struct wmtr_vr *vr, void *buf, uint32_t size) {
+  struct svr_hdr *q = buf;
+  if (size < sizeof *q || q->size > size) return STATUS_INVALID_PARAMETER;
+  if (vr) {
+    drain_releases(vr);
+    atomic_fetch_add(&vr->queries, 1);
+  }
+  const struct vrl_state *st = vr ? &vr->state : NULL;
+  int connected = st && st->connected;
+  switch (q->op) {
+  case SVR_HELLO: {
+    if (q->size != sizeof(struct svr_hello_req) || size < sizeof(struct svr_hello_rep)) return STATUS_INVALID_PARAMETER;
+    struct svr_hello_rep r = {{SVR_HELLO, sizeof r}};
+    r.version = SVR_VERSION;
+    r.connected = connected;
+    if (st) {
+      r.eye_width = st->eye_width, r.eye_height = st->eye_height, r.refresh_hz = st->refresh_hz, r.profile = st->profile;
+      fill_view(st, r.fov, &r.ipd_m);
+      memcpy(r.name, st->name, sizeof r.name);
+      r.name[sizeof r.name - 1] = 0;
+    }
+    memcpy(buf, &r, sizeof r);
+    return STATUS_SUCCESS;
+  }
+  case SVR_FRAME: {
+    if (q->size != sizeof(struct svr_frame_req) || size < sizeof(struct svr_frame_rep)) return STATUS_INVALID_PARAMETER;
+    uint64_t last = ((struct svr_frame_req *)buf)->last_frame_id;
+    struct svr_frame_rep r = {{SVR_FRAME, sizeof r}};
+    int64_t now = now_ns();
+    float hz = vr && vr->timing.refresh_hz > 0 ? vr->timing.refresh_hz : st && st->refresh_hz > 0 ? st->refresh_hz : 90.0f;
+    int64_t period = (int64_t)(1e9f / hz);
+    /* the pacer's next frame; if the guest already has it (or no timing arrived yet), continue its cadence
+     * locally so WaitGetPoses keeps pacing even with no headset */
+    uint64_t f = vr && vr->timing.frame_id ? vr->timing.frame_id : 0;
+    int64_t wake = f ? vr->timing.wake_up : now, disp = f ? vr->timing.predicted_display : now + 2 * period;
+    if (f <= last) {
+      uint64_t ahead = last + 1 - f;
+      f += ahead, wake += (int64_t)ahead * period, disp += (int64_t)ahead * period;
+    }
+    r.frame_id = f, r.host_now = now, r.wake_up = wake, r.predicted_display = disp;
+    r.refresh_hz = hz;
+    r.connected = connected;
+    if (st) r.profile = st->profile, fill_view(st, r.fov, &r.ipd_m);
+    if (vr && vr->poses.time) {
+      memcpy(r.pose, vr->poses.pose, sizeof r.pose);
+      r.pose_time = vr->poses.time;
+    } else {
+      r.pose_time = disp;
+    }
+    if (vr && vr->input.time) {
+      memcpy(r.input, vr->input.value, sizeof r.input);
+      if (vr->input.profile) r.profile = vr->input.profile;
+    }
+    memcpy(buf, &r, sizeof r);
+    return STATUS_SUCCESS;
+  }
+  case SVR_HAPTIC: {
+    if (q->size != sizeof(struct svr_haptic_req) || size < sizeof(struct svr_ack)) return STATUS_INVALID_PARAMETER;
+    const struct svr_haptic_req *h = buf;
+    struct vrl_haptics p = {{VRL_HAPTICS, sizeof p}, h->hand, h->duration_s, h->frequency, h->amplitude};
+    int ok = vr && connected && send_packet(vr, &p, sizeof p);
+    if (ok) atomic_fetch_add(&vr->haptics, 1);
+    struct svr_ack a = {{SVR_HAPTIC, sizeof a}, ok ? 0 : -107 /* ENOTCONN */, 0};
+    memcpy(buf, &a, sizeof a);
+    return STATUS_SUCCESS;
+  }
+  default:
+    return STATUS_INVALID_PARAMETER;
   }
 }
 
@@ -294,4 +401,5 @@ void
 wmtr_vr_get_stats(struct wmtr_vr *vr, struct wmtr_vr_stats *o) {
   o->submits = vr->submits; o->sent = vr->sent; o->dropped = vr->dropped;
   o->released = vr->released; o->errors = vr->errors; o->swapchains = vr->swapchains;
+  o->queries = vr->queries; o->haptics = vr->haptics;
 }
