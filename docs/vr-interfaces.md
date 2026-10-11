@@ -151,7 +151,9 @@ per-stage latency p50/p99.
   number blocks, left red / right green, session frame ids and `views_at` poses) → `wmtr_vr_submit` → link →
   `VrPipeline` → `WivrnSession` (PIN pairing, AES-128-CTR) → loopback test headset: frame numbers, eye colours, eye
   poses, identity and foveated (WiVRn-consistent parameters received) streams, link-close teardown.
-  `vrhost-test-headset` is the same headset as a tool for a running host on the Mac. [implemented by M2/M3 on branch `vr-m23`, not yet live-tested]
+  `vrhost-test-headset` is the same headset as a tool for a running host on the Mac.
+
+## 4. Guest side (M2/M3) [implemented by M2/M3 on branch `vr-m23`, not yet live-tested]
 
 Guest pieces: Proton `vrclient_x64` patch (`guest/proton-vrclient/patches`, LGPL) and our OpenVR runtime
 `vrclient.so` (`guest/vr`, Apache-2.0; x86-64 Linux, loaded by Proton's unix side under FEX). Overview and tests:

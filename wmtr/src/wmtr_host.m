@@ -646,7 +646,10 @@ execute(struct wmtr_host *h, uint8_t *rec, uint32_t len) {
   }
   if (st == STATUS_SUCCESS) {
     if (r->h.flags & WMTR_F_CONTROL) {
-      st = STATUS_SUCCESS; /* PING and HELLO need no work */
+      if (r->h.call == WMTR_CTL_VR_QUERY) /* answered from cached state: never blocks the executor */
+        st = wmtr_vr_query(atomic_load(&h->vr), payload, r->h.params_size);
+      else
+        st = STATUS_SUCCESS; /* PING and HELLO need no work */
     } else if (r->h.call < WMTR_NCALLS) {
       if (__atomic_load_n(&h->faulted, __ATOMIC_ACQUIRE)) {
         st = STATUS_ACCESS_VIOLATION; /* this client already faulted the executor: refuse further work */

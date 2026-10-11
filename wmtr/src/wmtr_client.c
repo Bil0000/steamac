@@ -890,3 +890,25 @@ wmtr_debug_ping(void) {
   B.force_sync = 1;
   return send_built_flags(WMTR_CTL_PING, WMTR_F_CONTROL, &dummy, 8);
 }
+
+/* guest VR runtime link (guest/vr/runtime/transport.cpp): one message of the guest VR protocol
+ * (guest/vr/include/steamac_vr_guest.h) answered by the executor's VR exporter on this process's own
+ * context, so the same ring orders it with the DXMT work. Returns 0 or a negative errno. */
+__attribute__((visibility("default"))) int
+wmtr_vr_call(const void *req, uint32_t req_size, void *rep, uint32_t rep_cap) {
+  pthread_once(&init_once, wmtr_init);
+  if (!init_ok) return -ENODEV;
+  uint8_t buf[4096] __attribute__((aligned(8)));
+  uint32_t size = WMTR_ALIGN8(req_size > rep_cap ? req_size : rep_cap);
+  if (!req || !rep || req_size < 8 || size > sizeof buf) return -EINVAL;
+  memset(buf, 0, size);
+  memcpy(buf, req, req_size);
+  b_begin(buf, size);
+  B.force_sync = 1;
+  NTSTATUS st = send_built_flags(WMTR_CTL_VR_QUERY, WMTR_F_CONTROL, buf, size);
+  if (st) return -EIO;
+  uint32_t got = ((const uint32_t *)buf)[1]; /* reply header: op, size */
+  if (got < 8 || got > rep_cap) return -EPROTO;
+  memcpy(rep, buf, got);
+  return 0;
+}

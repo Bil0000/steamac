@@ -117,6 +117,7 @@ decode time.
   foveated stream sizes from M1.
 * **M1:** game eye textures from DXMT over the wmtr ring into `steamac-vm`, shared with `steamac-vrhost` as IOSurfaces,
   converted by a Metal compositor pass (WiVRn's `foveation.comp` in MSL) into the encoder input.
-* **M2/M3:** OpenVR in the guest (Proton `vrclient_x64` DXMT submit, poses, input), then VRChat.
+* **M2/M3:** OpenVR in the guest (Proton `vrclient_x64` DXMT submit, poses, input), then VRChat. Guest side:
+  `docs/vr-guest.md`.
 
 Interfaces between these pieces: `docs/vr-interfaces.md`.

@@ -28,11 +28,11 @@ enum vrl_type {
   VRL_SWAPCHAIN = 2, /* vm -> host: struct vrl_swapchain (ports follow on the Mach channel) */
   VRL_SUBMIT = 3,    /* vm -> host: struct vrl_submit */
   VRL_RELEASE = 4,   /* host -> vm: struct vrl_release */
-  VRL_TIMING = 5,    /* host -> vm: reserved (M0/M2) */
-  VRL_POSES = 6,     /* host -> vm: reserved (M0/M2/M3) */
-  VRL_INPUT = 7,     /* host -> vm: reserved (M3) */
-  VRL_HAPTICS = 8,   /* vm -> host: reserved (M3) */
-  VRL_STATE = 9,     /* host -> vm: reserved (M0) */
+  VRL_TIMING = 5,    /* host -> vm: struct vrl_timing, once per frame (pacer) */
+  VRL_POSES = 6,     /* host -> vm: struct vrl_poses, once per frame and on new tracking data */
+  VRL_INPUT = 7,     /* host -> vm: struct vrl_input, on change */
+  VRL_HAPTICS = 8,   /* vm -> host: struct vrl_haptics */
+  VRL_STATE = 9,     /* host -> vm: struct vrl_state, on connect/disconnect/refresh-rate change */
 };
 
 struct vrl_header {
@@ -85,6 +85,67 @@ struct vrl_release {
   uint32_t swapchain, image;
   uint64_t frame_id;     /* the frame that used the image */
   int64_t release_time;  /* host time the image was consumed (compositor pass complete) */
+};
+
+/* --- tracking, input and timing for the guest OpenVR runtime (M2/M3). The vm side keeps the newest of each
+ * and answers the guest's polls from that copy (wmtr call 147), so none of these is ever waited for. --- */
+
+/* matches vrhost::Device and the guest's svr_device */
+enum vrl_device { VRL_DEV_HEAD, VRL_DEV_LEFT_GRIP, VRL_DEV_LEFT_AIM, VRL_DEV_RIGHT_GRIP, VRL_DEV_RIGHT_AIM, VRL_DEV_COUNT };
+#define VRL_POSE_VALID 1u
+#define VRL_POSE_TRACKED 2u
+#define VRL_POSE_VEL 4u
+struct vrl_pose {
+  float orientation[4]; /* x, y, z, w */
+  float position[3];    /* stage space, metres */
+  float lin_vel[3];     /* stage space, m/s */
+  float ang_vel[3];     /* stage space, rad/s */
+  uint32_t flags;       /* VRL_POSE_* */
+};
+
+enum vrl_profile { VRL_PROFILE_NONE, VRL_PROFILE_TOUCH, VRL_PROFILE_INDEX }; /* controller family */
+
+struct vrl_state {
+  struct vrl_header h;
+  uint32_t connected;
+  uint32_t eye_width, eye_height; /* recommended render size per eye */
+  float refresh_hz;
+  float ipd_m;
+  float fov[2][4]; /* per eye: left, right, up, down; radians */
+  uint32_t profile; /* enum vrl_profile */
+  uint32_t pad;
+  char name[64];    /* headset model */
+};
+
+/* the next frame the app should render (the pacer's prediction) */
+struct vrl_timing {
+  struct vrl_header h;
+  uint64_t frame_id;
+  int64_t wake_up;           /* when the app should start it (WaitGetPoses returns) */
+  int64_t predicted_display; /* when it will be shown */
+  float refresh_hz;
+  uint32_t pad;
+};
+
+struct vrl_poses {
+  struct vrl_header h;
+  int64_t time; /* the time the poses are for (predicted_display of the current timing, or sample time) */
+  struct vrl_pose pose[VRL_DEV_COUNT];
+};
+
+#define VRL_INPUT_COUNT 21 /* = guest SVR_IN_COUNT; ids in guest/vr/include/steamac_vr_guest.h (enum svr_input) */
+struct vrl_input {
+  struct vrl_header h;
+  int64_t time;
+  uint32_t profile; /* enum vrl_profile */
+  uint32_t pad;
+  float value[2][VRL_INPUT_COUNT]; /* [hand 0 left, 1 right][svr_input id] */
+};
+
+struct vrl_haptics {
+  struct vrl_header h;
+  uint32_t hand; /* 0 left, 1 right */
+  float duration_s, frequency, amplitude; /* frequency 0 = device default */
 };
 
 #ifdef __APPLE__

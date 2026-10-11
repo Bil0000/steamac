@@ -17,7 +17,7 @@ ZSTD_LIB ?= $(shell pkg-config --variable=libdir libzstd 2>/dev/null)/libzstd.a
 OUT ?= build
 CC = clang
 
-INC = -Iinclude -Isrc -I../host/vrhost/include -I$(DXMT)/src/winemetal -I$(DXMT)/src/airconv
+INC = -Iinclude -Isrc -I../host/vrhost/include -I../guest/vr/include -I$(DXMT)/src/winemetal -I$(DXMT)/src/airconv
 CFLAGS = -O2 -g -Wall -Wno-unused-function $(INC)
 FRAMEWORKS = -framework Foundation -framework Metal -framework MetalFX -framework QuartzCore -framework Cocoa \
              -framework CoreGraphics -framework ColorSync -framework CoreFoundation -framework IOSurface
