@@ -243,8 +243,10 @@ main(void)
    CHECK(vkCreateShaderModule(dev, &smf, NULL, &fsm));
    init_state();
 
-   /* B8G8R8A8 of RGBA (0x80,0xc0,0x40,0xff) * 0.5 = (0x40,0x60,0x20,0x80): 0x80402060 */
-   const uint32_t expect = 0x80402060;
+   /* RGB uses CONSTANT_COLOR (0.5); alpha uses ONE, so RGBA is
+    * (0x40,0x60,0x20,0xff). BGRA bytes 20 60 40 ff read as 0xff406020
+    * on the little-endian hosts this test targets. */
+   const uint32_t expect = 0xff406020;
    uint32_t ref = render(monolithic());
    int fail = 0;
    printf("monolithic         %08x (expect %08x)\n", ref, expect);

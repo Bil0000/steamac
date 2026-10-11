@@ -178,8 +178,9 @@
 #   0049       steamac: MESA_KK_EXPERIMENTAL=gpl advertises VK_EXT_graphics_pipeline_library and
 #              VK_KHR_pipeline_library through 0048 (graphicsPipelineLibraryFastLinking false: a link costs a full
 #              compile; KosmicKrisp bakes vertex input formats into the VS and blend/format swizzles into the FS, and
-#              Metal render pipelines need both functions). DXVK/vkd3d-proton then take their GPL path (shader
-#              libraries created ahead on their workers). Off by default until a live stutter A/B shows a gain.
+#              Metal render pipelines need both functions). DXVK's GPL path is eligible without fastLinking,
+#              but final links remain synchronous full compiles: no stutter benefit demonstrated. See
+#              docs/kosmickrisp-gpl.md. Off by default until a live stutter A/B shows a gain.
 #              Test: tests/gpl-link.c (four DXVK-style libraries, fast link and LTO, against a monolithic pipeline).
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
