@@ -430,8 +430,9 @@ vpool_keep(uint32_t slot, uint64_t obj) {
   pthread_mutex_unlock(&vpool_lock);
 }
 
-/* results returned autoreleased by DXMT's winemetal_unix.c (4ddb20e); +1 (new/alloc/copy) results and
- * non-object handles are not listed */
+/* results returned autoreleased by DXMT's winemetal_unix.c; +1 (new/alloc/copy) results and non-object
+ * handles are not listed. Out-errors (ret_error) are not either: the pinned DXMT returns them retained
+ * (utmapp/dxmt cc080d00), owned by the caller's WMT::Reference<WMT::Error> */
 static void
 keep_autoreleased(uint32_t slot, uint16_t call, uint8_t *params) {
   switch (call) {
@@ -449,15 +450,6 @@ keep_autoreleased(uint32_t slot, uint16_t call, uint8_t *params) {
     vpool_keep(slot, ret);
     break;
   }
-  case 25: vpool_keep(slot, ((struct unixcall_mtldevice_newlibrary *)params)->ret_error); break;
-  case 29: vpool_keep(slot, ((struct unixcall_mtldevice_newcomputepso *)params)->ret_error); break;
-  case 34: case 131: vpool_keep(slot, ((struct unixcall_mtldevice_newrenderpso *)params)->ret_error); break;
-  case 35: vpool_keep(slot, ((struct unixcall_mtldevice_newmeshrenderpso *)params)->ret_error); break;
-  case 98: vpool_keep(slot, ((struct unixcall_mtllibrary_newfunction_with_constants *)params)->ret_error); break;
-  case 112: vpool_keep(slot, ((struct unixcall_mtldevice_newbinaryarchive *)params)->ret_error); break;
-  case 113: vpool_keep(slot, ((struct unixcall_mtlbinaryarchive_serialize *)params)->ret_error); break;
-  case 132: vpool_keep(slot, ((struct unixcall_mtldevice_newresidencyset *)params)->ret_error); break;
-  case 144: vpool_keep(slot, ((struct unixcall_mtldevice_newlibrarywithsource *)params)->ret_error); break;
   default: break;
   }
 }

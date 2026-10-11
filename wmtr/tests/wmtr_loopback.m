@@ -72,6 +72,20 @@ static int probe_alive;
 - (void)dealloc { probe_alive = 0; [super dealloc]; }
 @end
 static NTSTATUS f_autoreleased(void *a) { ((struct unixcall_generic_obj_ret *)a)->ret = (obj_handle_t)[[[Probe alloc] init] autorelease]; return 0; }
+/* DXMT's out-errors: autoreleased NSError retained before the handle is returned (+1, owned by the caller) */
+static int err_alive;
+@interface ErrProbe : NSObject
+@end
+@implementation ErrProbe
+- (instancetype)init { if ((self = [super init])) err_alive = 1; return self; }
+- (void)dealloc { err_alive = 0; [super dealloc]; }
+@end
+static NTSTATUS f_newlibrary(void *a) {
+  struct unixcall_mtldevice_newlibrary *p = a;
+  p->ret_library = 0;
+  p->ret_error = (obj_handle_t)[[[[ErrProbe alloc] init] autorelease] retain];
+  return 0;
+}
 static NTSTATUS f_pixelformat(void *a) { ((struct unixcall_generic_obj_uint64_ret *)a)->ret = 70; return 0; } /* RGBA8 */
 static NTSTATUS f_release(void *a) { [(id)*(obj_handle_t *)a release]; return 0; }
 static NTSTATUS f_newfunction(void *a) {
@@ -79,7 +93,7 @@ static NTSTATUS f_newfunction(void *a) {
   p->ret = strlen((const char *)(uintptr_t)p->arg) * 1000 + p->handle;
   return 0;
 }
-const void *wmtr_impl_funcs[146] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
+const void *wmtr_impl_funcs[146] = {[1] = f_release, [25] = f_newlibrary, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
                                     [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [5] = f_fault, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
@@ -239,6 +253,16 @@ int main(void) {
       remote(53, &ar);
       struct unixcall_generic_obj_uint64_ret pf3 = {0}; remote(39, &pf3);
       CHECK(ar.ret && probe_alive, "autoreleased result without a pool was freed with the request");
+    }
+    { /* a +1 out-error lives exactly as long as the caller holds it: wmtr neither keeps nor drops it */
+      struct unixcall_mtldevice_newlibrary nl = {0};
+      remote(25, &nl);
+      struct unixcall_generic_obj_uint64_ret pf4 = {0}; remote(39, &pf4);
+      CHECK(nl.ret_error && err_alive, "out-error freed before its owner released it");
+      obj_handle_t eh = nl.ret_error;
+      remote(1, &eh);
+      remote(39, &pf4);
+      CHECK(!err_alive, "out-error still alive after its owner released it (kept by wmtr)");
     }
     { /* WMTR_FRAMES: a presenting command buffer adds one line when it completes */
       id<MTLCommandQueue> q = [MTLCreateSystemDefaultDevice() newCommandQueue];
