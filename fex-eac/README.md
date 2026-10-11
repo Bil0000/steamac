@@ -147,4 +147,6 @@ there is no `FEX.1` beside the binaries to read. `FEXGetConfig --version` confir
 
 ## Notes
 
-Not affiliated with Valve, Epic Games or VRChat. Standalone; nothing here is upstreamed.
+Not affiliated with Valve, Epic Games or VRChat. Nothing here is sent to FEX-Emu or Proton by this fork. Found a bug?
+Please report it here rather than fixing it only in your own fork; if you have reviewed a patch and think it is good
+enough for FEX-Emu, you are welcome to submit it there yourself, with its test.

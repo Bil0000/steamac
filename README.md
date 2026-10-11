@@ -10,8 +10,13 @@ Runtime; nothing fakes, replays or short-circuits its result. Valve's SteamOS ro
 the guest's home directory.
 
 It is deliberately **one game on one machine** (VRChat on an M2 MacBook Air, 16 GB, macOS 27.0). Treat it as a starting
-point. Nothing here is submitted to steamac, libkrun, Mesa, FEX or Proton. Not affiliated with FX GAMES, Valve, Epic Games
-or VRChat.
+point. Not affiliated with FX GAMES, Valve, Epic Games or VRChat.
+
+**Found a bug?** Please report it here (an issue, or a pull request with a test) instead of fixing it only in your own
+fork, so everyone gets the fix. This fork sends nothing to libkrun, Mesa, FEX or Proton itself; steamac changes are
+discussed with its maintainer directly. If you have reviewed a change here and think it is good enough for one of those
+projects, you are welcome to submit it there yourself: keep its test with it, follow that project's process, and mention
+where it came from.
 
 ## What it takes
 
