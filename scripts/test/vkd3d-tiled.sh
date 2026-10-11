@@ -48,22 +48,36 @@ TESTS_DEFAULT=(
     test_view_min_lod test_create_sampler
 )
 
-# check_pipeline_library <vulkaninfo-output-file>: DXVK/vkd3d compile each pipeline in full unless the
-# pipeline-library extensions are advertised. Venus does advertise EXT_graphics_pipeline_library and
-# EXT_vertex_input_dynamic_state, but KosmicKrisp does not implement them, and Venus keeps a passthrough
-# extension only when the host reports it (vn_physical_device_init_supported_extensions), so the guest
-# must NOT see these names. Prints "ok:" and returns 0 when absent, prints "FAIL:" and returns 1 when
-# present (a change there means the host driver gained the extension and DXVK's fast path may be reachable).
+# check_pipeline_library <vulkaninfo-output-file> [absent|present]: DXVK/vkd3d compile each pipeline in
+# full unless the pipeline-library extensions are advertised. Venus advertises EXT_graphics_pipeline_library
+# and EXT_vertex_input_dynamic_state but keeps a passthrough extension only when the host reports it
+# (vn_physical_device_init_supported_extensions). KosmicKrisp reports VK_EXT_graphics_pipeline_library and
+# VK_KHR_pipeline_library only with MESA_KK_EXPERIMENTAL=gpl (patch 0049), never
+# EXT_vertex_input_dynamic_state. "absent" (default): none of the names may appear. "present": both GPL
+# names must appear. Prints "ok:"/"FAIL:" and returns 0/1.
 check_pipeline_library() {
-    local exts
+    local exts want=${2:-absent}
     exts=$(grep -iE 'VK_(EXT_graphics_pipeline_library|KHR_pipeline_library|EXT_pipeline_library_group_handles|EXT_vertex_input_dynamic_state)' "$1" || true)
+    if [[ $want == present ]]; then
+        if grep -q 'VK_EXT_graphics_pipeline_library' <<<"$exts" && grep -q 'VK_KHR_pipeline_library' <<<"$exts"; then
+            echo "ok: VK_EXT_graphics_pipeline_library and VK_KHR_pipeline_library advertised (Vulkan) -> DXVK GPL path"
+            return 0
+        fi
+        echo "FAIL: MESA_KK_EXPERIMENTAL=gpl but the guest lacks VK_EXT_graphics_pipeline_library / VK_KHR_pipeline_library"
+        return 1
+    fi
     if [[ -z $exts ]]; then
         echo "ok: VK_EXT_graphics_pipeline_library / VK_KHR_pipeline_library / VK_EXT_vertex_input_dynamic_state absent (Vulkan) -> DXVK full pipeline compiles"
         return 0
     fi
-    echo "FAIL: guest advertises pipeline-library extension(s) (DXVK's fast-pipeline path may now be reachable):"
+    echo "FAIL: guest advertises pipeline-library extension(s) without MESA_KK_EXPERIMENTAL=gpl:"
     printf '%s\n' "$exts"
     return 1
+}
+
+# gpl_expected: what check_pipeline_library should find for this run's MESA_KK_EXPERIMENTAL.
+gpl_expected() {
+    case ",${MESA_KK_EXPERIMENTAL:-}," in *,gpl,*|*,all,*) echo present ;; *) echo absent ;; esac
 }
 
 # selftest: exercise check_pipeline_library on synthetic vulkaninfo output, offline (no VM, no game).
@@ -78,12 +92,19 @@ EOF
     cat > "$d/present" <<'EOF'
 	VK_EXT_extended_dynamic_state3          : extension revision 2
 	VK_EXT_graphics_pipeline_library        : extension revision 1
+	VK_KHR_pipeline_library                 : extension revision 1
 	VK_EXT_vertex_input_dynamic_state       : extension revision 2
 EOF
     if check_pipeline_library "$d/absent" | grep -q '^ok:'; then echo "ok   absent -> claimed absent"
     else echo "FAIL absent -> not claimed absent"; rc=1; fi
     if check_pipeline_library "$d/present" > /dev/null; then echo "FAIL present -> claimed absent"; rc=1
     else echo "ok   present -> reported as advertised"; fi
+    if check_pipeline_library "$d/present" present | grep -q '^ok:'; then echo "ok   present, gpl expected -> ok"
+    else echo "FAIL present, gpl expected -> not ok"; rc=1; fi
+    if check_pipeline_library "$d/absent" present > /dev/null; then echo "FAIL absent, gpl expected -> ok"; rc=1
+    else echo "ok   absent, gpl expected -> reported missing"; fi
+    if [[ $(MESA_KK_EXPERIMENTAL=custom_border,gpl gpl_expected) == present && $(MESA_KK_EXPERIMENTAL= gpl_expected) == absent ]]
+    then echo "ok   gpl_expected follows MESA_KK_EXPERIMENTAL"; else echo "FAIL gpl_expected"; rc=1; fi
     rm -rf "$d"
     exit $rc
 }
@@ -189,16 +210,14 @@ run() {
         ssh_g 'vulkaninfo 2>/dev/null' | grep -E 'deviceName|driverName|driverInfo|apiVersion|sparse|[Rr]esidency|shaderResourceMinLod|filterMinmax|minLod|shaderStorageImageReadWithoutFormat|SPARSE_BINDING' \
             | sed 's/^[[:space:]]*//' | sort | uniq -c | sed 's/^ *1 //'
         # DXVK/vkd3d fall back to full, synchronous pipeline compiles (the stutter) unless the
-        # pipeline-library extensions are advertised. Venus does advertise EXT_graphics_pipeline_library
-        # and EXT_vertex_input_dynamic_state, but KosmicKrisp does not implement them: Venus filters
-        # passthrough extensions against the host with vkEnumerateDeviceExtensionProperties
-        # (vn_physical_device_init_supported_extensions), so the guest must NOT see them. Assert it;
-        # a change here means the host driver gained them and DXVK's fast path may now be reachable.
-        echo "== pipeline-library advertisement (expect none)"
+        # pipeline-library extensions are advertised. Venus passes them through only when the host
+        # driver reports them; KosmicKrisp does with MESA_KK_EXPERIMENTAL=gpl (patch 0049). Assert the
+        # advertisement matches this run's MESA_KK_EXPERIMENTAL.
+        echo "== pipeline-library advertisement (expect $(gpl_expected))"
         local vin
         vin=$(mktemp)
         ssh_g 'vulkaninfo 2>/dev/null' > "$vin"
-        check_pipeline_library "$vin" || true
+        check_pipeline_library "$vin" "$(gpl_expected)" || true
         rm -f "$vin"
         echo "== d3d12-caps"
         ssh_g "cd ~/vkd3d-tiled && ${GUEST_ENV:-} VKD3D_SHADER_CACHE_PATH=0 LD_LIBRARY_PATH=. ./d3d12-caps 2>&1" || echo "(exit $?)"

@@ -171,6 +171,17 @@
 #              without a render state) instead of asserts. Not yet live-verified: the recorded runs under
 #              MESA_KK_ASYNC_PIPELINES=2 predate this patch's build.
 #
+#   0048       steamac: vulkan/runtime vk_device::gfx_library_link_compile. A graphics pipeline library keeps its
+#              stages' precomps (SPIR-V -> NIR, cached) and compiles nothing; linking libraries compiles the whole
+#              program as LINK_TIME_OPTIMIZATION does. For drivers whose shaders depend on other libraries' state
+#              (lavapipe links the same way; NVK/RADV/ANV compile per library). Upstream: no such mode.
+#   0049       steamac: MESA_KK_EXPERIMENTAL=gpl advertises VK_EXT_graphics_pipeline_library and
+#              VK_KHR_pipeline_library through 0048 (graphicsPipelineLibraryFastLinking false: a link costs a full
+#              compile; KosmicKrisp bakes vertex input formats into the VS and blend/format swizzles into the FS, and
+#              Metal render pipelines need both functions). DXVK/vkd3d-proton then take their GPL path (shader
+#              libraries created ahead on their workers). Off by default until a live stutter A/B shows a gain.
+#              Test: tests/gpl-link.c (four DXVK-style libraries, fast link and LTO, against a monolithic pipeline).
+#
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver
 # with -Dllvm=disabled -Dmesa-clc=system (its own kk_clc is built in-tree), release,
@@ -403,6 +414,8 @@ mv -f "$lib.tmp.$$" "$lib"
 	echo "  0042 = steamac: robustness fixes (XFB counter bounds, sparse container_of, minmax update-after-bind scan, sparse view underflow)"
 	echo "  0043 = steamac: drop a draw whose async render pipeline state failed instead of recording it with a NULL state"
 	echo "  0047 = steamac: gate the async draw on the program the draw actually uses (not the bound VS)"
+	echo "  0048 = steamac: vulkan/runtime gfx_library_link_compile (pipeline libraries compiled when linked)"
+	echo "  0049 = steamac: VK_EXT_graphics_pipeline_library + VK_KHR_pipeline_library with MESA_KK_EXPERIMENTAL=gpl"
 	echo
 	echo "Known gaps (host/moltenvk/repro/run.sh): transform feedback with strip geometry shaders and"
 	echo "the overflow counter (draft !44928)."

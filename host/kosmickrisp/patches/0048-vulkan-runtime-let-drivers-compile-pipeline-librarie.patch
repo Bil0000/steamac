@@ -1,0 +1,159 @@
+From 86626ca8277e78b67afd8b57ef8f6cfda7ce8a8b Mon Sep 17 00:00:00 2001
+From: StonkGuy <68372320+StonkGuy@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 21:11:54 +0300
+Subject: [PATCH] vulkan/runtime: let drivers compile pipeline libraries
+ at link time
+
+Add vk_device::gfx_library_link_compile. With it set, a graphics pipeline
+library stops each of its stages at the precomp (SPIR-V -> NIR and
+preprocess_nir, cached), compiles no vk_shader and does not hash its partial
+state; any pipeline that links libraries is compiled as with
+VK_PIPELINE_CREATE_2_LINK_TIME_OPTIMIZATION_BIT_EXT, from those precomps and
+the merged state.
+
+This is for drivers whose shaders depend on state that GPL puts in other
+libraries (vertex input, fragment output) and that cannot run a VS without
+its FS, such as KosmicKrisp, whose Metal render pipelines take both
+functions. They can then expose VK_EXT_graphics_pipeline_library with
+graphicsPipelineLibraryFastLinking = false. Executable queries skip the
+NULL shaders of such libraries.
+
+Prior art: lavapipe links libraries the same way (it keeps the libraries'
+NIR and compiles at link). NVK, RADV, ANV and Turnip compile per library;
+Honeykrisp gets its fast link from AGX VS prologs/FS epilogs, which have no
+Metal equivalent in KosmicKrisp today. MoltenVK has no GPL.
+
+Upstream state (Mesa ce576c29): the common runtime always compiles a
+library's shaders with the library's own state (NVK, the reference user,
+compiles everything independently of vertex input and fragment output);
+there is no mode for drivers that cannot.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/vulkan/runtime/vk_device.c   |  1 +
+ src/vulkan/runtime/vk_device.h   |  7 +++++++
+ src/vulkan/runtime/vk_pipeline.c | 29 +++++++++++++++++++++++++++--
+ 3 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/src/vulkan/runtime/vk_device.c b/src/vulkan/runtime/vk_device.c
+index c73f12c..008ccda 100644
+--- a/src/vulkan/runtime/vk_device.c
++++ b/src/vulkan/runtime/vk_device.c
+@@ -306,6 +306,7 @@ vk_device_init(struct vk_device *device,
+    };
+ 
+    device->disable_lto = false;
++   device->gfx_library_link_compile = false;
+ 
+    device->debug_output = stdout;
+ 
+diff --git a/src/vulkan/runtime/vk_device.h b/src/vulkan/runtime/vk_device.h
+index ce975c0..84762bd 100644
+--- a/src/vulkan/runtime/vk_device.h
++++ b/src/vulkan/runtime/vk_device.h
+@@ -318,6 +318,13 @@ struct vk_device {
+    /* Link-time optimization disable */
+    bool disable_lto;
+ 
++   /* Graphics pipeline libraries keep their stages' precomps and compile no
++    * shaders; linking them always compiles the whole program (as with
++    * VK_PIPELINE_CREATE_2_LINK_TIME_OPTIMIZATION_BIT_EXT). For drivers whose
++    * shaders depend on vertex input or fragment output state.
++    */
++   bool gfx_library_link_compile;
++
+    struct vk_device_memory_report *memory_reports;
+    uint32_t memory_report_count;
+ 
+diff --git a/src/vulkan/runtime/vk_pipeline.c b/src/vulkan/runtime/vk_pipeline.c
+index d134e22..4fb095a 100644
+--- a/src/vulkan/runtime/vk_pipeline.c
++++ b/src/vulkan/runtime/vk_pipeline.c
+@@ -1309,6 +1309,11 @@ struct vk_graphics_pipeline_compile_info {
+    bool retain_precomp;
+    bool optimize;
+ 
++   /* vk_device::gfx_library_link_compile: this is a library, its stages
++    * stop at precomp and are compiled when the library is linked.
++    */
++   bool defer_compile;
++
+    uint32_t part_count;
+    uint32_t partition[MESA_VK_MAX_GRAPHICS_PIPELINE_STAGES + 1];
+ 
+@@ -1510,6 +1515,16 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
+       (libs_info == NULL ||
+        (pipeline_flags & VK_PIPELINE_CREATE_2_LINK_TIME_OPTIMIZATION_BIT_EXT));
+ 
++   /* Drivers whose shaders depend on state from other libraries (vertex
++    * input, fragment output) compile nothing in a library and always link
++    * the whole program from the libraries' precomps.
++    */
++   if (device->gfx_library_link_compile) {
++      info->defer_compile =
++         (pipeline_flags & VK_PIPELINE_CREATE_2_LIBRARY_BIT_KHR) != 0;
++      info->optimize = true;
++   }
++
+    /* Partition the shaders. Whenever pipelines are used,
+     * vertex/geometry/fragment stages are always specified together, so should
+     * always be linked. That doesn't break the fast link since the relevant
+@@ -1569,6 +1584,10 @@ vk_get_graphics_pipeline_compile_info(struct vk_graphics_pipeline_compile_info *
+       if (!info->optimize && info->stages[info->partition[p]].shader != NULL)
+          continue;
+ 
++      /* Nothing is compiled, and the state may lack what hash_state reads */
++      if (info->defer_compile)
++         continue;
++
+       _mesa_blake3_init(&blake3_ctx);
+ 
+       for (uint32_t i = info->partition[p]; i < info->partition[p + 1]; i++) {
+@@ -1626,7 +1645,7 @@ vk_graphics_pipeline_compile_shaders(struct vk_device *device,
+    const struct vk_device_shader_ops *ops = device->shader_ops;
+    VkResult result;
+ 
+-   if (compile_info->stage_count == 0)
++   if (compile_info->stage_count == 0 || compile_info->defer_compile)
+       return VK_SUCCESS;
+ 
+    /* If we're linking, throw away any previously compiled shaders as they
+@@ -1891,6 +1910,8 @@ vk_graphics_pipeline_get_executable_properties(
+       *executable_count = 0;
+       for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
+          struct vk_shader *shader = gfx_pipeline->stages[i].shader;
++         if (shader == NULL)
++            continue;
+ 
+          uint32_t shader_exec_count = 0;
+          result = shader->ops->get_executable_properties(device, shader,
+@@ -1904,6 +1925,8 @@ vk_graphics_pipeline_get_executable_properties(
+       *executable_count = 0;
+       for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
+          struct vk_shader *shader = gfx_pipeline->stages[i].shader;
++         if (shader == NULL)
++            continue;
+ 
+          uint32_t shader_exec_count = arr_len - *executable_count;
+          result = shader->ops->get_executable_properties(device, shader,
+@@ -1926,6 +1949,8 @@ vk_graphics_pipeline_executable_shader(struct vk_device *device,
+ {
+    for (uint32_t i = 0; i < gfx_pipeline->stage_count; i++) {
+       struct vk_shader *shader = gfx_pipeline->stages[i].shader;
++      if (shader == NULL)
++         continue;
+ 
+       uint32_t shader_exec_count = 0;
+       shader->ops->get_executable_properties(device, shader,
+@@ -2174,7 +2199,7 @@ vk_create_graphics_pipeline(struct vk_device *device,
+    /* Throw away precompiled shaders unless the client explicitly asks us to
+     * keep them.
+     */
+-   if (!compile_info.retain_precomp) {
++   if (!compile_info.retain_precomp && !compile_info.defer_compile) {
+       for (uint32_t i = 0; i < compile_info.stage_count; i++) {
+          if (pipeline->stages[i].precomp != NULL) {
+             vk_pipeline_precomp_shader_unref(device, pipeline->stages[i].precomp);
+-- 
+2.39.5 (Apple Git-154)
+

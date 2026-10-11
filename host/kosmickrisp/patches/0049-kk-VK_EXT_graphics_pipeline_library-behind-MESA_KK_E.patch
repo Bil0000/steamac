@@ -1,0 +1,115 @@
+From 2ba9d9cbb44a1828ef85b44f73c51bd32f428dd6 Mon Sep 17 00:00:00 2001
+From: StonkGuy <68372320+StonkGuy@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 21:11:54 +0300
+Subject: [PATCH] kk: VK_EXT_graphics_pipeline_library behind
+ MESA_KK_EXPERIMENTAL=gpl
+
+Advertise VK_KHR_pipeline_library and VK_EXT_graphics_pipeline_library
+(graphicsPipelineLibrary) with MESA_KK_EXPERIMENTAL=gpl, using the runtime's
+gfx_library_link_compile: libraries keep their stages' NIR and linking
+compiles the whole program, exactly like a monolithic pipeline, so
+graphicsPipelineLibraryFastLinking is now false. Interpolation decorations
+are always seen with both stages, so the independent interpolation
+decoration property stays true (DXVK requires it).
+
+KosmicKrisp lowers vertex input formats into the VS and blend/format
+swizzles into the FS, and a Metal render pipeline needs both functions, so
+per-library compilation would need dynamic vertex fetch and output
+specialization first. What this already gives DXVK/vkd3d-proton: their GPL
+path (shader libraries created ahead on worker threads, SPIR-V -> NIR done
+there) instead of the fallback; the link itself costs a full compile.
+
+Upstream state (Mesa ce576c29): KosmicKrisp does not expose GPL; no MR.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/kosmickrisp/vulkan/kk_debug.c           | 1 +
+ src/kosmickrisp/vulkan/kk_debug.h           | 4 ++++
+ src/kosmickrisp/vulkan/kk_device.c          | 4 ++++
+ src/kosmickrisp/vulkan/kk_physical_device.c | 7 ++++++-
+ 4 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_debug.c b/src/kosmickrisp/vulkan/kk_debug.c
+index 8b0005a..7a1b5ed 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.c
++++ b/src/kosmickrisp/vulkan/kk_debug.c
+@@ -24,6 +24,7 @@ enum kk_experimental kk_mesa_experimental_flags = 0;
+ const struct debug_named_value experimental_flags[] = {
+    {"all", UINT64_MAX},
+    {"custom_border", KK_EXPERIMENTAL_CUSTOM_BORDER},
++   {"gpl", KK_EXPERIMENTAL_GPL},
+    {"m5_optimize_e5b9g9r9", KK_EXPERIMENTAL_M5_OPTIMIZE_E5B9G9R9},
+    {NULL, 0},
+ };
+diff --git a/src/kosmickrisp/vulkan/kk_debug.h b/src/kosmickrisp/vulkan/kk_debug.h
+index 2b8d9c2..487b211 100644
+--- a/src/kosmickrisp/vulkan/kk_debug.h
++++ b/src/kosmickrisp/vulkan/kk_debug.h
+@@ -34,6 +34,10 @@ enum kk_experimental {
+    /* Using allowGPUOptimizedContents on M5 for this format causes
+     * vkCmdCopyImage() tests in CTS to fail, but it is otherwise usable */
+    KK_EXPERIMENTAL_M5_OPTIMIZE_E5B9G9R9 = 1ull << 2,
++   /* Advertise VK_EXT_graphics_pipeline_library and VK_KHR_pipeline_library.
++    * Libraries keep their stages' NIR; linking compiles the whole program,
++    * so there is no fast link (graphicsPipelineLibraryFastLinking false). */
++   KK_EXPERIMENTAL_GPL = 1ull << 3,
+ };
+ 
+ extern enum kk_experimental kk_mesa_experimental_flags;
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index ff91cc3..ebbcfea 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -370,6 +370,10 @@ kk_CreateDevice(VkPhysicalDevice physicalDevice,
+       goto fail_alloc;
+ 
+    dev->vk.shader_ops = &kk_device_shader_ops;
++   /* Shaders are lowered with the vertex input and fragment output state and
++    * a program needs both its VS and FS (Metal render pipelines), so pipeline
++    * libraries are compiled when they are linked. */
++   dev->vk.gfx_library_link_compile = true;
+    dev->mtl_handle = pdev->mtl_dev_handle;
+    dev->vk.command_buffer_ops = &kk_cmd_buffer_ops;
+    dev->vk.command_dispatch_table = &dev->vk.dispatch_table;
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+index 886de00..0d4f519 100644
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -150,6 +150,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
+       .KHR_maintenance9 = true,
+       .KHR_maintenance10 = true,
+ #ifdef KK_USE_WSI_PLATFORM
++      .KHR_pipeline_library = KK_EXPERIMENTAL(GPL),
+       .KHR_present_id = true,
+       .KHR_present_id2 = true,
+       .KHR_present_wait = true,
+@@ -183,6 +184,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
+       .EXT_extended_dynamic_state3 = true,
+       .EXT_external_memory_metal = true,
+       .EXT_external_memory_host = true,
++      .EXT_graphics_pipeline_library = KK_EXPERIMENTAL(GPL),
+       .EXT_hdr_metadata = true,
+       .EXT_image_2d_view_of_3d = true,
+       .EXT_image_view_min_lod = true,
+@@ -336,6 +338,9 @@ kk_get_device_features(
+       .computeFullSubgroups = true,
+       .dynamicRendering = true,
+       .extendedDynamicState = true,
++
++      /* VK_EXT_graphics_pipeline_library */
++      .graphicsPipelineLibrary = KK_EXPERIMENTAL(GPL),
+       .extendedDynamicState2 = true,
+       .extendedDynamicState2LogicOp = false,
+       .extendedDynamicState2PatchControlPoints = true,
+@@ -813,7 +818,7 @@ kk_get_device_properties(
+       .minImportedHostPointerAlignment = os_page_size,
+ 
+       /* VK_EXT_graphics_pipeline_library */
+-      .graphicsPipelineLibraryFastLinking = true,
++      .graphicsPipelineLibraryFastLinking = false,
+       .graphicsPipelineLibraryIndependentInterpolationDecoration = true,
+ 
+       /* VK_KHR_line_rasterization */
+-- 
+2.39.5 (Apple Git-154)
+
