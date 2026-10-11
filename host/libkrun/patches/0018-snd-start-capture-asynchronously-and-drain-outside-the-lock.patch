@@ -23,14 +23,14 @@ thread and, with it, every other stream.
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
- .../virtio/snd/audio_backends/coreaudio.rs    | 594 +++++++++++++-------
- 1 file changed, 384 insertions(+), 210 deletions(-)
+ .../src/virtio/snd/audio_backends/coreaudio.rs     | 661 +++++++++++++--------
+ 1 file changed, 418 insertions(+), 243 deletions(-)
 
 diff --git a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs b/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
-index 8279afb..b0a69cb 100644
+index 0984ecd..aded2ac 100644
 --- a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
 +++ b/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
-@@ -513,7 +513,10 @@ fn ticks_to_nanos(ticks: u64) -> u64 {
+@@ -554,7 +554,10 @@ fn ticks_to_nanos(ticks: u64) -> u64 {
      (ticks as u128 * numer / denom) as u64
  }
  
@@ -41,8 +41,8 @@ index 8279afb..b0a69cb 100644
 +/// the pump never blocks on the microphone (which can take over a second).
  struct Shared {
      ring: Ring,
-     /// Playback only: copy of what the render callback hands to CoreAudio.
-@@ -547,16 +550,33 @@ struct Shared {
+     /// Playback only: guest PCM consumed by the callback, before speaker mapping.
+@@ -588,8 +591,18 @@ struct Shared {
      last_callback: AtomicU64,
      /// Playback: silence bytes the callback filled in while running (priming, underruns).
      silence_bytes: AtomicU64,
@@ -61,6 +61,8 @@ index 8279afb..b0a69cb 100644
 +    stop_pending: AtomicBool,
      /// Capture: AudioUnitRender target, touched only by the IO thread.
      scratch: UnsafeCell<Box<[u8]>>,
+     /// Changed only while the output unit is stopped/uninitialized.
+@@ -597,9 +610,17 @@ struct Shared {
      wake: Arc<Semaphore>,
  }
  
@@ -73,13 +75,14 @@ index 8279afb..b0a69cb 100644
 +
  // SAFETY: `scratch` is only accessed from the IO thread of the single unit using this
 -// `Shared`; the rings are SPSC with one producer and one consumer thread each; everything
--// else is atomic.
+-// else is atomic. The mixer is changed only with the unit stopped/uninitialized.
 +// `Shared`; `capture` (and its `Unit`/`Converter`) is only touched behind its own mutex; the
 +// rings are SPSC with one producer and one consumer thread each; everything else is atomic.
++// The mixer is changed only with the unit stopped/uninitialized.
  unsafe impl Sync for Shared {}
  unsafe impl Send for Shared {}
  
-@@ -584,7 +604,11 @@ impl Shared {
+@@ -629,7 +650,11 @@ impl Shared {
              callbacks: AtomicU64::new(0),
              last_callback: AtomicU64::new(0),
              silence_bytes: AtomicU64::new(0),
@@ -89,9 +92,9 @@ index 8279afb..b0a69cb 100644
 +            starting: AtomicBool::new(false),
 +            stop_pending: AtomicBool::new(false),
              scratch: UnsafeCell::new(scratch),
+             mixer: UnsafeCell::new(Mixer::default()),
              wake,
-         }
-@@ -1162,6 +1186,149 @@ impl Drop for Unit {
+@@ -1392,6 +1417,149 @@ impl Drop for Unit {
      }
  }
  
@@ -241,7 +244,7 @@ index 8279afb..b0a69cb 100644
  /// Capture rate/format converter (device Float32 → guest format and rate).
  struct Converter {
      conv: AudioConverterRef,
-@@ -1281,10 +1448,9 @@ struct HostStream {
+@@ -1511,10 +1679,9 @@ struct HostStream {
      guest_buffer: Option<(u64, u64)>,
      /// Guest format the unit is configured for.
      format: Option<Format>,
@@ -253,7 +256,7 @@ index 8279afb..b0a69cb 100644
      /// Playback messages fully copied into the ring, completed once the device has played up
      /// to `fifo_bytes` before the stream offset they end at.
      inflight: VecDeque<(u64, Buffer)>,
-@@ -1330,7 +1496,6 @@ impl HostStream {
+@@ -1561,7 +1728,6 @@ impl HostStream {
              format: None,
              device: 0,
              device_rate: 0.0,
@@ -261,7 +264,7 @@ index 8279afb..b0a69cb 100644
              inflight: VecDeque::new(),
              completed: 0,
              fifo_bytes: 0,
-@@ -1442,10 +1607,14 @@ impl HostStream {
+@@ -1681,11 +1847,15 @@ impl HostStream {
  
      /// Stop the unit while the VM is paused and start it again on resume. The render
      /// callback stops consuming the ring, so the guest's hw_ptr stops (after at most the host
@@ -273,12 +276,13 @@ index 8279afb..b0a69cb 100644
 +            && (self.shared.starting.load(Ordering::Acquire)
 +                || self.shared.capture.lock().unwrap().is_some());
          if self.control.paused() {
+             self.suspended |= self.output_restart_pending;
 -            if self.unit.as_ref().is_some_and(|u| u.started) {
 +            if capture_up || self.unit.as_ref().is_some_and(|u| u.started) {
                  self.stop_unit();
                  self.suspended = true;
                  self.trace_state("suspended (VM paused)", None);
-@@ -1464,76 +1633,42 @@ impl HostStream {
+@@ -1704,67 +1874,33 @@ impl HostStream {
      }
  
      fn create_unit(&mut self) -> Result<()> {
@@ -288,27 +292,18 @@ index 8279afb..b0a69cb 100644
          }
 -        let unit = match self.direction {
 -            Direction::Output => {
--                // A selected device gets a HAL unit bound to it; otherwise the default-output
--                // unit, which follows the system default device by itself.
--                self.output_target = self
--                    .control
--                    .output_device()
--                    .as_deref()
--                    .and_then(resolve_output_device);
--                let unit = match self.output_target {
--                    Some(device) => {
--                        let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
--                        unit.set(
--                            kAudioOutputUnitProperty_CurrentDevice,
--                            kAudioUnitScope_Global,
--                            0,
--                            &device,
--                            "CurrentDevice(output)",
--                        )?;
--                        unit
--                    }
--                    None => Unit::new(kAudioUnitSubType_DefaultOutput)?,
--                };
+-                let route = output_route(&self.control).ok_or_else(|| {
+-                    Error::UnexpectedAudioBackendError("no usable output device".into())
+-                })?;
+-                let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
+-                unit.set(
+-                    kAudioOutputUnitProperty_CurrentDevice,
+-                    kAudioUnitScope_Global,
+-                    0,
+-                    &route.device,
+-                    "CurrentDevice(output)",
+-                )?;
+-                self.output_route = Some(route);
 -                let cb = AURenderCallbackStruct {
 -                    inputProc: render_output,
 -                    inputProcRefCon: self.refcon(),
@@ -323,17 +318,8 @@ index 8279afb..b0a69cb 100644
 -                unit
 -            }
 -            Direction::Input => {
-+        // A selected device gets a HAL unit bound to it; otherwise the default-output
-+        // unit, which follows the system default device by itself.
-+        self.output_target = self
-+            .control
-+            .output_device()
-+            .as_deref()
-+            .and_then(resolve_output_device);
-+        let unit = match self.output_target {
-+            Some(device) => {
-                 let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
-                 unit.set(
+-                let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
+-                unit.set(
 -                    kAudioOutputUnitProperty_EnableIO,
 -                    kAudioUnitScope_Input,
 -                    1,
@@ -353,19 +339,26 @@ index 8279afb..b0a69cb 100644
 -                };
 -                unit.set(
 -                    kAudioOutputUnitProperty_SetInputCallback,
-+                    kAudioOutputUnitProperty_CurrentDevice,
-                     kAudioUnitScope_Global,
-                     0,
+-                    kAudioUnitScope_Global,
+-                    0,
 -                    &cb,
 -                    "SetInputCallback",
-+                    &device,
-+                    "CurrentDevice(output)",
-                 )?;
+-                )?;
 -                self.shared.unit.store(unit.au, Ordering::Release);
-                 unit
-             }
-+            None => Unit::new(kAudioUnitSubType_DefaultOutput)?,
-+        };
+-                unit
+-            }
++        let route = output_route(&self.control).ok_or_else(|| {
++            Error::UnexpectedAudioBackendError("no usable output device".into())
++        })?;
++        let unit = Unit::new(kAudioUnitSubType_HALOutput)?;
++        unit.set(
++            kAudioOutputUnitProperty_CurrentDevice,
++            kAudioUnitScope_Global,
++            0,
++            &route.device,
++            "CurrentDevice(output)",
++        )?;
++        self.output_route = Some(route);
 +        let cb = AURenderCallbackStruct {
 +            inputProc: render_output,
 +            inputProcRefCon: self.refcon(),
@@ -380,19 +373,76 @@ index 8279afb..b0a69cb 100644
          self.unit = Some(unit);
          Ok(())
      }
-@@ -1543,79 +1678,31 @@ impl HostStream {
+@@ -1774,116 +1910,68 @@ impl HostStream {
          self.create_unit()?;
          let unit = self.unit.as_mut().unwrap();
          unit.uninitialize();
 -        match self.direction {
 -            Direction::Output => {
+-                let route = self.output_route.as_ref().unwrap();
+-                let source = self
+-                    .control
+-                    .playback_maps()
+-                    .get(fmt.channels as usize - 1)
+-                    .ok_or(Error::UnexpectedAudioBackendConfiguration)?;
+-                let mixer = Mixer::new(fmt.format, source, &route.positions);
 -                unit.set(
 -                    kAudioUnitProperty_StreamFormat,
 -                    kAudioUnitScope_Input,
 -                    0,
--                    &fmt.asbd(),
+-                    &float_asbd(fmt.rate as f64, mixer.output_channels as u32),
 -                    "StreamFormat(output)",
 -                )?;
+-                // Identity map over every physical channel. A device wider than the mixer
+-                // (stereo route) keeps the HAL's default mapping instead.
+-                if route.device_channels == mixer.output_channels {
+-                    let map: Vec<i32> = (0..mixer.output_channels as i32).collect();
+-                    // SAFETY: map is a live array of physical output-channel indices.
+-                    check(
+-                        unsafe {
+-                            AudioUnitSetProperty(
+-                                unit.au,
+-                                kAudioOutputUnitProperty_ChannelMap,
+-                                kAudioUnitScope_Input,
+-                                0,
+-                                map.as_ptr().cast(),
+-                                (map.len() * 4) as u32,
+-                            )
+-                        },
+-                        "ChannelMap(output)",
+-                    )?;
+-                }
+-                // SAFETY: configure uninitialized the unit, so no render callback can read it.
++        let route = self.output_route.as_ref().unwrap();
++        let source = self
++            .control
++            .playback_maps()
++            .get(fmt.channels as usize - 1)
++            .ok_or(Error::UnexpectedAudioBackendConfiguration)?;
++        let mixer = Mixer::new(fmt.format, source, &route.positions);
++        unit.set(
++            kAudioUnitProperty_StreamFormat,
++            kAudioUnitScope_Input,
++            0,
++            &float_asbd(fmt.rate as f64, mixer.output_channels as u32),
++            "StreamFormat(output)",
++        )?;
++        // Identity map over every physical channel. A device wider than the mixer
++        // (stereo route) keeps the HAL's default mapping instead.
++        if route.device_channels == mixer.output_channels {
++            let map: Vec<i32> = (0..mixer.output_channels as i32).collect();
++            // SAFETY: map is a live array of physical output-channel indices.
++            check(
+                 unsafe {
+-                    *self.shared.mixer.get() = mixer;
+-                }
+-                log::info!(
+-                    "snd: stream {} routes guest {:?} to '{}' speakers {:?}",
+-                    self.id,
+-                    source,
+-                    device_name(route.device),
+-                    route.positions
+-                );
 -                self.shared
 -                    .frame_bytes
 -                    .store(fmt.frame_bytes(), Ordering::Relaxed);
@@ -444,14 +494,29 @@ index 8279afb..b0a69cb 100644
 -                    .frame_bytes
 -                    .store(dev_fmt.mBytesPerFrame, Ordering::Relaxed);
 -            }
--        }
-+        unit.set(
-+            kAudioUnitProperty_StreamFormat,
-+            kAudioUnitScope_Input,
-+            0,
-+            &fmt.asbd(),
-+            "StreamFormat(output)",
-+        )?;
++                    AudioUnitSetProperty(
++                        unit.au,
++                        kAudioOutputUnitProperty_ChannelMap,
++                        kAudioUnitScope_Input,
++                        0,
++                        map.as_ptr().cast(),
++                        (map.len() * 4) as u32,
++                    )
++                },
++                "ChannelMap(output)",
++            )?;
++        }
++        // SAFETY: configure uninitialized the unit, so no render callback can read it.
++        unsafe {
++            *self.shared.mixer.get() = mixer;
+         }
++        log::info!(
++            "snd: stream {} routes guest {:?} to '{}' speakers {:?}",
++            self.id,
++            source,
++            device_name(route.device),
++            route.positions
++        );
 +        self.shared
 +            .frame_bytes
 +            .store(fmt.frame_bytes(), Ordering::Relaxed);
@@ -476,7 +541,7 @@ index 8279afb..b0a69cb 100644
          match self.unit.as_mut() {
              // Started by follow_pause() on resume.
              Some(unit) if unit.initialized && self.control.paused() => {
-@@ -1631,18 +1718,82 @@ impl HostStream {
+@@ -1899,18 +1987,82 @@ impl HostStream {
  
      fn stop_unit(&mut self) {
          self.suspended = false;
@@ -560,7 +625,7 @@ index 8279afb..b0a69cb 100644
          let scope = match self.direction {
              Direction::Output => kAudioObjectPropertyScopeOutput,
              Direction::Input => kAudioObjectPropertyScopeInput,
-@@ -1714,46 +1865,27 @@ impl HostStream {
+@@ -1982,46 +2134,27 @@ impl HostStream {
      }
  
      /// Capture: follow the default input device while recording (the HAL unit does not do it
@@ -618,7 +683,7 @@ index 8279afb..b0a69cb 100644
      /// Complete everything the guest has queued on this stream and drop buffered audio.
      /// The unit must be stopped.
      fn flush(&mut self, guest: &mut Stream) {
-@@ -1774,7 +1906,12 @@ impl HostStream {
+@@ -2042,7 +2175,12 @@ impl HostStream {
      fn pump(&mut self, streams: &RwLock<Vec<Stream>>) {
          match self.direction {
              Direction::Output => self.pump_output(streams),
@@ -632,7 +697,7 @@ index 8279afb..b0a69cb 100644
          }
          self.drain_dump();
      }
-@@ -1877,51 +2014,66 @@ impl HostStream {
+@@ -2145,51 +2283,66 @@ impl HostStream {
          }
      }
  
@@ -733,7 +798,7 @@ index 8279afb..b0a69cb 100644
                  if produced == 0 {
                      break;
                  }
-@@ -1939,7 +2091,7 @@ impl HostStream {
+@@ -2207,7 +2360,7 @@ impl HostStream {
              let buf = guest.buffers.pop_front().unwrap();
              buf.message
                  .latency_bytes
@@ -742,7 +807,7 @@ index 8279afb..b0a69cb 100644
          }
      }
  
-@@ -1990,10 +2142,13 @@ impl HostStream {
+@@ -2258,10 +2411,13 @@ impl HostStream {
      }
  
      fn housekeeping(&mut self, streams: &RwLock<Vec<Stream>>) {
@@ -757,7 +822,7 @@ index 8279afb..b0a69cb 100644
              self.update_latency();
          }
          let xruns = self.shared.xruns.load(Ordering::Relaxed);
-@@ -2199,6 +2354,11 @@ impl AudioBackend for CoreAudioBackend {
+@@ -2523,6 +2679,11 @@ impl AudioBackend for CoreAudioBackend {
              // Run from PREPARE so START does not wait for the device; the callback plays
              // silence until then.
              host.start_unit()?;
@@ -769,7 +834,7 @@ index 8279afb..b0a69cb 100644
          }
          self.trace(host, "PREPARE done");
          Ok(())
-@@ -2206,12 +2366,27 @@ impl AudioBackend for CoreAudioBackend {
+@@ -2530,12 +2691,27 @@ impl AudioBackend for CoreAudioBackend {
  
      fn release(&self, stream_id: u32) -> Result<()> {
          self.transition(stream_id, "release", PCMState::Release, PCMState::release)?;
@@ -801,7 +866,7 @@ index 8279afb..b0a69cb 100644
          host.stop_unit();
          host.flush(&mut self.inner.streams.write().unwrap()[stream_id as usize]);
          self.trace(host, "RELEASE done");
-@@ -2230,13 +2405,12 @@ impl AudioBackend for CoreAudioBackend {
+@@ -2554,13 +2730,12 @@ impl AudioBackend for CoreAudioBackend {
              .store(unsafe { mach_absolute_time() }, Ordering::Relaxed);
          if host.direction == Direction::Input {
              // The microphone (and its permission prompt) is only touched while the guest

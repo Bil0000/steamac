@@ -23,13 +23,14 @@ a stop still takes down a unit that was running. No AudioUnit call now runs unde
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
- src/devices/src/virtio/snd/audio_backends/coreaudio.rs | 40 +++++++++++++-------
- 1 file changed, 26 insertions(+), 14 deletions(-)
+ .../src/virtio/snd/audio_backends/coreaudio.rs     | 26 +++++++++++++++++-----
+ 1 file changed, 20 insertions(+), 6 deletions(-)
 
 diff --git a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs b/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
+index aded2ac..74dc5d0 100644
 --- a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
 +++ b/src/devices/src/virtio/snd/audio_backends/coreaudio.rs
-@@ -1295,13 +1295,9 @@
+@@ -1526,13 +1526,9 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
          )?;
          let mut unit = unit;
          unit.initialize()?;
@@ -45,7 +46,7 @@ diff --git a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs b/src/device
              return Ok(());
          }
          shared.capture_device.store(device, Ordering::Release);
-@@ -1313,10 +1309,28 @@
+@@ -1544,11 +1540,29 @@ fn capture_start_worker(shared: Arc<Shared>, fmt: Format, id: usize) {
                  staging: Vec::new(),
              },
          };
@@ -60,7 +61,7 @@ diff --git a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs b/src/device
          if let Err(err) = state.unit.start() {
              shared.unit.store(ptr::null_mut(), Ordering::Release);
              return Err(err);
-+        }
+         }
 +        // Publish under the capture lock: a stop on the control thread either takes a
 +        // previously published unit or, finding none while `starting` is set, leaves
 +        // `stop_pending` for us to see here (that stop cannot stop a unit in `shared.unit`
@@ -71,6 +72,7 @@ diff --git a/src/devices/src/virtio/snd/audio_backends/coreaudio.rs b/src/device
 +            state.unit.stop();
 +            shared.unit.store(ptr::null_mut(), Ordering::Release);
 +            return Ok(());
-         }
++        }
          *slot = Some(state);
          Ok(())
+     })();

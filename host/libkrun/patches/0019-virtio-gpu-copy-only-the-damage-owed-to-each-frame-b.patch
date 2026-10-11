@@ -24,7 +24,7 @@ both scanout kinds present only what changed.
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
- src/devices/src/virtio/gpu/virtio_gpu.rs | 430 +++++++++++++++++++++++++++--
+ src/devices/src/virtio/gpu/virtio_gpu.rs | 430 +++++++++++++++++++++++++++++--
  1 file changed, 402 insertions(+), 28 deletions(-)
 
 diff --git a/src/devices/src/virtio/gpu/virtio_gpu.rs b/src/devices/src/virtio/gpu/virtio_gpu.rs
