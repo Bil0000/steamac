@@ -1,0 +1,88 @@
+#!/bin/bash
+# steamac: the launcher's Settings > Advanced "VR (experimental)" (kernel command line steamac.vr=1) for Proton.
+#   on   Proton Experimental's vrclient_x64 (PE dll and its unixlib) becomes the patched build that submits DXMT
+#        textures (guest/proton-vrclient), and ~/.config/openvr/openvrpaths.vrpath names our OpenVR runtime
+#        (guest/vr) as the first runtime: Proton's own setup_openvr_paths() turns that entry into PROTON_VR_RUNTIME
+#        for every game it starts. The replaced files and the previous openvrpaths.vrpath are kept in $STATE with
+#        checksums; a Proton update (new version file) is followed on the next run.
+#   off  (or no steamac.vr=1) Proton's own files and the previous openvrpaths.vrpath (or its absence) come back
+#        byte for byte; nothing this script added stays.
+# The files ship in the steamac layer ($PAYLOAD, read-only):
+#   x86_64-windows/vrclient_x64.dll  x86_64-unix/vrclient_x64.so  runtime/bin/linux64/vrclient.so
+# Idempotent; runs as an ExecStartPre of steam.service (Steam is not running then).
+# Test overrides: STEAMAC_CMDLINE, STEAMAC_STEAM_ROOT, STEAMAC_VR_DIR, STEAMAC_VR_STATE, XDG_CONFIG_HOME.
+set -uo pipefail
+
+CMDLINE=${STEAMAC_CMDLINE:-/proc/cmdline}
+STEAM=${STEAMAC_STEAM_ROOT:-$HOME/.local/share/Steam}
+PAYLOAD=${STEAMAC_VR_DIR:-/usr/lib/steamac/vr}
+STATE=${STEAMAC_VR_STATE:-${XDG_DATA_HOME:-$HOME/.local/share}/steamac/vr-path}
+VRPATH=${XDG_CONFIG_HOME:-$HOME/.config}/openvr/openvrpaths.vrpath
+PROTON="$STEAM/steamapps/common/Proton - Experimental"
+FILES="x86_64-windows/vrclient_x64.dll x86_64-unix/vrclient_x64.so"
+log() { echo "steam-vr-path: $*" >&2; }
+sum() { cksum < "$1" 2>/dev/null | cut -d' ' -f1; }
+
+mode=off
+for w in $(cat "$CMDLINE" 2>/dev/null); do case $w in steamac.vr=1) mode=on ;; esac; done
+if [[ $mode == on ]]; then
+    for f in $FILES runtime/bin/linux64/vrclient.so; do
+        [[ -f $PAYLOAD/$f ]] || { log "no $f in $PAYLOAD; VR stays off"; mode=off; break; }
+    done
+fi
+
+vrpath_json() { # runtime dir, state dir: Proton reads runtime[0]; config/log are where the runtime may write
+    printf '{\n   "config" : [ "%s" ],\n   "external_drivers" : null,\n   "jsonid" : "vrpathreg",\n   "log" : [ "%s" ],\n   "runtime" : [ "%s" ],\n   "version" : 1\n}\n' \
+        "$2/config" "$2/log" "$1"
+}
+
+apply() {
+    local W=$PROTON/files/lib/wine B=$STATE/orig f changed=0
+    [[ -d $W/x86_64-windows ]] || { log "no Proton Experimental in $STEAM"; return 0; }
+    mkdir -p "$B/x86_64-windows" "$B/x86_64-unix" || return 1
+    # a new Proton version: its files are the originals now, the old kept ones are stale
+    [[ -f $B/version && $(sum "$PROTON/version") != "$(cat "$B/version")" ]] && rm -f "$B"/x86_64-*/* "$B/installed"
+    for f in $FILES; do
+        cmp -s "$PAYLOAD/$f" "$W/$f" && continue
+        # keep Proton's file unless it is one this script installed (an earlier payload)
+        if ! grep -qx "$(sum "$W/$f")" "$B/installed" 2>/dev/null; then
+            [[ -f $W/$f ]] && { cp -f "$W/$f" "$B/$f" || return 1; }
+        fi
+        cp -f "$PAYLOAD/$f" "$W/$f.steamac-tmp" && mv -f "$W/$f.steamac-tmp" "$W/$f" || return 1
+        sum "$W/$f" >> "$B/installed"
+        changed=1
+    done
+    sum "$PROTON/version" > "$B/version"
+    (( changed )) && log "patched vrclient_x64 in $PROTON"
+
+    # openvrpaths.vrpath: keep the user's (or its absence) once, then point runtime[0] at our runtime
+    local want; want=$(vrpath_json "$PAYLOAD/runtime" "$STATE")
+    mkdir -p "$STATE/config" "$STATE/log" "$(dirname "$VRPATH")" || return 1
+    if [[ ! -e $STATE/vrpath.kept ]]; then
+        if [[ -f $VRPATH ]] && [[ $(cat "$VRPATH") != "$want" ]]; then cp -f "$VRPATH" "$STATE/vrpath.orig" || return 1
+        else rm -f "$STATE/vrpath.orig"; fi
+        touch "$STATE/vrpath.kept"
+    fi
+    [[ -f $VRPATH && $(cat "$VRPATH") == "$want" ]] || { printf '%s\n' "$want" > "$VRPATH" && log "PROTON_VR_RUNTIME=$PAYLOAD/runtime"; }
+    return 0
+}
+
+restore() {
+    local W=$PROTON/files/lib/wine B=$STATE/orig f
+    [[ -d $STATE ]] || return 0
+    for f in $FILES; do
+        # only where our file is still there (a Proton update may have restored it already)
+        if [[ -f $B/$f ]] && grep -qx "$(sum "$W/$f")" "$B/installed" 2>/dev/null; then
+            cp -f "$B/$f" "$W/$f.steamac-tmp" && mv -f "$W/$f.steamac-tmp" "$W/$f"
+        fi
+    done
+    if [[ -e $STATE/vrpath.kept ]]; then
+        if [[ -f $STATE/vrpath.orig ]]; then cp -f "$STATE/vrpath.orig" "$VRPATH"
+        elif [[ -f $VRPATH && $(cat "$VRPATH") == "$(vrpath_json "$PAYLOAD/runtime" "$STATE")" ]]; then rm -f "$VRPATH"; fi
+    fi
+    rm -rf "$STATE"
+    log "Proton's vrclient_x64 and openvrpaths.vrpath back"
+}
+
+if [[ $mode == on ]]; then apply || log "cannot set up VR"; else restore; fi
+exit 0
