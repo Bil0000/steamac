@@ -17,14 +17,21 @@ Status: only one machine (M2 MacBook Air, 16 GB, macOS 27.0) and one anti-cheat 
 | an Apple silicon Mac | verified on an M2 MacBook Air, 16 GB; other Macs are untested |
 | macOS 15 or newer | the faster Vulkan driver (KosmicKrisp) needs macOS 26; macOS 15 uses MoltenVK. The DXMT path's host library is built for macOS 15.5 or newer. Verified on macOS 27.0 |
 | memory | 16 GB minimum; less is not supported. Automatic VM RAM is half of the Mac's RAM (4-16 GiB), with at least 3 GiB or a quarter of the RAM kept for macOS; on a 16 GiB Mac that is 8 GiB VM + 4 GiB graphics + 4 GiB reserve |
-| free disk space | creating the SteamOS disk needs about 14 GB on its volume during creation (about 9 GB afterwards, plus about 6 GB of download cache that is deleted on success), plus room for games: choose the home size at creation; Grow Disk enlarges it later |
+| free disk space | we recommend about 20 GB free on the Mac for the SteamOS disk and its download cache, plus room for the games themselves (our estimate; it may vary). Measured: creating the disk needs about 14 GB on its volume (about 9 GB afterwards, plus about 6 GB of download cache that is deleted on success). Choose the home size at creation; Grow Disk enlarges it later |
 | a Steam account | games are installed and run inside SteamOS |
 | internet access | the app downloads Valve's SteamOS image and the Steam client |
 
 ## Install
 
-1. Download `FX-Steam-Launcher-<version>.dmg` from the release page of this repository.
+1. Download `FX-Steam-Launcher-<version>.dmg` from the [releases](https://github.com/StonkGuy/steamac/releases) of this
+   repository. Each release has two assets: the DMG, and `FX-Steam-Launcher-<version>-gpl-sources.tar`, the
+   corresponding source for the GPL and LGPL components (kernel, initramfs tools, DXMT, wmtr).
 2. Open the disk image and drag **FX Steam Launcher.app** to Applications.
+3. **First open.** The fork's builds are ad-hoc signed and not notarized, so macOS Gatekeeper blocks the first open. This
+   is needed once. Right-click (or Control-click) the app, choose **Open**, then **Open** again. If macOS 15 or newer does
+   not offer that, open System Settings > Privacy & Security, scroll to the "FX Steam Launcher was blocked" message,
+   click **Open Anyway** and confirm. Or in Terminal:
+   `xattr -dr com.apple.quarantine "/Applications/FX Steam Launcher.app"`.
 
 ## First launch
 
@@ -65,7 +72,7 @@ Settings > Advanced > **Graphics path**: **DXMT (lean)** or **Vulkan (classic)**
 | path | what it is | when to use it |
 |---|---|---|
 | **DXMT (lean)** | Direct3D 11 (and 10) goes through DXMT, which produces Metal calls. They run natively on the Mac over a dedicated virtio-gpu channel and are shown in a Metal layer inside the window. DXVK, Venus, virglrenderer and the Vulkan-to-Metal layer are not involved | Direct3D 11 games, including VRChat, when the lean path works for you |
-| **Vulkan (classic)** | Direct3D goes through DXVK to Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK to Metal on the Mac. This is upstream steamac's path | fallback if DXMT shows a black window, a game misbehaves, or EAC fails; Direct3D 12 games |
+| **Vulkan (classic)** | Direct3D goes through DXVK to Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK to Metal on the Mac. This is upstream steamac's path | fallback if a game misbehaves on DXMT or EAC fails; Direct3D 12 games |
 
 How it works: at every boot the guest reads the launcher setting. With DXMT, every installed Proton's DXVK files (d3d11,
 dxgi, d3d10core) are replaced by DXMT's before Steam starts, and again when Steam updates a Proton during the session.
@@ -134,7 +141,7 @@ on an external APFS, Mac OS Extended or exFAT volume (FAT32 is rejected). exFAT 
 
 | symptom | what to do |
 |---|---|
-| black game window on the DXMT path | check that Settings shows *DXMT* and restart the launcher after changing the path; fall back to *Vulkan* |
+| the DXMT setting seems to have no effect | the setting applies at the next VM start: restart the VM after changing it. If the app lacks the DXMT host library, Settings says so and the app uses Vulkan (boot log: `gpu: graphics path Vulkan`) |
 | log flooded with capture errors, or the game freezes after a microphone start or an in-game audio/resolution change | grant the microphone permission (System Settings > Privacy & Security > Microphone) |
 | the Android build of VRChat starts | set VRChat's compatibility tool to Proton Experimental |
 | EAC runtime errors at start | install **Proton EasyAntiCheat Runtime** from Steam |

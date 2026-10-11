@@ -23,14 +23,16 @@ no published figures for DXMT yet.
 |---|---|
 | an Apple silicon Mac | verified on an M2 MacBook Air, 16 GB, macOS 27.0; other Macs are untested |
 | macOS 15 or newer | KosmicKrisp (the faster Vulkan driver) needs macOS 26. The DXMT path's host library is built for macOS 15.5 or newer |
-| free disk space | about 14 GB on the disk's volume while the SteamOS disk is created (about 9 GB afterwards), plus room for games (the home size is chosen at creation and can be enlarged later with Grow Disk) |
+| free disk space | we recommend about 20 GB free on the Mac for the SteamOS disk and its download cache, plus room for the games themselves (our estimate; it may vary). Measured: about 14 GB on the disk's volume while the disk is created, about 9 GB afterwards. The home size is chosen at creation and can be enlarged later with Grow Disk |
 | memory | 16 GB minimum; less is not supported. Automatic VM RAM is half of the Mac's RAM (4-16 GiB) |
 | a Steam account | games are installed and run inside SteamOS |
 
 ## Install and first launch
 
-1. Download `FX-Steam-Launcher-<version>.dmg` from this fork's release page, drag **FX Steam Launcher.app** to Applications
-   and open it.
+1. Download `FX-Steam-Launcher-<version>.dmg` from this fork's [releases](https://github.com/StonkGuy/steamac/releases),
+   drag **FX Steam Launcher.app** to Applications and open it (see *First open* below). Each release has two assets: the
+   DMG, and `FX-Steam-Launcher-<version>-gpl-sources.tar`, the corresponding source for the GPL and LGPL components
+   (kernel, initramfs tools, DXMT, wmtr).
 2. On first start, choose **Create New Disk…**. The app downloads Valve's SteamOS image, verifies it and sets it up.
    This takes a while, once.
 3. Sign in to Steam in the window. Keep a **16:10** window size (Settings > Display > Default window
@@ -39,6 +41,15 @@ no published figures for DXMT yet.
    can stutter.
 5. In Steam, install VRChat, set its compatibility tool to **Proton Experimental**, and install **Proton EasyAntiCheat
    Runtime**. See [SETUP.md](SETUP.md) for the full steps.
+
+### First open
+
+The fork's builds are ad-hoc signed and not notarized, so macOS Gatekeeper blocks the first open. This is needed once:
+
+- Right-click (or Control-click) the app in Applications, choose **Open**, then **Open** again; or
+- if macOS 15 or newer does not offer that, open System Settings > Privacy & Security, scroll to the "FX Steam Launcher
+  was blocked" message, click **Open Anyway** and confirm; or
+- in Terminal: `xattr -dr com.apple.quarantine "/Applications/FX Steam Launcher.app"`.
 
 ## Choosing the graphics path
 
@@ -72,7 +83,7 @@ manual steps are required for VRChat; both are planned to become automatic:
 
 | symptom | what to do |
 |---|---|
-| the game window stays black on DXMT | check that Settings shows *DXMT* and restart the launcher after changing the path; fall back to *Vulkan* |
+| the DXMT setting seems to have no effect | the setting applies at the next VM start: restart the VM after changing it. If the app lacks the DXMT host library, Settings says so and the app uses Vulkan (boot log: `gpu: graphics path Vulkan`) |
 | EAC fails on DXMT | switch to *Vulkan* and restart the launcher |
 | EAC does not finish, or fails after a Steam update | the patched FEX is missing or was replaced by Valve's; run `sh install-fex-tool.sh status` |
 | about a minute's stall before joining | check that `WINE_CPU_TOPOLOGY` is in the launch options |

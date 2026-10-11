@@ -2,6 +2,8 @@
 
 [English](README.md) · [Русский](README.ru.md) · **简体中文**
 
+> 本文是英文 README 的机器翻译，以英文版（[README.md](README.md)）为准。
+
 **[steamac](https://github.com/fxgl/steamac) 的分支，面向 Apple Silicon Mac。可运行带有正版 Easy Anti-Cheat 的
 x86-64 Windows 游戏（已验证：VRChat），并提供两条图形路径可选。**
 
@@ -22,19 +24,27 @@ Epic Games、VRChat 及 DXMT 作者均无关联。
 |---|---|
 | Apple Silicon Mac | 已在 M2 MacBook Air（16 GB、macOS 27.0）上验证；其他 Mac 未测试 |
 | macOS 15 或更新 | KosmicKrisp（更快的 Vulkan 驱动）需要 macOS 26。DXMT 路径的主机端库按 macOS 15.5 或更新构建 |
-| 可用磁盘空间 | 创建 SteamOS 磁盘期间，其所在卷约需 14 GB（之后约 9 GB），另加游戏所需空间（home 大小在创建时选择，之后可用“扩展磁盘…”扩大） |
+| 可用磁盘空间 | 建议 Mac 上约有 20 GB 可用空间，用于 SteamOS 磁盘及其下载缓存，另加游戏本身所需的空间（这是我们的估计，实际可能不同）。实测：创建磁盘期间其所在卷约需 14 GB，之后约 9 GB。home 大小在创建时选择，之后可用“扩展磁盘…”扩大 |
 | 内存 | 至少 16 GB，更少不受支持。虚拟机内存自动取 Mac 内存的一半（4-16 GiB） |
 | Steam 账号 | 游戏在 SteamOS 内安装和运行 |
 
 ## 安装与首次启动
 
-1. 从本分支的发布页下载 `FX-Steam-Launcher-<版本>.dmg`，把 **FX Steam Launcher.app** 拖到“应用程序”并打开。
+1. 从本分支的[发布页](https://github.com/StonkGuy/steamac/releases)下载 `FX-Steam-Launcher-<版本>.dmg`，把 **FX Steam Launcher.app** 拖到“应用程序”并打开（见下文*首次打开*）。每个发布版有两个文件：DMG，以及 `FX-Steam-Launcher-<版本>-gpl-sources.tar`，即 GPL 与 LGPL 组件（内核、initramfs 工具、DXMT、wmtr）的对应源码。
 2. 首次启动时选择**新建磁盘…**。应用会下载 Valve 的 SteamOS 映像，校验并完成设置。此过程较久，但只需一次。
 3. 在窗口中登录 Steam。保持 **16:10** 的窗口大小（设置 > 显示 > 默认窗口大小；默认的 1280×800 即 16:10）。16:9 的游戏
    在 16:10 窗口中会出现黑边。
 4. macOS 询问时允许**麦克风**权限。没有它，客户机的音频采集会反复失败，游戏可能卡顿。
 5. 在 Steam 中安装 VRChat，把它的兼容工具设为 **Proton Experimental**，并安装 **Proton EasyAntiCheat Runtime**。完整步骤见
    [SETUP.md](SETUP.md)。
+
+### 首次打开
+
+本分支的构建为 ad-hoc 签名，未经公证，因此 macOS Gatekeeper 会拦截首次打开。只需操作一次：
+
+- 在“应用程序”中右键点按（或按住 Control 点按）该应用，选择**打开**，再点一次**打开**；或
+- 如果 macOS 15 及更新版本没有提供该选项，打开系统设置 > 隐私与安全性，滚动到“已阻止使用 FX Steam Launcher”的提示，点按**仍要打开**并确认；或
+- 在“终端”中运行：`xattr -dr com.apple.quarantine "/Applications/FX Steam Launcher.app"`。
 
 ## 选择图形路径
 
@@ -64,7 +74,7 @@ EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 
 
 | 现象 | 处理 |
 |---|---|
-| DXMT 下游戏窗口一直是黑的 | 确认设置中选的是 *DXMT*，更改路径后重启启动器；回退到 *Vulkan* |
+| DXMT 设置似乎没有生效 | 设置在下次启动虚拟机时生效：更改后请重启虚拟机。若应用缺少 DXMT 主机库，设置中会提示，并改用 Vulkan（启动日志：`gpu: graphics path Vulkan`） |
 | DXMT 下 EAC 失败 | 切换到 *Vulkan* 并重启启动器 |
 | EAC 无法完成，或在 Steam 更新后失败 | 打过补丁的 FEX 缺失或被 Valve 的版本覆盖；运行 `sh install-fex-tool.sh status` |
 | 进入世界前停顿约一分钟 | 检查启动选项中是否有 `WINE_CPU_TOPOLOGY` |
