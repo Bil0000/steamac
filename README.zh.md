@@ -5,7 +5,7 @@
 > 本文是英文 README 的机器翻译，以英文版（[README.md](README.md)）为准。
 
 **[steamac](https://github.com/fxgl/steamac) 的分支，面向 Apple Silicon Mac。可运行带有正版 Easy Anti-Cheat 的
-x86-64 Windows 游戏（已验证：VRChat），并提供两条图形路径可选。**
+x86-64 Windows 游戏（已在游戏中验证：VRChat；Mini Royale 也能通过 EAC），并提供两条图形路径可选。**
 
 - **Vulkan（经典）**：Direct3D 经 DXVK 转为 SteamOS 内的 Vulkan（Venus），再经 KosmicKrisp 或 MoltenVK 在 Mac 上运行。
   这是上游 steamac 的路径。
@@ -63,7 +63,7 @@ DXMT 覆盖 Direct3D 11（及 10）；Direct3D 12 游戏请用 *Vulkan*（在 DX
 
 ## Easy Anti-Cheat
 
-EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 FEX 可通过 VRChat 的 EAC 检查。目前 VRChat 需要两个手动
+EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 FEX 可通过 VRChat 的 EAC 检查，Mini Royale 也能通过（EAC `301`；未越过其账号登录提示继续游玩）。结果因游戏而异：每款游戏都有自己的 EAC 版本和检查，未测试的游戏可能可以运行，也可能不行。目前 VRChat 需要两个手动
 步骤，均计划自动化：
 
 1. 安装打过补丁的 FEX：启用 SSH（设置 > 高级），然后在客户机中运行 `build-fex.sh` 和 `install-fex-tool.sh`
@@ -91,7 +91,7 @@ EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 
 
 ## 限制
 
-- 仅验证了一台机器（M2、16 GB、macOS 27.0）和一款 EAC 游戏（VRChat）。
+- 仅验证了一台机器（M2、16 GB、macOS 27.0）。VRChat 已在游戏中验证；Mini Royale 的 EAC 启动器可达到 `301`（未继续游玩）。其他游戏未测试，结果因游戏而异。
 - DXMT：仅支持 Direct3D 11/10。功能级别上限为 11_1（无 DXIL，无保守光栅化）。
 - 经 D3DMetal 支持 Direct3D 12 仅在**计划**中，未包含。
 - DXMT 设置对所有游戏生效；此时游戏的 Metal 层覆盖整个虚拟机视图（窗口化游戏或 alt-tab 会显示游戏层）。

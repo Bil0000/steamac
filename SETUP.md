@@ -8,7 +8,8 @@ This is a fork of [steamac](https://github.com/fxgl/steamac). It is not affiliat
 VRChat or the DXMT authors. VRChat does not support virtual machines or emulation; use is at your own risk, and
 enforcement is the game publisher's decision.
 
-Status: only one machine (M2 MacBook Air, 16 GB, macOS 27.0) and one anti-cheat title (VRChat) have been verified.
+Status: only one machine (M2 MacBook Air, 16 GB, macOS 27.0) has been verified. VRChat is verified in game; Mini Royale's
+EAC launcher also reaches `301` (not played further). Results differ game by game.
 
 ## Requirements
 
@@ -157,7 +158,8 @@ on an external APFS, Mac OS Extended or exFAT volume (FAT32 is rejected). exFAT 
 
 ## Known limits
 
-- One Mac and one anti-cheat title (VRChat) verified. Other Macs and macOS versions are untested.
+- One Mac verified; VRChat verified in game, Mini Royale's EAC reaches `301`. Other titles, Macs and macOS versions are
+  untested, and EAC results differ game by game.
 - Measured VRChat result on the M2 MacBook Air: about 26-30 fps in a light world at 1280x800 on the Vulkan path, GPU-bound
   and power-limited. There are no published numbers for the DXMT path yet.
 - Anti-cheat that blocks virtual machines will not work.
