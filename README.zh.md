@@ -15,6 +15,12 @@ x86-64 Windows 游戏（已验证：VRChat），并提供两条图形路径可�
 EAC 客户端是 Proton EasyAntiCheat Runtime 自带的原版。没有任何东西伪造、重放或绕过它的结果。与 FX GAMES、Valve、
 Epic Games、VRChat 及 DXMT 作者均无关联。
 
+**发现了错误？** 请在这里报告（提交 issue，或附带测试的 pull request），而不要只在你自己的分支里修复，这样每个人都能
+得到修复。本分支自身不会向 libkrun、Mesa、FEX 或 Proton 提交任何内容；steamac 的改动直接与其维护者讨论。如果你审阅过
+这里的某个改动并认为它足以进入上述某个项目，欢迎你自行提交：保留它的测试，遵循该项目的流程，并注明来源。FEX 代码改动
+请以 pull request 的形式提交到 [StonkGuy/FEX](https://github.com/StonkGuy/FEX) 当前的 `eac-<release>` 分支，并在其
+`eac-tests/` 中附带测试。
+
 状态：仅在一台 Mac 和一款带反作弊的游戏上验证过。默认使用 Vulkan 路径；DXMT 需在设置中开启。已公布的 VRChat 帧率
 只有 Vulkan 路径的（轻量世界、1280x800 下约 26-30 fps）；DXMT 路径暂无公布数据。
 
@@ -109,7 +115,7 @@ EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 
 | 组件 | 许可 |
 |---|---|
 | steamac（本分支） | Apache-2.0，© FX GAMES FZ LLC 及贡献者（`LICENSE`、`NOTICE`） |
-| FEX-Emu 补丁（`fex-eac/patches/`） | MIT，与 FEX-Emu 相同 |
+| 打过补丁的 FEX（[StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610)，由 `fex-eac/build-fex.sh` 构建） | MIT，与 FEX-Emu 相同 |
 | DXMT 及本分支的补丁（`host/dxmt/patches/`） | LGPL-2.1 |
 | wmtr（DXMT 远程调用层，`wmtr/`） | BSD-3-Clause |
 | libkrun 及其补丁 | Apache-2.0 |

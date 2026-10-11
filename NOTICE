@@ -59,7 +59,7 @@ Copyright 2026 the eac-arm64-emulation-poc contributors
 This is a modified version of steamac (github.com/fxgl/steamac). The files changed in this
 fork are listed in docs/fork.md. New files added by this fork:
 
-  fex-eac/                 scripts, Apache-2.0; fex-eac/patches/ are patches to FEX-Emu,
+  fex-eac/                 scripts, Apache-2.0; the FEX they build (StonkGuy/FEX) is FEX-Emu,
                            MIT (the license of FEX)
   docs/eac-*.md            fork documentation, Apache-2.0
   docs/fork.md             fork documentation, Apache-2.0

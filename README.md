@@ -10,6 +10,13 @@ Easy Anti-Cheat (verified: VRChat), with a choice of two graphics paths.**
 - **DXMT (lean)**: Direct3D 11 through [DXMT](https://github.com/3Shain/dxmt). Its Metal calls run natively on the Mac
   over a dedicated virtio-gpu channel, so there are fewer translation layers.
 
+**Found a bug?** Please report it here (an issue, or a pull request with a test) instead of fixing it only in your own
+fork, so everyone gets the fix. This fork sends nothing to libkrun, Mesa, FEX or Proton itself; steamac changes are
+discussed with its maintainer directly. If you have reviewed a change here and think it is good enough for one of those
+projects, you are welcome to submit it there yourself: keep its test with it, follow that project's process, and mention
+where it came from. FEX code changes go to [StonkGuy/FEX](https://github.com/StonkGuy/FEX) as a pull request against the
+current `eac-<release>` branch, with a test in its `eac-tests/`.
+
 The EAC client is the stock one from the Proton EasyAntiCheat Runtime. Nothing fakes, replays or short-circuits its
 result. Not affiliated with FX GAMES, Valve, Epic Games, VRChat or the DXMT authors.
 
@@ -120,7 +127,7 @@ More: [docs/eac-troubleshooting.md](docs/eac-troubleshooting.md).
 | component | licence |
 |---|---|
 | steamac (this fork) | Apache-2.0, © FX GAMES FZ LLC and contributors (`LICENSE`, `NOTICE`) |
-| FEX-Emu patches (`fex-eac/patches/`) | MIT, as FEX-Emu |
+| patched FEX ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610), built by `fex-eac/build-fex.sh`) | MIT, as FEX-Emu |
 | DXMT, with this fork's patches (`host/dxmt/patches/`) | LGPL-2.1 |
 | wmtr (the DXMT remoting layer, `wmtr/`) | BSD-3-Clause |
 | libkrun and its patches | Apache-2.0 |

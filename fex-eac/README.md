@@ -1,7 +1,8 @@
 # EAC in the SteamOS guest via Valve's FEX compat tool
 
 Run Easy Anti-Cheat games (tested: VRChat) on a steamac Mac by replacing the FEX inside Steam's own FEX compatibility tool
-(Steam app 3127680) with a FEX-2610 build carrying the patches in `patches/`.
+(Steam app 3127680) with the patched FEX from [StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610): branch `eac-2610` = FEX-2610 plus the EAC fidelity patches, pinned here to tag
+[`eac-2610.2`](https://github.com/StonkGuy/FEX/releases/tag/eac-2610.2).
 
 EAC's Linux module runs the game under the x86-64 Proton that itself runs inside Steam's FEX tool. The module drives the
 game through `ptrace` and depends on exact Linux signal semantics; Valve's FEX-2607 build fails that under emulation, so
@@ -15,10 +16,19 @@ the session never authenticates. The patched FEX passes the `ptrace` and signal-
 | 0007, 0008, 0010 | signal mask, syscall-info and seccomp/SIGSYS fidelity (0010 also stops a `SECCOMP_RET_TRAP` filter from letting the trapped syscall run) |
 | 0011–0020 | kernel-fidelity gaps a title or Wine can observe (debug registers, `/proc/<pid>/status`, `arch_prctl`, regsets, `restart_syscall`, the signal frame) |
 | 0022, 0023, 0025, 0026 | what a second title's anti-tamper bootstrapper observes: host stack per SIGSYS trap, reads of FEX's own shadow-stack guard pages, the single-step trap after `iretq`, a thread exiting on its signal alt stack |
+| 0033 | `/proc/<pid>/maps` lists only the emulated process's mappings (a launcher module that picks a library from its child's maps otherwise picks an AArch64 host library and fails with `210`) |
+| 0035 | code pages the guest makes writable stay writable for other processes (a second process' write to shared code no longer faults forever; from yungtry's patch 0028, consumer The Division 2) |
 | 0003, 0005, 0006, 0009, 0024 | accounting and profiling only |
 
 Required for VRChat: 0001, 0002 and 0007/0008. 0004 is performance; 0003, 0005, 0006, 0009 and 0024 are accounting and profiling only.
-`build-fex.sh` applies every patch in `patches/` (0001–0026) and pins base commit `14c92681`. Patch 0021 (`pop r/m`) was withdrawn — it broke the normal path and hung the EAC launcher; see `patches/withdrawn/`.
+`build-fex.sh` clones StonkGuy/FEX at tag `eac-2610.2` and checks its commit (`cc1cc2a1`); the tag holds patches
+0001–0020, 0022–0026, 0033 and 0035, one commit each on FEX-2610 (`14c92681`), with the commit list in its
+[EAC-README.md](https://github.com/StonkGuy/FEX/blob/eac-2610/EAC-README.md) and the regression tests in
+[eac-tests/](https://github.com/StonkGuy/FEX/tree/eac-2610/eac-tests). Patch 0021 (`pop r/m`) was withdrawn — it broke
+the normal path and hung the EAC launcher.
+
+**Downstream forks.** FEX patches now come from StonkGuy/FEX tag `eac-2610.2` instead of `fex-eac/patches/`. A
+downstream 0027 (`/proc/<pid>/maps` for a tracer) corresponds to our 0033.
 
 **Scope.** These patches do not try to make FEX a replica of native x86-64 Linux. Like upstream FEX, they make a
 behaviour exact only where real software observes it (the anti-cheat launcher, Wine, a title's own probes) and keep it
@@ -61,7 +71,7 @@ env FEX_NEEDSSECCOMP=1 %command%
 Enable SSH in the guest (Settings > Advanced > Enable SSH), copy `fex-eac/` over, then:
 
 ```sh
-sh build-fex.sh            # clones FEX-2610, applies patches/, builds, stages into ~/fex-eac-work/stage
+sh build-fex.sh            # clones StonkGuy/FEX at eac-2610.2, builds, stages into ~/fex-eac-work/stage
 sh install-fex-tool.sh     # swaps the stage into the compat tool; backs up Valve's files first
 sh install-fex-tool.sh status    # which build is installed
 sh install-fex-tool.sh restore   # put Valve's build back
@@ -85,6 +95,15 @@ repeated `0,1,2,3` above.
 
 A Steam update of the FEX tool overwrites it with Valve's build. Re-run `sh install-fex-tool.sh`.
 
+### Updating from an older `fex-eac/`
+
+Earlier versions of `build-fex.sh` applied patch files to an upstream FEX-2610 clone in `~/fex-eac-work/FEX`. The
+current script refuses that tree and prints the command to remove it; remove it and run `sh build-fex.sh` and
+`sh install-fex-tool.sh` again.
+
+If the EAC launcher reports `210 'Unexpected error. (#1)'` about 3 s after `Starting Wine module mapping`, the
+installed FEX predates 0033: re-run `sh build-fex.sh` and `sh install-fex-tool.sh`.
+
 ## Results
 
 Measured on an Apple M2 MacBook Air 16 GB, macOS 27.0, steamac 1.8.1/1.8.2, three sessions (2026-10-08).
@@ -98,7 +117,7 @@ Measured on an Apple M2 MacBook Air 16 GB, macOS 27.0, steamac 1.8.1/1.8.2, thre
 | join → world | 86 s first run, 32 s second run |
 | hardware TSO | active in the guest |
 
-Patch details and the test suite: <https://github.com/StonkGuy/eac-arm64-emulation-poc>
+Patch details: <https://github.com/StonkGuy/eac-arm64-emulation-poc>; code and test suite: <https://github.com/StonkGuy/FEX/tree/eac-2610>
 
 ## Optional: environment realism
 
@@ -147,4 +166,6 @@ there is no `FEX.1` beside the binaries to read. `FEXGetConfig --version` confir
 
 ## Notes
 
-Not affiliated with Valve, Epic Games or VRChat. Standalone; nothing here is upstreamed.
+Not affiliated with Valve, Epic Games or VRChat. Nothing here is sent to FEX-Emu or Proton by this fork. Found a bug?
+Please report it here rather than fixing it only in your own fork; if you have reviewed a patch and think it is good
+enough for FEX-Emu, you are welcome to submit it there yourself, with its test.

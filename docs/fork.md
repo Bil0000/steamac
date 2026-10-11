@@ -1,14 +1,14 @@
 # Fork notes
 
 A fork of [steamac](https://github.com/fxgl/steamac) (base: 1.9; the live results below were measured on 1.8.1/1.8.2) that adds support for genuine-Easy-Anti-Cheat x86 games,
-verified with VRChat, plus launcher and stability fixes. It is standalone: nothing here is sent to steamac, libkrun, Mesa,
-FEX or Proton. Not affiliated with FX GAMES, Valve, Epic or VRChat.
+verified with VRChat, plus launcher and stability fixes. Nothing here is sent to libkrun, Mesa, FEX or Proton by this fork;
+steamac changes are discussed with its maintainer directly. Bug reports are welcome here (see the README). Not affiliated with FX GAMES, Valve, Epic or VRChat.
 
 ## Changes
 
 | change | where | why | status |
 |---|---|---|---|
-| patched FEX-2610 (patches 0001–0026), `build-fex.sh`, `install-fex-tool.sh`, `guest-tune.sh` | [`fex-eac/`](../fex-eac/README.md) | Valve's FEX-2607 in Steam's compatibility tool fails EAC's ptrace injection and signal semantics ([eac-how-it-works.md](eac-how-it-works.md)) | built, tested (3 sessions) — **the verified setup** |
+| patched FEX-2610 ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610) tag `eac-2610.2`: patches 0001–0026, 0033, 0035), `build-fex.sh`, `install-fex-tool.sh`, `guest-tune.sh` | [`fex-eac/`](../fex-eac/README.md) | Valve's FEX-2607 in Steam's compatibility tool fails EAC's ptrace injection and signal semantics ([eac-how-it-works.md](eac-how-it-works.md)) | built, tested (3 sessions) — **the verified setup** |
 | triple-buffered present | launcher (Swift) | replaces a `waitUntilCompleted()` per frame | experimental |
 | `--render-scale` (0.25–1.0) with MetalFX upscaling | launcher (Swift) | render below native and upscale, to move the frame-time cost off the GPU while keeping UI at real-world size | experimental (default stays 1.0 = unchanged) |
 | libkrun log level default `error` | launcher | less logging overhead | experimental |
