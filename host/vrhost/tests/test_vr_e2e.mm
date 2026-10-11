@@ -142,7 +142,15 @@ int main()
 	@autoreleasepool
 	{
 		signal(SIGPIPE, SIG_IGN);
-		constexpr uint32_t src_w = 640, src_h = 704;
+		// defaults keep the test short; VR_E2E_SRC / VR_E2E_OUT (WxH) / VR_E2E_FRAMES measure a headset-sized stream
+		uint32_t src_w = 640, src_h = 704, out_w = 384, out_h = 416;
+		int frames = 60;
+		if (const char * e = getenv("VR_E2E_SRC"))
+			REQUIRE(sscanf(e, "%ux%u", &src_w, &src_h) == 2);
+		if (const char * e = getenv("VR_E2E_OUT"))
+			REQUIRE(sscanf(e, "%ux%u", &out_w, &out_h) == 2);
+		if (const char * e = getenv("VR_E2E_FRAMES"))
+			frames = atoi(e);
 		// the real configuration: encryption with PIN pairing (keys in a scratch file, not the user's)
 		char dir[] = "/tmp/vr_e2e.XXXXXX";
 		REQUIRE(mkdtemp(dir));
@@ -278,7 +286,7 @@ int main()
 		};
 
 		// 1. stream size = eye size: identity foveation, frame numbers readable after the full path
-		auto r = run_fake_headset({.port = session.port(), .frames = 60, .eye_width = src_w, .eye_height = src_h, .pin = "271828", .on_decoded = on_decoded});
+		auto r = run_fake_headset({.port = session.port(), .frames = frames, .eye_width = uint16_t(src_w), .eye_height = uint16_t(src_h), .pin = "271828", .on_decoded = on_decoded});
 		printf("identity: handshake=%s decoded=%d/%d mismatch=%d/%d idr=%d/%d view_info_ok=%d error='%s'\n",
 		       r.handshake_state.c_str(), r.decoded[0], r.decoded[1], r.index_mismatch[0], r.index_mismatch[1], r.idr[0], r.idr[1],
 		       r.view_info_ok, r.error.c_str());
@@ -310,8 +318,7 @@ int main()
 		}
 
 		// 2. smaller stream: the compositor foveates; its parameters reach the headset in view_info
-		constexpr uint16_t out_w = 384, out_h = 416;
-		auto f = run_fake_headset({.port = session.port(), .frames = 60, .eye_width = out_w, .eye_height = out_h,
+		auto f = run_fake_headset({.port = session.port(), .frames = frames, .eye_width = uint16_t(out_w), .eye_height = uint16_t(out_h),
 		                           .pin = "271828", .identity_foveation = false, .on_decoded = on_decoded});
 		printf("foveated: decoded=%d/%d idr=%d/%d foveation x %zu entries y %zu entries error='%s'\n", f.decoded[0], f.decoded[1],
 		       f.idr[0], f.idr[1], f.foveation_x[0].size(), f.foveation_y[0].size(), f.error.c_str());
