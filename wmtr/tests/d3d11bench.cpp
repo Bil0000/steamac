@@ -9,8 +9,10 @@
 // "probe-trigger <unix ns>" (guest wall clock through Wine) to --probe-log PATH (stdout is not kept under Steam's
 // launch chain): app-reaction-to-present latency, no input focus needed.
 // --vr W (VR eye-texture producer, steamac VR milestone M1): additionally renders the scene into two W x W*16/15
-// R8G8B8A8_UNORM_SRGB eye render targets per frame (left eye tinted red, right green) and hands them to the host
-// VR compositor: IMTLD3D11ExportableTexture (DXMT private interface) gives each eye's Metal texture plus the
+// R8G8B8A8_UNORM_SRGB eye render targets per frame (left eye tinted red, right green, the frame id in 16 blocks of
+// 16x16 px top-left, white = 1, bit 0 leftmost) and hands them to the host VR compositor. Each eye renders into a
+// ring of 3 textures: the host copies a submitted texture on its own Metal queue after the frame's work, so the next
+// frame must not draw into the same one (an OpenVR runtime's Submit copy gives the same guarantee): IMTLD3D11ExportableTexture (DXMT private interface) gives each eye's Metal texture plus the
 // shared event to wait for, WMTVRSubmit (winemetal.dll) sends the frame. Prints "vr: submitted N, failed M".
 // Needs StonkGuy/dxmt vr-export and a wmtr executor with a VR link (WMTR_VR_SOCKET + WMTR_VR_MACH_NAME).
 // Per frame: N draws of an instanced-free textured cube grid, each with its own constant buffer
@@ -20,6 +22,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <d3dcompiler.h>
 #include <algorithm>
@@ -194,18 +197,24 @@ int main(int argc, char **argv) {
   ID3D11RenderTargetView *rtv; dev->CreateRenderTargetView(bb, nullptr, &rtv); bb->Release();
 
   /* VR eye targets */
-  ID3D11Texture2D *eye_tex[2] = {}; ID3D11RenderTargetView *eye_rtv[2] = {}; IMTLD3D11ExportableTexture *eye_exp[2] = {};
+  enum { VR_RING = 3 };
+  ID3D11Texture2D *eye_tex[VR_RING][2] = {}; ID3D11RenderTargetView *eye_rtv[VR_RING][2] = {};
+  IMTLD3D11ExportableTexture *eye_exp[VR_RING][2] = {};
+  ID3D11DeviceContext1 *ctx1 = nullptr;
   PFN_WMTVRSubmit vr_submit = nullptr; unsigned vr_ok = 0, vr_fail = 0;
   int eye_w = g_vr, eye_h = g_vr * 16 / 15;
   if (g_vr) {
     D3D11_TEXTURE2D_DESC ed = {(UINT)eye_w, (UINT)eye_h, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, {1, 0}, D3D11_USAGE_DEFAULT,
                                D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
-    for (int e = 0; e < 2; e++) {
-      dev->CreateTexture2D(&ed, nullptr, &eye_tex[e]);
-      dev->CreateRenderTargetView(eye_tex[e], nullptr, &eye_rtv[e]);
-      if (FAILED(eye_tex[e]->QueryInterface(IID_IMTLD3D11ExportableTexture, (void **)&eye_exp[e])))
-        fprintf(stderr, "vr: no IMTLD3D11ExportableTexture (not DXMT vr-export)\n");
-    }
+    for (int r = 0; r < VR_RING; r++)
+      for (int e = 0; e < 2; e++) {
+        dev->CreateTexture2D(&ed, nullptr, &eye_tex[r][e]);
+        dev->CreateRenderTargetView(eye_tex[r][e], nullptr, &eye_rtv[r][e]);
+        if (FAILED(eye_tex[r][e]->QueryInterface(IID_IMTLD3D11ExportableTexture, (void **)&eye_exp[r][e])))
+          fprintf(stderr, "vr: no IMTLD3D11ExportableTexture (not DXMT vr-export)\n");
+      }
+    if (FAILED(ctx->QueryInterface(__uuidof(ID3D11DeviceContext1), (void **)&ctx1)))
+      fprintf(stderr, "vr: no ID3D11DeviceContext1 (frame id blocks off)\n");
     HMODULE wm = GetModuleHandleA("winemetal.dll");
     if (!wm) wm = LoadLibraryA("winemetal.dll");
     vr_submit = wm ? (PFN_WMTVRSubmit)GetProcAddress(wm, "WMTVRSubmit") : nullptr;
@@ -269,17 +278,28 @@ int main(int argc, char **argv) {
     }
     };
     float clear[4] = {0.05f, flip ? 0.6f : 0.05f, 0.08f, 1};
-    if (g_vr && vr_submit && eye_exp[0] && eye_exp[1]) {
+    int slot = frame % VR_RING;
+    if (g_vr && vr_submit && eye_exp[slot][0] && eye_exp[slot][1]) {
       WMTVRSubmitInfo vi = {};
       vi.frame_id = frame + 1;
       for (int e = 0; e < 2; e++) {
         float ec[4] = {e ? 0.05f : 0.5f, e ? 0.5f : 0.05f, 0.08f, 1};
-        scene(eye_rtv[e], eye_w, eye_h, ec);
+        scene(eye_rtv[slot][e], eye_w, eye_h, ec);
+        if (ctx1) { /* frame id blocks (steamac-vrhost's TestPattern::read_frame_index layout) */
+          D3D11_RECT on[16], off[16]; UINT n_on = 0, n_off = 0;
+          for (int b = 0; b < 16; b++) {
+            D3D11_RECT rc = {b * 16, 0, b * 16 + 16, 16};
+            if ((vi.frame_id >> b) & 1) on[n_on++] = rc; else off[n_off++] = rc;
+          }
+          const float white[4] = {1, 1, 1, 1}, black[4] = {0, 0, 0, 1};
+          if (n_on) ctx1->ClearView(eye_rtv[slot][e], white, on, n_on);
+          if (n_off) ctx1->ClearView(eye_rtv[slot][e], black, off, n_off);
+        }
       }
       bool ok = true;
       for (int e = 0; e < 2; e++) {
         UINT64 ev = 0, val = 0;
-        ok = ok && SUCCEEDED(eye_exp[e]->GetMetalTexture(&vi.eye[e].texture, &ev, &val));
+        ok = ok && SUCCEEDED(eye_exp[slot][e]->GetMetalTexture(&vi.eye[e].texture, &ev, &val));
         vi.wait_event = ev; vi.wait_value = val; /* one immediate context: the later value covers both eyes */
         float pose[7] = {0, 0, 0, 1, e ? 0.032f : -0.032f, 1.6f, 0};
         float fov[4] = {e ? -0.75f : -0.87f, e ? 0.87f : 0.75f, 0.82f, -0.9f};

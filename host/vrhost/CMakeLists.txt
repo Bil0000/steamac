@@ -22,7 +22,38 @@ FetchContent_Declare(boost_pfr URL https://github.com/boostorg/pfr/archive/refs/
 	SOURCE_SUBDIR do-not-add)
 FetchContent_MakeAvailable(openxr_sdk boost_pfr)
 
-find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+# OpenSSL (libcrypto only: X448, PBKDF2, AES-128-CTR, BIGNUM for WiVRn's crypto/smp/secrets). Default: a static
+# libcrypto built from a pinned release tarball into the build directory, so steamac-vrhost links no Homebrew dylib.
+# -DVRHOST_SYSTEM_OPENSSL=ON uses find_package(OpenSSL) instead (development only).
+option(VRHOST_SYSTEM_OPENSSL "Link the system/Homebrew OpenSSL instead of the pinned static build" OFF)
+if(VRHOST_SYSTEM_OPENSSL)
+	find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+else()
+	include(ExternalProject)
+	set(VRHOST_OPENSSL_VERSION 3.5.4)
+	set(VRHOST_OPENSSL_SHA256 967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99)
+	set(_ossl_prefix ${CMAKE_BINARY_DIR}/openssl-static)
+	if(CMAKE_OSX_DEPLOYMENT_TARGET)
+		set(_ossl_min -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET})
+	endif()
+	ExternalProject_Add(openssl_static
+		URL https://github.com/openssl/openssl/releases/download/openssl-${VRHOST_OPENSSL_VERSION}/openssl-${VRHOST_OPENSSL_VERSION}.tar.gz
+		URL_HASH SHA256=${VRHOST_OPENSSL_SHA256}
+		DOWNLOAD_EXTRACT_TIMESTAMP ON
+		BUILD_IN_SOURCE ON
+		CONFIGURE_COMMAND ./Configure darwin64-arm64-cc no-shared no-module no-dso no-engine no-tests no-apps no-docs
+			no-ssl no-tls no-dtls no-quic no-ui-console no-autoload-config ${_ossl_min}
+			--prefix=${_ossl_prefix} --openssldir=${_ossl_prefix}/ssl --libdir=lib
+		BUILD_COMMAND make -j8 build_libs
+		INSTALL_COMMAND make install_dev
+		BUILD_BYPRODUCTS ${_ossl_prefix}/lib/libcrypto.a
+		LOG_CONFIGURE ON LOG_BUILD ON LOG_INSTALL ON)
+	file(MAKE_DIRECTORY ${_ossl_prefix}/include)
+	add_library(OpenSSL::Crypto STATIC IMPORTED)
+	set_target_properties(OpenSSL::Crypto PROPERTIES IMPORTED_LOCATION ${_ossl_prefix}/lib/libcrypto.a
+		INTERFACE_INCLUDE_DIRECTORIES ${_ossl_prefix}/include)
+	add_dependencies(OpenSSL::Crypto openssl_static)
+endif()
 
 # --- WiVRn common (vendored unmodified from WiVRn v26.9, see third_party/wivrn/UPSTREAM.md) ---
 add_library(wivrn-common STATIC
@@ -40,17 +71,28 @@ target_compile_options(wivrn-common PUBLIC
 target_compile_options(wivrn-common PRIVATE -Wno-c++11-narrowing)
 target_link_libraries(wivrn-common PUBLIC OpenSSL::Crypto)
 
+# --- WiVRn pacer (server/compositor/pacer.*, unmodified) with minimal Monado stand-ins in compat/monado ---
+add_library(wivrn-pacer STATIC
+	third_party/wivrn/server/compositor/pacer.cpp
+	src/wivrn/clock_offset_compat.cpp)
+target_include_directories(wivrn-pacer SYSTEM PUBLIC third_party/wivrn/server compat/monado)
+target_link_libraries(wivrn-pacer PUBLIC wivrn-common)
+# std::jthread / std::stop_token are still behind -fexperimental-library in Apple's libc++.
+target_compile_options(wivrn-pacer PUBLIC $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-fexperimental-library>)
+target_link_options(wivrn-pacer PUBLIC -fexperimental-library)
+
 # --- host core (session interface, WiVRn adapter, encoder, test pattern) ---
 add_library(vrhost-core STATIC
 	src/session/clock.cpp
 	src/session/pose_history.cpp
 	src/wivrn/wivrn_session.cpp
+	src/wivrn/known_keys.cpp
 	src/wivrn/dnssd_publisher.cpp
 	src/wivrn/annexb.cpp
 	src/encoder/vt_encoder.mm
 	src/pattern/test_pattern.mm)
 target_include_directories(vrhost-core PUBLIC src include)
-target_link_libraries(vrhost-core PUBLIC wivrn-common
+target_link_libraries(vrhost-core PUBLIC wivrn-common wivrn-pacer
 	"-framework CoreFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework VideoToolbox"
 	"-framework IOSurface" "-framework Metal" "-framework Foundation")
 target_compile_options(vrhost-core PRIVATE -Wall -Wextra -Wno-unused-parameter)
@@ -64,12 +106,16 @@ target_link_libraries(vrhost-compositor PUBLIC vrhost-core)
 
 add_executable(steamac-vrhost src/main.cpp)
 target_link_libraries(steamac-vrhost PRIVATE vrhost-core vrhost-compositor)
+# Ad hoc signature with a stable identifier (macOS keys Local Network permission and TCC prompts on it).
+add_custom_command(TARGET steamac-vrhost POST_BUILD
+	COMMAND codesign --force --sign - --identifier com.steamac.vrhost $<TARGET_FILE:steamac-vrhost>
+	VERBATIM)
 
 # --- tests (ctest) ---
 option(VRHOST_TESTS "Build the tests" ON)
 if(VRHOST_TESTS)
 enable_testing()
-foreach(t protocol annexb pose_history encoder loopback)
+foreach(t protocol annexb pose_history encoder loopback pacer crypto)
 	add_executable(test_${t} tests/test_${t}.cpp)
 	target_link_libraries(test_${t} PRIVATE vrhost-core)
 	add_test(NAME ${t} COMMAND test_${t})
@@ -79,6 +125,10 @@ target_sources(test_encoder PRIVATE tests/vt_decode.mm)
 target_sources(test_loopback PRIVATE tests/vt_decode.mm)
 set_source_files_properties(tests/vt_decode.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
 set_tests_properties(encoder loopback PROPERTIES TIMEOUT 60)
+# the test headset as a tool, for a running steamac-vrhost (docs/vr.md "Testing without a headset")
+add_executable(vrhost-test-headset tests/test_headset_tool.mm tests/fake_headset.cpp tests/vt_decode.mm)
+set_source_files_properties(tests/test_headset_tool.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+target_link_libraries(vrhost-test-headset PRIVATE vrhost-core)
 
 # End-to-end game-frame test (wmtr exporter -> link -> compositor -> session -> test headset). The exporter
 # (wmtr/src/wmtr_vr.m) needs the WMTVRSubmitInfo layout from a StonkGuy/dxmt vr-export checkout.
@@ -98,4 +148,10 @@ if(VRHOST_DXMT_DIR)
 else()
 	message(STATUS "vr_e2e test off: set VRHOST_DXMT_DIR to a StonkGuy/dxmt vr-export checkout")
 endif()
+endif()
+
+# --- packaging check: the executable must not load OpenSSL (or anything else) from Homebrew ---
+if(VRHOST_TESTS AND NOT VRHOST_SYSTEM_OPENSSL)
+	add_test(NAME self_contained COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:steamac-vrhost>
+		-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_self_contained.cmake)
 endif()

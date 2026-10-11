@@ -20,6 +20,11 @@ struct EncoderConfig
 	uint32_t width = 0, height = 0;
 	float fps = 72;
 	uint32_t bitrate_bps = 50'000'000;
+	// Tuning knobs measured by `--selftest-encoder` (docs/vr.md, encode budget). Defaults = the M0 configuration.
+	bool low_latency_rc = true;      // kVTVideoEncoderSpecification_EnableLowLatencyRateControl
+	bool prioritize_speed = false;   // kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality
+	int max_frame_delay = -1;        // kVTCompressionPropertyKey_MaxFrameDelayCount (-1 = unset)
+	int qp = 0;                      // > 0: constant QP via Min/MaxAllowedFrameQP instead of the bitrate target
 };
 
 struct EncodedFrame
@@ -44,6 +49,8 @@ public:
 
 	bool hardware() const;
 	bool low_latency() const;
+	// Properties VideoToolbox did not accept (for the self-test report).
+	const std::vector<std::string> & rejected() const;
 	const EncoderConfig & config() const;
 	// Pixel buffer pool of the session ('420f', IOSurface-backed, Metal-compatible).
 	CVPixelBufferPoolRef pool() const;

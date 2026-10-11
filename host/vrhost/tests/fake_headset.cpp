@@ -5,7 +5,10 @@
 #include "vt_decode.h"
 #include "wivrn/annexb.h"
 
+#include "crypto.h"
 #include "protocol_version.h"
+#include "secrets.h"
+#include "smp.h"
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
 
@@ -60,11 +63,21 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 				pollfd fds[2] = {{.fd = control.get_fd(), .events = POLLIN}, {.fd = stream ? stream->get_fd() : -1, .events = POLLIN}};
 				if (::poll(fds, 2, 50) <= 0)
 					continue;
-				if (fds[0].revents & (POLLHUP | POLLERR))
-					throw std::runtime_error("server closed the connection");
 				if (fds[0].revents & POLLIN)
-					if (auto p = control.receive())
-						return std::move(*p);
+				{
+					// the last packet before a close (e.g. pin_check_4 with a wrong PIN) is still readable
+					try
+					{
+						if (auto p = control.receive())
+							return std::move(*p);
+					}
+					catch (wivrn::socket_shutdown &)
+					{
+						throw std::runtime_error("server closed the connection");
+					}
+				}
+				else if (fds[0].revents & (POLLHUP | POLLERR))
+					throw std::runtime_error("server closed the connection");
 				if (stream and (fds[1].revents & POLLIN))
 					if (auto p = stream->receive())
 						return std::move(*p);
@@ -72,21 +85,52 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 			throw std::runtime_error("timeout");
 		};
 
+		// Client side of the crypto handshake: WiVRn v26.9 client/wivrn_client.cpp wivrn_session::handshake().
+		crypto::key headset_keypair = o.private_key.empty() ? crypto::key::generate_x448_keypair()
+		                                                    : crypto::key::from_private_key(o.private_key);
 		control.send(fh::crypto_handshake{
 		        .protocol_version = o.protocol_version ? o.protocol_version : wivrn::protocol_version,
-		        .public_key = "",
+		        .public_key = headset_keypair.public_key(),
 		        .name = "steamac fake headset",
 		});
 		auto ch = std::get<th::crypto_handshake>(receive(nullptr));
 		res.handshake_state = std::string(magic_enum::enum_name(ch.state));
-		if (ch.state != th::crypto_handshake::crypto_state::encryption_disabled)
-			return res;
+		using cs = th::crypto_handshake::crypto_state;
+		std::optional<secrets> sec;
+		switch (ch.state)
+		{
+			case cs::encryption_disabled:
+				break;
+			case cs::pin_needed: {
+				crypto::smp pin_check;
+				auto msg1 = pin_check.step1(o.pin);
+				control.send(fh::pin_check_1{msg1});
+				auto msg2 = std::get<th::pin_check_2>(receive(nullptr)).message;
+				auto msg3 = pin_check.step3(msg2);
+				control.send(fh::pin_check_3{msg3});
+				auto msg4 = std::get<th::pin_check_4>(receive(nullptr)).message;
+				if (not pin_check.step5(msg4))
+					throw std::runtime_error("Incorrect PIN");
+			}
+				[[fallthrough]];
+			case cs::client_already_paired: {
+				crypto::key server_key = crypto::key::from_public_key(ch.public_key);
+				sec.emplace(headset_keypair, server_key, ch.state == cs::pin_needed ? o.pin : std::string("000000"));
+				control.set_aes_key_and_ivs(sec->control_key, sec->control_iv_to_headset, sec->control_iv_from_headset);
+				res.encrypted = true;
+				break;
+			}
+			default:
+				return res;
+		}
 		control.send(fh::crypto_handshake{});
 		auto h = std::get<th::handshake>(receive(nullptr));
 		std::unique_ptr<stream_socket> stream;
 		if (h.stream_port > 0)
 		{
 			stream = std::make_unique<stream_socket>();
+			if (sec)
+				stream->set_aes_key_and_ivs(sec->stream_key, sec->stream_iv_header_to_headset, sec->stream_iv_header_from_headset);
 			addr.sin6_port = htons(h.stream_port);
 			stream->connect(addr);
 			stream->send(fh::handshake{});
@@ -116,14 +160,25 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 		auto last_tracking = std::chrono::steady_clock::now();
 		float t = 0;
 
+		std::array<std::map<uint64_t, int64_t>, 2> first_packet; // frame -> headset time of its first shard
 		auto send_feedback = [&](uint8_t idx, uint64_t frame, bool ok) {
 			fh::feedback fb{};
 			fb.frame_index = frame;
 			fb.stream_index = idx;
-			fb.received_first_packet = hs_now();
+			auto fp = first_packet[idx].find(frame);
+			fb.received_first_packet = fp != first_packet[idx].end() ? fp->second : hs_now();
 			fb.received_last_packet = ok ? hs_now() : 0;
 			fb.sent_to_decoder = ok ? hs_now() : 0;
-			fb.received_from_decoder = ok ? hs_now() : 0;
+			fb.received_from_decoder = ok ? std::max(hs_now(), fb.received_first_packet + o.decode_ns) : 0;
+			if (ok and o.display_period_ns > 0)
+			{
+				// blit at the next headset vsync after decoding, displayed one vsync later
+				int64_t t = fb.received_from_decoder - o.display_phase_ns;
+				int64_t blit = (t / o.display_period_ns + 1) * o.display_period_ns + o.display_phase_ns;
+				fb.blitted = blit;
+				fb.displayed = blit + o.display_period_ns;
+				fb.times_displayed = 1;
+			}
 			control.send(std::move(fb));
 		};
 
@@ -186,6 +241,9 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 					}
 					continue;
 				}
+				first_packet[idx].try_emplace(s->frame_idx, hs_now());
+				if (first_packet[idx].size() > 64)
+					first_packet[idx].erase(first_packet[idx].begin());
 				auto & f = frames[idx][s->frame_idx];
 				f.shards[s->shard_idx].assign(s->payload.begin(), s->payload.end());
 				if (s->view_info)
@@ -227,10 +285,14 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 				for (int e = 0; e < 2 and o.identity_foveation; ++e)
 					if (vi.foveation[e].x != std::vector<uint16_t>{o.eye_width} or vi.foveation[e].y != std::vector<uint16_t>{o.eye_height})
 						res.view_info_ok = false;
+				// (frames rendered before the first tracking packet arrived carry the default, all-zero view poses)
+				bool tracked = vi.pose[0].position.x != 0 or vi.pose[1].position.x != 0;
 				float dx = vi.pose[1].position.x - vi.pose[0].position.x, dz = vi.pose[1].position.z - vi.pose[0].position.z;
-				if (std::abs(std::sqrt(dx * dx + dz * dz) - 0.064f) > 0.002f)
+				if (tracked and std::abs(std::sqrt(dx * dx + dz * dz) - 0.064f) > 0.002f)
 					res.view_info_ok = false;
 				res.display_time_offset_ms = (vi.display_time - hs_now()) / 1e6;
+				if (idx == 0)
+					res.display_times.emplace_back(frame_idx, vi.display_time);
 
 				CVPixelBufferRef img = dec[idx].decode(au);
 				send_feedback(idx, frame_idx, img != nullptr);

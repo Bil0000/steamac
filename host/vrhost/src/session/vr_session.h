@@ -76,6 +76,9 @@ struct InputValue
 struct FrameTiming
 {
 	ns wake_up, predicted_display;
+	// Frame id the session assigned to this frame (WiVRn's pacer counts frames itself and matches the headset's
+	// feedback by it): the producer must submit the frame with Frame::frame_id = this value.
+	uint64_t frame_id = 0;
 };
 
 // One eye of a submitted frame. The image is the ENCODER input: an IOSurface in

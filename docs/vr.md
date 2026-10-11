@@ -9,8 +9,17 @@ headset running the WiVRn client. No game, VM or guest is involved yet; nothing 
   serialization and socket code, vendored unmodified (`host/vrhost/third_party/wivrn/UPSTREAM.md`).
 * Bonjour advertisement `_wivrn._tcp` on port 9757 with WiVRn's TXT keys (`protocol`, `version`, `cookie`), so the
   headset's server list shows the Mac.
-* Handshake: version check (an incompatible client gets WiVRn's `incompatible_version` answer), encryption
-  **disabled**, control on TCP and stream on UDP, headset info.
+* Handshake: version check (an incompatible client gets WiVRn's `incompatible_version` answer), control on TCP and
+  stream on UDP, headset info.
+* **Encryption and PIN pairing** as in WiVRn, with WiVRn's own code: X448 key exchange, the PIN checked by SMP (the
+  PIN never crosses the network), keys derived with PBKDF2, AES-128-CTR on both the TCP control and UDP stream
+  sockets. Paired headsets are remembered in `~/Library/Application Support/steamac/vrhost/known_keys` and reconnect
+  without a PIN. Same modes as WiVRn: pairing (default while no headset is paired, or with `--pair`), encryption on
+  with pairing off (default once a headset is paired: unknown headsets get `pairing_disabled`), `--no-encryption`.
+* **Pacing: WiVRn's pacer** (`server/compositor/pacer.cpp`, unmodified): the headset's feedback packets (decode,
+  blit and display times, converted with the timesync clock offset) set how early a frame is started (99.5th
+  percentile of present-to-decoded + 1 ms) and the predicted display time, and phase-lock frames to the headset's
+  vsync. `next_frame_timing()` returns the frame id the pacer assigned (`FrameTiming::frame_id`).
 * Timesync (WiVRn's clock regression), `tracking_control`, head/controller pose history with interpolation and bounded
   extrapolation, per-eye poses from the headset's view offsets.
 * VideoToolbox **HEVC** (H.264 fallback), hardware encoder required, low-latency rate control, no frame reordering,
@@ -22,8 +31,7 @@ headset running the WiVRn client. No game, VM or guest is involved yet; nothing 
   turns (rotation; the sphere is at infinity, so walking does not move it). The frame number is encoded in the top-left
   corner (16 blocks) for automated checks.
 
-Not yet: PIN pairing/encryption (the code is vendored and built, not wired), WiVRn's feedback-driven pacer, foveation,
-audio, game frames (M1), OpenVR in the guest (M2/M3).
+Not yet: foveation (M1 ports `foveation.comp`), audio, game frames (M1), OpenVR in the guest (M2/M3).
 
 ## Licence
 
@@ -32,11 +40,15 @@ audio, game frames (M1), OpenVR in the guest (M2/M3).
 
 ## Build and test (no headset)
 
-Requires Xcode command-line tools, CMake ≥ 3.25, Ninja and OpenSSL 3 (`brew install cmake ninja openssl@3`).
+Requires Xcode command-line tools, CMake ≥ 3.25 and Ninja (`brew install cmake ninja`). OpenSSL is **not** taken
+from the system: the build downloads the pinned OpenSSL 3.5.4 release tarball (SHA-256 checked), builds a static
+`libcrypto` (no shared libs, no TLS, no apps; about 2 minutes once) into the build directory and links it, so
+`steamac-vrhost` loads only macOS system libraries. The binary is signed ad hoc with the identifier
+`com.steamac.vrhost` after linking (stable identity for the Local Network permission). `-DVRHOST_SYSTEM_OPENSSL=ON`
+uses `find_package(OpenSSL)` instead, for development only.
 
 ```sh
-cmake -S host/vrhost -B build/vrhost -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-      -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+cmake -S host/vrhost -B build/vrhost -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ninja -C build/vrhost
 ctest --test-dir build/vrhost --output-on-failure
 build/vrhost/steamac-vrhost --selftest-encoder          # headless VideoToolbox latency report
@@ -48,7 +60,10 @@ build/vrhost/steamac-vrhost --selftest-encoder          # headless VideoToolbox 
 | `annexb` | length-prefixed → Annex-B, malformed input, start-code splitting, HEVC NAL types |
 | `pose_history` | interpolation, angular/linear extrapolation and its 100 ms bound, pose composition |
 | `encoder` | hardware + low-latency session, VPS/SPS/PPS only before IDRs, IDR on request, decode back (VideoToolbox) to the same frame number; HEVC and H.264 |
-| `loopback` | the full server against a test headset that follows the WiVRn client's connection sequence over loopback: handshake, stream description, tracking control, timesync, UDP shards, decode of 60+ frames per eye with matching frame numbers, poses 64 mm apart, display time in the headset clock, a lost frame → new IDR → decoding resumes, wrong protocol refused |
+| `pacer` | WiVRn's pacer with synthetic feedback (headset clock 5 s ahead): learns decode time + margin and blit-to-display, phase-locks display times to the headset vsync grid, ignores stale feedback |
+| `crypto` | both peers derive the same AES keys (X448 + PBKDF2), SMP accepts the right PIN and rejects a wrong one, key PEM round trip, paired-headset store (replace, remove, mode 0600) |
+| `self_contained` | `otool -L steamac-vrhost` lists only `/usr/lib` and `/System` libraries |
+| `loopback` | the full server against a test headset that follows the WiVRn client's connection sequence over loopback: handshake, stream description, tracking control, timesync, UDP shards, decode of 60+ frames per eye with matching frame numbers, poses 64 mm apart, display time in the headset clock, a lost frame → new IDR → decoding resumes, wrong protocol refused; pacing: with synthetic headset feedback (8 ms decode, 72 Hz vsync at a 3.3 ms phase) the announced display times land on the headset's vsync grid; encryption: PIN pairing then encrypted stream (lost frame + IDR included), reconnect of the paired headset without PIN, wrong PIN refused and not stored, pairing disabled refuses an unknown headset |
 
 Encoder self-test on an M2 MacBook Air (16 GB, macOS 27), 2 eyes encoded concurrently, measured while a steamac VM was
 running (2026-10-11):
@@ -58,6 +73,12 @@ running (2026-10-11):
 | 1832×1920, 90 Hz (Quest 3 default) | 18.3 / 20.8 | 20.2 / 21.1 | 11.1 |
 | 1440×1584, 72 Hz | 10.6 / 12.3 | 12.1 / 12.4 | 13.9 |
 | 1280×1408, 72 Hz | 9.0 / 10.2 | 10.1 / 10.3 | 13.9 |
+
+Encoder tuning knobs (`--selftest-encoder`): `--layout eyes|serial|sbs` (one session per eye concurrently, one after
+the other, or one side-by-side 2W×H session), `--prioritize-speed`, `--max-frame-delay N`, `--qp N` (constant QP via
+Min/MaxAllowedFrameQP), `--no-low-latency-rc`, `--codec h264`, `--csv` for one summary line per run. First finding:
+the low-latency HEVC encoder **rejects** `PrioritizeEncodingSpeedOverQuality` and `MaxFrameDelayCount` (the
+self-test lists rejected properties); the full sweep is still to be measured on an idle machine.
 
 The two VideoToolbox sessions share one media engine (about 350 Mpixel/s of HEVC here), so encoding both eyes in
 parallel saves little. Quest 3's default stream size at 90 Hz does not fit; 72 Hz at about 1440×1584 per eye does. The
@@ -71,7 +92,12 @@ when macOS asks.
 
 ```sh
 build/vrhost/steamac-vrhost --testpattern            # add --size 1440x1584 to lower the stream size
+build/vrhost/steamac-vrhost --show-pin               # the PIN, while the host waits for a new headset
+build/vrhost/steamac-vrhost --list-headsets          # paired headsets; --unpair NAME / --unpair-all
 ```
+
+The first connection of a headset asks for the 6-digit PIN printed by the host (`--pin NNNNNN` fixes it, `--pair`
+accepts new headsets when one is already paired).
 
 * **Meta Quest 2/3/3S/Pro, Pico 4/Neo 3:** install `WiVRn-release.apk` from the
   [v26.9 release](https://github.com/WiVRn/WiVRn/releases/tag/v26.9) with `adb install` (developer mode), and turn off
@@ -87,8 +113,10 @@ decode time.
 
 ## Next milestones
 
+* **Encode budget sweep** (pending, needs an idle Mac): the knob matrix above × resolution/refresh, H.264 vs HEVC,
+  foveated stream sizes from M1.
 * **M1:** game eye textures from DXMT over the wmtr ring into `steamac-vm`, shared with `steamac-vrhost` as IOSurfaces,
-  converted by a Metal compositor pass (WiVRn's `foveation.comp` in MSL) into the encoder input; WiVRn's pacer.
+  converted by a Metal compositor pass (WiVRn's `foveation.comp` in MSL) into the encoder input.
 * **M2/M3:** OpenVR in the guest (Proton `vrclient_x64` DXMT submit, poses, input), then VRChat.
 
 Interfaces between these pieces: `docs/vr-interfaces.md`.

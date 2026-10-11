@@ -23,6 +23,16 @@ struct WivrnConfig
 	int port = 9757;      // WiVRn default_port (TCP control + UDP stream)
 	bool advertise = true; // Bonjour _wivrn._tcp
 	bool tcp_only = false;
+	// WiVRn's encryption_state: disabled (plain LAN), enabled (paired headsets only), pairing (paired headsets, or a
+	// new one that proves the PIN with SMP). Encryption is X448 + PBKDF2(PIN) + AES-128-CTR (WiVRn common/ code).
+	enum class Encryption
+	{
+		disabled,
+		enabled,
+		pairing,
+	} encryption = Encryption::pairing;
+	std::string pin;                 // pairing PIN; empty = random 6 digits (WivrnSession::pin())
+	std::string known_keys_file;     // empty = KnownKeys::default_dir()/known_keys
 	uint32_t bitrate_bps = 50'000'000;
 	// 0 = use the headset's stream_eye_width/height
 	uint32_t width = 0, height = 0;
@@ -32,7 +42,7 @@ struct WivrnConfig
 // Server-side statistics, for tests and the self-test report.
 struct WivrnStats
 {
-	std::atomic<uint64_t> frames_sent{0}, idr_sent{0}, idr_requests{0}, feedback{0}, tracking{0}, timesync{0},
+	std::atomic<uint64_t> paired{0}, frames_sent{0}, idr_sent{0}, idr_requests{0}, feedback{0}, tracking{0}, timesync{0},
 	        bytes_sent{0};
 	std::atomic<int64_t> last_encode_ns{0};
 	std::atomic<int64_t> last_feedback_decode_ns{0}; // received_from_decoder - received_first_packet, headset clock
@@ -55,7 +65,8 @@ public:
 	void haptics(Device, float duration_s, float frequency, float amplitude) override;
 	void request_idr() override;
 
-	int port() const; // bound port (useful with port = 0 in tests)
+	int port() const;
+	std::string pin() const; // the pairing PIN ("" unless encryption == pairing) // bound port (useful with port = 0 in tests)
 	const WivrnStats & stats() const;
 	static uint64_t protocol_version();
 

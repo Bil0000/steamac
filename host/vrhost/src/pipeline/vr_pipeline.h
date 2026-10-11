@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace vrhost
 {
@@ -38,6 +39,13 @@ struct PipelineStats
 	std::atomic<int64_t> last_compose_gpu_ns{0}, last_latency_ns{0}; // app submit -> encoded + sent
 };
 
+// Per-frame latencies (ms, host clock) of the frames since the last take(): WMTVRSubmit (call 146 on the executor) ->
+// copy complete -> received by the host -> composed, encoded and sent.
+struct PipelineLatency
+{
+	std::vector<double> submit_to_copied, copied_to_received, received_to_sent, total, compose_gpu;
+};
+
 class VrPipeline
 {
 public:
@@ -46,6 +54,7 @@ public:
 	~VrPipeline();
 	bool peer_closed() const;
 	const PipelineStats & stats() const { return st; }
+	PipelineLatency take_latency();
 
 private:
 	void on_frame(const LinkFrame &);
@@ -55,6 +64,8 @@ private:
 	std::unique_ptr<SessionEncoderSink> sink;
 	std::unique_ptr<CompositorBridge> bridge;
 	PipelineStats st;
+	std::mutex lat_mutex;
+	PipelineLatency lat;
 	std::unique_ptr<VrLinkServer> server; // last: its thread calls on_frame
 };
 } // namespace vrhost

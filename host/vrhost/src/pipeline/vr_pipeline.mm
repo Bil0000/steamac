@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #include "vr_pipeline.h"
 #include "session/clock.h"
+#include <utility>
 
 namespace vrhost
 {
@@ -94,8 +95,24 @@ void VrPipeline::on_frame(const LinkFrame & f)
 		h = info->eye_height;
 	}
 	(*bridge)(f);
+	int64_t sent = now_ns();
 	st.submitted++;
 	st.last_compose_gpu_ns = bridge->last_timing().compose_gpu_ns;
-	st.last_latency_ns = now_ns() - f.app_submit_time;
+	st.last_latency_ns = sent - f.app_submit_time;
+	std::lock_guard l(lat_mutex);
+	if (lat.total.size() < 100'000)
+	{
+		lat.submit_to_copied.push_back((f.ready_time - f.app_submit_time) / 1e6);
+		lat.copied_to_received.push_back((f.received_time - f.ready_time) / 1e6);
+		lat.received_to_sent.push_back((sent - f.received_time) / 1e6);
+		lat.total.push_back((sent - f.app_submit_time) / 1e6);
+		lat.compose_gpu.push_back(bridge->last_timing().compose_gpu_ns / 1e6);
+	}
+}
+
+PipelineLatency VrPipeline::take_latency()
+{
+	std::lock_guard l(lat_mutex);
+	return std::exchange(lat, {});
 }
 } // namespace vrhost
