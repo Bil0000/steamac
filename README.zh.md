@@ -23,7 +23,7 @@ Epic Games、VRChat 及 DXMT 作者均无关联。
 | Apple Silicon Mac | 已在 M2 MacBook Air（16 GB、macOS 27.0）上验证；其他 Mac 未测试 |
 | macOS 15 或更新 | KosmicKrisp（更快的 Vulkan 驱动）需要 macOS 26。DXMT 路径的主机端库按 macOS 15.5 或更新构建 |
 | 可用磁盘空间 | 创建 SteamOS 磁盘期间，其所在卷约需 14 GB（之后约 9 GB），另加游戏所需空间（home 大小在创建时选择，之后可用“扩展磁盘…”扩大） |
-| 内存 | 虚拟机内存自动取 Mac 内存的一半（4-16 GiB）；已在 16 GB 上验证 |
+| 内存 | 至少 16 GB，更少不受支持。虚拟机内存自动取 Mac 内存的一半（4-16 GiB） |
 | Steam 账号 | 游戏在 SteamOS 内安装和运行 |
 
 ## 安装与首次启动

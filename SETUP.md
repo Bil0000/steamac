@@ -16,7 +16,7 @@ Status: only one machine (M2 MacBook Air, 16 GB, macOS 27.0) and one anti-cheat 
 |---|---|
 | an Apple silicon Mac | verified on an M2 MacBook Air, 16 GB; other Macs are untested |
 | macOS 15 or newer | the faster Vulkan driver (KosmicKrisp) needs macOS 26; macOS 15 uses MoltenVK. The DXMT path's host library is built for macOS 15.5 or newer. Verified on macOS 27.0 |
-| memory | automatic VM RAM is half of the Mac's RAM (4-16 GiB), with at least 3 GiB or a quarter of the RAM kept for macOS; on a 16 GiB Mac that is 8 GiB VM + 4 GiB graphics + 4 GiB reserve |
+| memory | 16 GB minimum; less is not supported. Automatic VM RAM is half of the Mac's RAM (4-16 GiB), with at least 3 GiB or a quarter of the RAM kept for macOS; on a 16 GiB Mac that is 8 GiB VM + 4 GiB graphics + 4 GiB reserve |
 | free disk space | creating the SteamOS disk needs about 14 GB on its volume during creation (about 9 GB afterwards, plus about 6 GB of download cache that is deleted on success), plus room for games: choose the home size at creation; Grow Disk enlarges it later |
 | a Steam account | games are installed and run inside SteamOS |
 | internet access | the app downloads Valve's SteamOS image and the Steam client |

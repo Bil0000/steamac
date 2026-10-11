@@ -24,7 +24,7 @@ no published figures for DXMT yet.
 | an Apple silicon Mac | verified on an M2 MacBook Air, 16 GB, macOS 27.0; other Macs are untested |
 | macOS 15 or newer | KosmicKrisp (the faster Vulkan driver) needs macOS 26. The DXMT path's host library is built for macOS 15.5 or newer |
 | free disk space | about 14 GB on the disk's volume while the SteamOS disk is created (about 9 GB afterwards), plus room for games (the home size is chosen at creation and can be enlarged later with Grow Disk) |
-| memory | automatic VM RAM is half of the Mac's RAM (4-16 GiB); verified with 16 GB |
+| memory | 16 GB minimum; less is not supported. Automatic VM RAM is half of the Mac's RAM (4-16 GiB) |
 | a Steam account | games are installed and run inside SteamOS |
 
 ## Install and first launch
