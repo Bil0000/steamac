@@ -2,7 +2,8 @@
 # steamac: the launcher's Settings > Advanced "Graphics path" (kernel command line steamac.gfx=dxmt|vulkan)
 # for Direct3D 10/11 games in Proton.
 #   dxmt    every installed Proton's DXVK set (files/lib/wine/dxvk/x86_64-windows: d3d11, dxgi, d3d10core)
-#           becomes DXMT, and winemetal (the unixlib that remotes Metal to the Mac over the wmtr virtio-gpu
+#           becomes DXMT, and so does its vkd3d-proton d3d12.dll (files/lib/wine/vkd3d-proton/x86_64-windows) when
+#           the payload has one (DXMT's dxgi is in place then, so vkd3d-proton's d3d12 would lack its DXVK dxgi), and winemetal (the unixlib that remotes Metal to the Mac over the wmtr virtio-gpu
 #           context) is added next to Wine's builtins and linked into Proton's prefix template. Proton copies its DXVK set into each game's prefix on
 #           every start, so games get DXMT without launch options or a separate compatibility tool. The
 #           replaced files are kept in $STATE and Proton updates are followed (--watch re-applies).
@@ -18,7 +19,8 @@ CMDLINE=${STEAMAC_CMDLINE:-/proc/cmdline}
 STEAM=${STEAMAC_STEAM_ROOT:-$HOME/.local/share/Steam}
 PAYLOAD=${STEAMAC_DXMT_DIR:-/usr/lib/steamac/dxmt}
 STATE=${STEAMAC_GFX_STATE:-${XDG_DATA_HOME:-$HOME/.local/share}/steamac/gfx-path}
-DLLS="d3d11 dxgi d3d10core"
+# <directory under files/lib/wine>/<dll>: Proton's copy that DXMT's replaces
+DLLS="dxvk/d3d11 dxvk/dxgi dxvk/d3d10core vkd3d-proton/d3d12"
 MARK=.steamac-dxmt
 log() { echo "steam-gfx-path: $*" >&2; }
 
@@ -66,9 +68,23 @@ is_dxmt() { grep -aqi dxmt "$1" 2>/dev/null; }
 
 apply_dxmt() {
     local p=$1 W=$1/files/lib/wine B; B=$STATE/orig/$(key "$p")
-    local D=$W/dxvk/x86_64-windows f changed=0
+    local D f d changed=0
     mkdir -p "$B"
-    for f in $DLLS; do
+    for d in $DLLS; do
+        f=${d#*/}; D=$W/${d%/*}/x86_64-windows
+        # optional parts: a Proton without the directory, or a payload without the file, leave it to Proton
+        [[ -f $D/$f.dll ]] || continue
+        if [[ ! -f $PAYLOAD/x86_64-windows/$f.dll ]]; then
+            # an earlier payload had it: Proton's kept original goes back unless Proton was updated since (then
+            # the file there is Proton's new one)
+            if [[ -f $B/$f.dll ]]; then
+                if ! is_dxmt "$B/$f.dll" && [[ $(vkey "$p") == "$(cat "$B/version" 2>/dev/null)" ]] && ! cmp -s "$B/$f.dll" "$D/$f.dll"; then
+                    cp -f "$B/$f.dll" "$D/$f.dll.steamac-tmp" && mv -f "$D/$f.dll.steamac-tmp" "$D/$f.dll" && changed=1
+                fi
+                rm -f "$B/$f.dll"
+            fi
+            continue
+        fi
         # a kept original that is DXMT's (kept by an older version of this script) is not Proton's: drop it
         [[ -f $B/$f.dll ]] && is_dxmt "$B/$f.dll" && rm -f "$B/$f.dll"
         # keep Proton's file unless it is DXMT's: this payload's (a re-run), or an earlier payload's (a layer
@@ -99,8 +115,9 @@ apply_dxmt() {
 
 restore() {
     local p=$1 W=$1/files/lib/wine B; B=$STATE/orig/$(key "$p")
-    local D=$W/dxvk/x86_64-windows f
-    for f in $DLLS; do
+    local D f d
+    for d in $DLLS; do
+        f=${d#*/}; D=$W/${d%/*}/x86_64-windows
         # a kept original must be Proton's: one that is DXMT's was kept by an older version of this script
         if [[ -f $B/$f.dll ]] && is_dxmt "$B/$f.dll"; then
             log "kept original $f.dll of $p is DXMT's, not restoring it: in Steam run Proton's Properties > Installed Files > Verify integrity"
@@ -134,11 +151,13 @@ reconcile() {
             # the prefix's DXMT copies go back to its Proton's DXVK now (Proton would do it at the next start)
             local s=$x/drive_c/windows/system32 src f
             src=$(protons | head -1)
-            for f in $DLLS; do
+            local d
+            for d in $DLLS; do
+                f=${d#*/}
                 # a prefix this script marked holds Proton's set as Proton last copied it: DXMT's (of any payload)
                 if [[ -f $s/$f.dll && -n $src ]]; then
                     local o=$STATE/orig/$(key "$src")/$f.dll
-                    [[ -f $o ]] || o=$src/files/lib/wine/dxvk/x86_64-windows/$f.dll
+                    [[ -f $o ]] || o=$src/files/lib/wine/${d%/*}/x86_64-windows/$f.dll
                     # never DXMT's: Proton replaces the prefix's file at its next start
                     [[ -f $o ]] && ! is_dxmt "$o" && cp -f "$o" "$s/$f.dll"
                 fi
