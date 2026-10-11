@@ -7,6 +7,8 @@
 #   vulkan    Proton's files are back byte for byte (the updated ones), every added file and marker is gone,
 #             prefixes hold Proton's DXVK again and nothing else changed
 #   missing   steamac.gfx=dxmt without the DXMT files leaves everything stock
+#   poisoned  a kept original that is a DXMT file (kept by an older script from a payload it no longer knows) is never
+#             kept and never restored: the file stays, a log line points at Steam's Verify integrity, the backup goes
 # usage: scripts/test/steam-gfx-path.sh
 set -u
 S=$(cd "$(dirname "$0")/../.." && pwd)/guest/layer/usr/lib/steamac/steam-gfx-path
@@ -85,5 +87,21 @@ done
 s2=$(snap); run "steamac.gfx=vulkan" "$X2"; [ "$(snap)" = "$s2" ] || fail vulkan "second Vulkan run changed files"
 
 run "steamac.gfx=dxmt" "$T/none"; [ "$(snap)" = "$s2" ] || fail missing "changed files without DXMT files"
+# poisoned backups: a DXMT build of another payload carries the dxmt:: symbols
+dxblob() { { printf '_ZN4dxmt6Logger10s_instanceE'; head -c 270 /dev/zero | tr '\0' "$2"; } > "$1"; }
+D2=$P2/files/lib/wine/dxvk/x86_64-windows
+run "steamac.gfx=dxmt" "$X2"
+B2=$(echo "$T"/state/orig/*/ | tr ' ' '\n' | while read -r b; do grep -qx "$P2" "$b/path" && echo "$b"; done)
+dxblob "$B2/d3d11.dll" z                       # a poisoned kept original
+cp "$D2/d3d11.dll" "$T/ours.dll"; : > "$T/log"
+run "steamac.gfx=vulkan" "$X2"
+cmp -s "$D2/d3d11.dll" "$B2/d3d11.dll" 2>/dev/null && fail poisoned "poisoned backup restored"
+grep -q "d3d11.dll of $P2 is DXMT's.*Verify integrity" "$T/log" || fail poisoned "no log line: $(cat "$T/log")"
+cmp -s "$D2/d3d11.dll" "$T/ours.dll" || fail poisoned "d3d11.dll changed although nothing sound was kept"
+cmp -s "$D2/dxgi.dll" "$D2/d3d9.dll" || fail poisoned "sound kept original of dxgi.dll not restored"
+[ -z "$(ls -A "$T/state/orig" 2>/dev/null)" ] || fail poisoned "poisoned backup left in state"
+# a DXMT file in Proton's tree that no payload or checksum knows is not kept as Proton's original
+dxblob "$D2/dxgi.dll" y; run "steamac.gfx=dxmt" "$X2"
+grep -rl dxmt "$T/state" >/dev/null 2>&1 && fail poisoned "unknown DXMT file kept as an original"
 echo "steam-gfx-path: $([ $fails = 0 ] && echo passed || echo FAILED)"
 exit $((fails > 0))

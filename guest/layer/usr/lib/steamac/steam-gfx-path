@@ -60,17 +60,23 @@ ours() { # file
     [[ -n $c ]] && cat "$STATE"/orig/*/installed 2>/dev/null | grep -qx "$c"
 }
 
+# Any DXMT build's PE files, also of a payload this script never saw: they are C++ (mangled names start _ZN4dxmt,
+# a dxmt:: namespace) and DXVK's files carry no such string.
+is_dxmt() { grep -aqi dxmt "$1" 2>/dev/null; }
+
 apply_dxmt() {
     local p=$1 W=$1/files/lib/wine B; B=$STATE/orig/$(key "$p")
     local D=$W/dxvk/x86_64-windows f changed=0
     mkdir -p "$B"
     for f in $DLLS; do
+        # a kept original that is DXMT's (kept by an older version of this script) is not Proton's: drop it
+        [[ -f $B/$f.dll ]] && is_dxmt "$B/$f.dll" && rm -f "$B/$f.dll"
         # keep Proton's file unless it is DXMT's: this payload's (a re-run), or an earlier payload's (a layer
         # update: replace it, the kept original stays); anything else is Proton's (first run, a Proton update)
         if ! same_as_native "$PAYLOAD/x86_64-windows/$f.dll" "$D/$f.dll"; then
             # a kept original stays valid while Proton's version is the one it was kept from (also covers
             # files installed before the checksums were recorded)
-            if ! ours "$D/$f.dll" && ! [[ -f $B/$f.dll && $(vkey "$p") == "$(cat "$B/version" 2>/dev/null)" ]]; then
+            if ! ours "$D/$f.dll" && ! is_dxmt "$D/$f.dll" && ! [[ -f $B/$f.dll && $(vkey "$p") == "$(cat "$B/version" 2>/dev/null)" ]]; then
                 cp -f "$D/$f.dll" "$B/$f.dll" || return 1
             fi
             native_copy "$PAYLOAD/x86_64-windows/$f.dll" "$D/$f.dll" || return 1
@@ -95,6 +101,11 @@ restore() {
     local p=$1 W=$1/files/lib/wine B; B=$STATE/orig/$(key "$p")
     local D=$W/dxvk/x86_64-windows f
     for f in $DLLS; do
+        # a kept original must be Proton's: one that is DXMT's was kept by an older version of this script
+        if [[ -f $B/$f.dll ]] && is_dxmt "$B/$f.dll"; then
+            log "kept original $f.dll of $p is DXMT's, not restoring it: in Steam run Proton's Properties > Installed Files > Verify integrity"
+            continue
+        fi
         # put Proton's file back only where DXMT's is still there (an update may have restored it already)
         if [[ -f $B/$f.dll ]] && { same_as_native "$PAYLOAD/x86_64-windows/$f.dll" "$D/$f.dll" || ours "$D/$f.dll"; }; then
             cp -f "$B/$f.dll" "$D/$f.dll.steamac-tmp" && mv -f "$D/$f.dll.steamac-tmp" "$D/$f.dll"
@@ -128,7 +139,8 @@ reconcile() {
                 if [[ -f $s/$f.dll && -n $src ]]; then
                     local o=$STATE/orig/$(key "$src")/$f.dll
                     [[ -f $o ]] || o=$src/files/lib/wine/dxvk/x86_64-windows/$f.dll
-                    cp -f "$o" "$s/$f.dll"
+                    # never DXMT's: Proton replaces the prefix's file at its next start
+                    [[ -f $o ]] && ! is_dxmt "$o" && cp -f "$o" "$s/$f.dll"
                 fi
             done
         done < <(prefixes)
