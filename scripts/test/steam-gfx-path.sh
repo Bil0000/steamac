@@ -25,6 +25,11 @@ for p in "$P1" "$P2"; do
   mkdir -p "$p/files/share/default_pfx/drive_c/windows/system32"
   ln -s ../../../../../lib/wine/x86_64-windows/d3d11.dll "$p/files/share/default_pfx/drive_c/windows/system32/d3d11.dll"
 done
+# an ARM64 Proton: DXVK/vkd3d-proton sets, but no x86-64 Wine; it must stay stock
+P3=$ST/steamapps/common/Proton-arm64
+mkdir -p "$P3/files/lib/wine/dxvk/x86_64-windows" "$P3/files/lib/wine/vkd3d-proton/x86_64-windows"
+for f in d3d11 dxgi d3d10core; do blob "$P3/files/lib/wine/dxvk/x86_64-windows/$f.dll" a; done
+blob "$P3/files/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll" a
 mkdir -p "$P1/files/lib/wine/vkd3d-proton/x86_64-windows"
 for f in d3d12 d3d12core; do blob "$P1/files/lib/wine/vkd3d-proton/x86_64-windows/$f.dll" r; done
 for a in 100 200; do
@@ -52,6 +57,9 @@ for p in "$P1" "$P2"; do
     || fail dxmt "$p prefix template has no winemetal.dll link"
 done
 V=$P1/files/lib/wine/vkd3d-proton/x86_64-windows
+for f in dxvk/x86_64-windows/d3d11 vkd3d-proton/x86_64-windows/d3d12; do
+  [ "$(tr -d a < "$P3/files/lib/wine/$f.dll")" = "" ] || fail arm64 "ARM64 Proton $f.dll touched"; done
+grep -q "cannot set up" "$T/log" && fail arm64 "error for the ARM64 Proton: $(grep 'cannot set up' "$T/log" | head -1)"
 isdxmt "$V/d3d12.dll" || fail d3d12 "P1 d3d12.dll is not DXMT (native copy)"
 [ "$(tr -d r < "$V/d3d12core.dll")" = "" ] || fail d3d12 "d3d12core.dll touched"
 [ -e "$P2/files/lib/wine/vkd3d-proton" ] && fail d3d12 "P2 got a vkd3d-proton directory"
