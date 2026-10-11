@@ -4,7 +4,7 @@
 VRChat — on an Apple silicon Mac.**
 
 It does this by replacing the FEX inside Steam's own FEX compatibility tool (Steam app 3127680) with a patched FEX-2610
-build (patches 0001–0026; 0021 is withdrawn), plus launcher, stability and performance fixes that are **experimental** (see [Results](#results)).
+build from [StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610) tag `eac-2610.1` (patches 0001–0026 and 0033; 0021 is withdrawn), plus launcher, stability and performance fixes that are **experimental** (see [Results](#results)).
 The EAC client is the stock one from the Proton EasyAntiCheat
 Runtime; nothing fakes, replays or short-circuits its result. Valve's SteamOS rootfs is unmodified — everything lives in
 the guest's home directory.
@@ -16,7 +16,11 @@ point. Not affiliated with FX GAMES, Valve, Epic Games or VRChat.
 fork, so everyone gets the fix. This fork sends nothing to libkrun, Mesa, FEX or Proton itself; steamac changes are
 discussed with its maintainer directly. If you have reviewed a change here and think it is good enough for one of those
 projects, you are welcome to submit it there yourself: keep its test with it, follow that project's process, and mention
-where it came from.
+where it came from. FEX code changes go to [StonkGuy/FEX](https://github.com/StonkGuy/FEX) as a pull request against the current `eac-<release>` branch, with a test in its `eac-tests/`.
+
+Each FEX release is handled the same way: rebase the patches onto it as branch `eac-<release>` of StonkGuy/FEX, run
+`eac-tests` in the guest and natively for the oracle, check a live VRChat session, drop every patch whose behaviour
+upstream now provides, and tag the result; the PoC and this fork's `build-fex.sh` then pin the new tag.
 
 ## What it takes
 
@@ -38,7 +42,7 @@ where it came from.
 3. Enable SSH in the guest (Settings → Advanced), copy `fex-eac/` over, and run the setup:
 
    ```sh
-   sh build-fex.sh            # clone FEX-2610, apply patches/, build, stage
+   sh build-fex.sh            # clone StonkGuy/FEX at eac-2610.1, build, stage
    sh install-fex-tool.sh     # swap into the compat tool (Valve's files backed up)
    sh install-fex-tool.sh status
    ```
@@ -58,7 +62,7 @@ Three sessions, 2026-10-08, M2 MacBook Air 16 GB, macOS 27.0, steamac 1.8.1/1.8.
 | join → world | 86 s first run (cold shader cache), 32 s second run (warm caches + FEX DiskCache) |
 | frame rate, light world | ~26–30 fps steady at 1280×800, GPU-bound (see [docs/eac-performance.md](docs/eac-performance.md)) |
 
-The verified, recommended setup is the **release steamac app plus `fex-eac/` (patched FEX 0001–0026)**, which is built
+The verified, recommended setup is the **release steamac app plus `fex-eac/` (patched FEX 0001–0026, 0033)**, which is built
 and tested (3 sessions). The app-side changes this fork builds into the launcher — libkrun 0017 (async capture start) and
 0018 (damage-only frame copy), KosmicKrisp 0041 (async pipelines) and 0042 (robustness fixes), and the launcher fixes
 (present, input, stall, render-scale) — are **experimental**: in live VRChat tests the fork-built app crashed the VM once with `MESA_KK_ASYNC_PIPELINES=1`, while the release steamac app with the same patched FEX works. KosmicKrisp 0047 addresses that crash in code, but no live run on record includes 0047 yet. Async pipelines stay off by default and are not recommended: an idle in-world run with `=1` was clearly worse than off. See [docs/fork.md](docs/fork.md) for the per-change status. Verified only on an M2 MacBook Air,
@@ -78,5 +82,5 @@ update of the FEX tool overwrites it with Valve's build — re-run `sh install-f
 
 ## License
 
-This fork keeps steamac's Apache-2.0 license; see `LICENSE` and `NOTICE`. The scripts under `fex-eac/` are Apache-2.0, and
-`fex-eac/patches/` are patches to FEX-Emu under FEX's MIT license.
+This fork keeps steamac's Apache-2.0 license; see `LICENSE` and `NOTICE`. The scripts under `fex-eac/` are Apache-2.0; the patched FEX they build
+([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610)) is FEX-Emu under FEX's MIT license.
