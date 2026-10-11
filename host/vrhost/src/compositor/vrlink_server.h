@@ -28,13 +28,18 @@ public:
 	// Registers `mach_name` (bootstrap) and serves `link_fd` (AF_UNIX SOCK_DGRAM socketpair end, owned). The sink runs on the
 	// server thread; images are released when it returns.
 	using Sink = std::function<void(const LinkFrame &)>;
-	VrLinkServer(int link_fd, const std::string & mach_name, Sink sink);
+	// Other vm -> host packets (VRL_HAPTICS, ...): the whole datagram (struct vrl_header first), on the server thread.
+	using MessageHandler = std::function<void(const void *, size_t)>;
+	VrLinkServer(int link_fd, const std::string & mach_name, Sink sink, MessageHandler other = {});
 	~VrLinkServer();
 	VrLinkServer(const VrLinkServer &) = delete;
 	VrLinkServer & operator=(const VrLinkServer &) = delete;
 
 	// Listener for wmtr_vr_connect at `path` (tests/manual runs): returns the link fd, or -1 on timeout.
 	static int accept_one(const std::string & path, int timeout_ms);
+
+	// host -> vm packet (one struct per datagram); any thread. False when the peer is gone or the socket is full.
+	bool send(const void * msg, size_t size);
 
 	uint64_t frames() const;
 	bool peer_closed() const;

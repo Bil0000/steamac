@@ -45,6 +45,7 @@ struct VrLinkServer::impl
 	int fd;
 	mach_port_t port = MACH_PORT_NULL;
 	Sink sink;
+	MessageHandler other;
 	std::thread thread;
 	std::atomic<bool> quit{false}, closed{false};
 	std::atomic<uint64_t> frames{0};
@@ -80,7 +81,7 @@ struct VrLinkServer::impl
 	void send_release(uint32_t chain, uint32_t image, uint64_t frame)
 	{
 		vrl_release r{{VRL_RELEASE, sizeof r}, chain, image, frame, now_ns()};
-		send(fd, &r, sizeof r, 0);
+		::send(fd, &r, sizeof r, 0);
 	}
 
 	void run()
@@ -97,7 +98,18 @@ struct VrLinkServer::impl
 		{
 			pollfd pf{fd, POLLIN, 0};
 			if (poll(&pf, 1, 100) <= 0)
+			{
+				// a datagram socketpair gives no end-of-file when the vm side closes (macOS): the peer is gone
+				// when the socket is no longer connected
+				sockaddr_storage peer;
+				socklen_t len = sizeof peer;
+				if (getpeername(fd, (sockaddr *)&peer, &len) != 0 && errno == ENOTCONN)
+				{
+					closed = true;
+					return;
+				}
 				continue;
+			}
 			ssize_t n = recv(fd, &u, sizeof u, 0);
 			if (n <= 0)
 			{
@@ -156,18 +168,24 @@ struct VrLinkServer::impl
 					break;
 				}
 				default:
+					if (other)
+						other(&u, size_t(n));
 					break;
 			}
 		}
 	}
 };
 
-VrLinkServer::VrLinkServer(int link_fd, const std::string & mach_name, Sink sink) : p(std::make_unique<impl>())
+VrLinkServer::VrLinkServer(int link_fd, const std::string & mach_name, Sink sink, MessageHandler other) :
+        p(std::make_unique<impl>())
 {
 	p->fd = link_fd;
 	p->sink = std::move(sink);
+	p->other = std::move(other);
 	int on = 1;
 	setsockopt(link_fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
+	int space = VRL_SOCKET_BUFFER;
+	setsockopt(link_fd, SOL_SOCKET, SO_RCVBUF, &space, sizeof space);
 	if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &p->port) != KERN_SUCCESS ||
 	    mach_port_insert_right(mach_task_self(), p->port, p->port, MACH_MSG_TYPE_MAKE_SEND) != KERN_SUCCESS)
 		throw std::runtime_error("mach port");
@@ -176,7 +194,7 @@ VrLinkServer::VrLinkServer(int link_fd, const std::string & mach_name, Sink sink
 	if (bootstrap_register2(bootstrap_port, const_cast<char *>(mach_name.c_str()), p->port, 0) != KERN_SUCCESS)
 		throw std::runtime_error("bootstrap_register2 " + mach_name);
 	struct vrl_hello hello = {{VRL_HELLO, sizeof hello}, VRL_VERSION, uint32_t(getpid())};
-	send(link_fd, &hello, sizeof hello, 0);
+	::send(link_fd, &hello, sizeof hello, 0);
 	p->thread = std::thread([this] { p->run(); });
 }
 
@@ -189,6 +207,15 @@ VrLinkServer::~VrLinkServer()
 	p->chains.clear();
 	if (p->port)
 		mach_port_mod_refs(mach_task_self(), p->port, MACH_PORT_RIGHT_RECEIVE, -1);
+}
+
+bool VrLinkServer::send(const void * msg, size_t size)
+{
+	// MSG_DONTWAIT: a stalled vm side (full socket buffer) must never stall the host's frame clock
+	ssize_t n = ::send(p->fd, msg, size, MSG_DONTWAIT);
+	if (n < 0 && (errno == EPIPE || errno == ENOTCONN || errno == ECONNRESET))
+		p->closed = true;
+	return n == ssize_t(size);
 }
 
 uint64_t VrLinkServer::frames() const

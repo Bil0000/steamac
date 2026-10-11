@@ -89,6 +89,7 @@ add_library(vrhost-core STATIC
 	src/wivrn/known_keys.cpp
 	src/wivrn/dnssd_publisher.cpp
 	src/wivrn/annexb.cpp
+	src/wivrn/input_map.cpp
 	src/encoder/vt_encoder.mm
 	src/pattern/test_pattern.mm)
 target_include_directories(vrhost-core PUBLIC src include)
@@ -137,10 +138,10 @@ if(VRHOST_DXMT_DIR)
 	enable_language(OBJC)
 	set(wmtr_dir ${CMAKE_CURRENT_SOURCE_DIR}/../../wmtr)
 	add_library(vrhost-test-exporter STATIC ${wmtr_dir}/src/wmtr_vr.m)
-	target_include_directories(vrhost-test-exporter PRIVATE include ${wmtr_dir}/include ${VRHOST_DXMT_DIR}/src/winemetal)
+	target_include_directories(vrhost-test-exporter PRIVATE include ${wmtr_dir}/include ${CMAKE_CURRENT_SOURCE_DIR}/../../guest/vr/include ${VRHOST_DXMT_DIR}/src/winemetal)
 	target_compile_options(vrhost-test-exporter PRIVATE -w)
 	add_executable(test_vr_e2e tests/test_vr_e2e.mm tests/fake_headset.cpp tests/vt_decode.mm)
-	target_include_directories(test_vr_e2e PRIVATE ${wmtr_dir}/include ${VRHOST_DXMT_DIR}/src/winemetal)
+	target_include_directories(test_vr_e2e PRIVATE ${wmtr_dir}/include ${CMAKE_CURRENT_SOURCE_DIR}/../../guest/vr/include ${VRHOST_DXMT_DIR}/src/winemetal)
 	set_source_files_properties(tests/test_vr_e2e.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
 	target_link_libraries(test_vr_e2e PRIVATE vrhost-core vrhost-compositor vrhost-test-exporter "-framework Metal")
 	add_test(NAME vr_e2e COMMAND test_vr_e2e)

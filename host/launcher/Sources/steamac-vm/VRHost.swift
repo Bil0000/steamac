@@ -70,6 +70,9 @@ enum VRHost {
             throw OptionError("socketpair: \(String(cString: strerror(errno)))")
         }
         _ = fcntl(sv[0], F_SETFD, FD_CLOEXEC)
+        // VRL_SOCKET_BUFFER (vrlink.h): per-frame timing/pose packets wait here until the guest calls in
+        var space: Int32 = 256 * 1024
+        setsockopt(sv[0], SOL_SOCKET, SO_RCVBUF, &space, socklen_t(MemoryLayout<Int32>.size))
         let machName = "\(LauncherSettings.defaultDomain).vrhost.\(getpid())"
 
         var actions: posix_spawn_file_actions_t?

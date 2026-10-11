@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Game-frame path of steamac-vrhost (docs/vr-interfaces.md sections 2 + 3): VR link frames from steamac-vm
-// (VrLinkServer) -> CompositorBridge (foveation + '420f') -> SessionEncoderSink -> VrSession::submit (WiVRn: VtEncoder
-// per eye, shards, foveation parameters in view_info). Frames that arrive while no headset is connected are released
-// without work.
+// Game path of steamac-vrhost (docs/vr-interfaces.md sections 2-4):
+// * frames: VR link (VrLinkServer) -> CompositorBridge (foveation + '420f') -> SessionEncoderSink -> VrSession::submit
+//   (WiVRn: VtEncoder per eye, shards, foveation parameters in view_info). Frames that arrive while no headset is
+//   connected are released without work.
+// * to the guest's OpenVR runtime: VRL_STATE on connect/disconnect/refresh change, VRL_TIMING (the pacer's next frame)
+//   + VRL_POSES (predicted to its display time) once per frame from a frame-clock thread, VRL_INPUT on change;
+//   VRL_HAPTICS from the guest -> VrSession::haptics. The pipeline is the session's listener: construct it before
+//   VrSession::start(&pipeline).
 #pragma once
 #include "compositor/vrlink_server.h"
 #include "session/vr_session.h"
@@ -11,7 +15,9 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace vrhost
@@ -46,18 +52,30 @@ struct PipelineLatency
 	std::vector<double> submit_to_copied, copied_to_received, received_to_sent, total, compose_gpu;
 };
 
-class VrPipeline
+class VrPipeline final : public SessionListener
 {
 public:
 	// link_fd: AF_UNIX SOCK_DGRAM end (owned); mach_name: bootstrap name for the swapchain ports.
 	VrPipeline(VrSession & session, int link_fd, const std::string & mach_name);
-	~VrPipeline();
+	~VrPipeline() override;
 	bool peer_closed() const;
 	const PipelineStats & stats() const { return st; }
 	PipelineLatency take_latency();
 
+	// SessionListener
+	void on_connected(const HeadsetInfo &) override;
+	void on_disconnected() override;
+	void on_input(std::span<const InputValue>) override;
+	void on_refresh_rate(float hz) override;
+
+	uint64_t timings_sent() const { return timings; }
+	uint64_t haptics_routed() const { return haptics; }
+
 private:
 	void on_frame(const LinkFrame &);
+	void on_message(const void *, size_t);
+	void send_state(bool connected);
+	void frame_clock();
 	VrSession & session;
 	std::mutex m;
 	uint32_t w = 0, h = 0;
@@ -66,6 +84,12 @@ private:
 	PipelineStats st;
 	std::mutex lat_mutex;
 	PipelineLatency lat;
-	std::unique_ptr<VrLinkServer> server; // last: its thread calls on_frame
+	std::mutex input_mutex;
+	float input[2][21] = {}; // VRL_INPUT_COUNT
+	std::atomic<bool> quit{false};
+	std::atomic<uint64_t> timings{0}, haptics{0};
+	std::atomic<float> refresh{0};
+	std::unique_ptr<VrLinkServer> server; // after the state its threads use
+	std::thread clock;                     // last: started when everything else exists
 };
 } // namespace vrhost

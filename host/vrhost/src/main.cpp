@@ -323,8 +323,8 @@ static int serve_link(WivrnConfig cfg, int link_fd, const std::string & link_soc
 			return 0;
 	}
 	WivrnSession session(cfg);
-	session.start(nullptr);
 	VrPipeline pipeline(session, link_fd, mach_name);
+	session.start(&pipeline); // state / input to the guest
 	printf("steamac-vrhost: VR link fd %d, mach name %s, listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n",
 	       link_fd, mach_name.c_str(), session.port(), WivrnSession::protocol_version(),
 	       cfg.advertise ? ", advertised as _wivrn._tcp" : "");

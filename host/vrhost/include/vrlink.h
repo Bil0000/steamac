@@ -35,6 +35,9 @@ enum vrl_type {
   VRL_STATE = 9,     /* host -> vm: struct vrl_state, on connect/disconnect/refresh-rate change */
 };
 
+/* SO_RCVBUF both ends set on the link socket (the macOS default for AF_UNIX datagrams is 4 KiB) */
+#define VRL_SOCKET_BUFFER (256 * 1024)
+
 struct vrl_header {
   uint32_t type; /* enum vrl_type */
   uint32_t size; /* bytes of the whole packet */

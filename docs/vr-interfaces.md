@@ -85,11 +85,16 @@ M0/M2/M3 add their message structs there). Two channels, both set up when `steam
 | vm→host | `VRL_SWAPCHAIN` `vrl_swapchain` | id (new id on every recreate), image_count (3 per eye now), w, h, MTLPixelFormat, `VRL_SWAPCHAIN_SRGB` |
 | vm→host | `VRL_SUBMIT` `vrl_submit` | frame_id, display_time, app_submit_time, ready_time, per eye {swapchain, image, x,y,w,h, `VRL_EYE_FLIP_Y`}, pose[2][7] (xyzw, xyz, stage), fov[2][4] (l,r,u,d rad) |
 | host→vm | `VRL_RELEASE` `vrl_release` | swapchain, image, frame_id, release_time — per eye, after the compositor pass (image reusable) |
-| host→vm | `VRL_TIMING` | reserved (M0/M2) |
-| host→vm | `VRL_POSES` | reserved (M0/M2/M3) |
-| host→vm | `VRL_INPUT` | reserved (M3) |
-| vm→host | `VRL_HAPTICS` | reserved (M3) |
-| host→vm | `VRL_STATE` | reserved (M0) |
+| host→vm | `VRL_TIMING` `vrl_timing` | once per frame while a headset is connected: the pacer's frame_id, wake_up, predicted_display, refresh_hz (section 4) |
+| host→vm | `VRL_POSES` `vrl_poses` | once per frame, sent just before `VRL_TIMING`: all devices predicted to that frame's display time |
+| host→vm | `VRL_INPUT` `vrl_input` | on change: the whole `value[2][21]` table |
+| vm→host | `VRL_HAPTICS` `vrl_haptics` | hand, duration_s, frequency, amplitude → `VrSession::haptics` |
+| host→vm | `VRL_STATE` `vrl_state` | on headset connect / disconnect / refresh-rate change |
+
+Both ends set `SO_RCVBUF` to `VRL_SOCKET_BUFFER` (256 KiB; the macOS default for AF_UNIX datagrams is 4 KiB and fills
+in a few frames). Host sends are non-blocking, so a stalled vm side loses timing packets instead of stalling the frame
+clock; the vm side reads the link on its own thread (`wmtr-vr-link`), so per-frame packets never queue in front of
+`VRL_RELEASE`. A datagram socketpair gives no end-of-file on macOS: the host detects a closed vm end by `ENOTCONN`.
 
 Answers to the M1 open questions: DXMT eye textures are **not** IOSurface-backed (private render targets), so the vm
 side copies each eye into its own IOSurface swapchain image (one blit per eye; not separately timed, included in "submit → copy complete" below). MSAA
@@ -186,8 +191,11 @@ Guest pieces: Proton `vrclient_x64` patch (`guest/proton-vrclient/patches`, LGPL
   order. Controller family `VRL_PROFILE_TOUCH` (Quest/Pico) or `VRL_PROFILE_INDEX`. **Input ids** = `enum svr_input`
   in `steamac_vr_guest.h` (trigger value/click/touch, squeeze value/click/force, thumbstick x/y/click/touch, A/X and B/Y
   click/touch, menu, system, thumbrest touch, trackpad x/y/touch/force); the adapter maps WiVRn `device_id`s to them.
-* **Open for M0:** emit the five packets above from `VrSession` (the M0 `input_ids.h` should become this table or map
-  to it); route `VRL_HAPTICS` to `VrSession::haptics`. **Open for the launcher:** `PROTON_VR_RUNTIME`, deploying the
+* **Host side (done on `vr-int`):** `VrPipeline` is the session's `SessionListener` (construct it, then
+  `VrSession::start(&pipeline)`): `VRL_STATE` from connect/disconnect/refresh, a frame-clock thread sends `VRL_POSES` +
+  `VRL_TIMING` from `next_frame_timing()`, `VRL_INPUT` on change through `src/wivrn/input_map.cpp` (WiVRn `device_id` →
+  `svr_input`), `VRL_HAPTICS` → `VrSession::haptics`. `vr_e2e` drives its producer the way the guest runtime does
+  (`SVR_HELLO` / `SVR_FRAME` / `SVR_HAPTIC` through `wmtr_vr_query`). **Open for the launcher:** `PROTON_VR_RUNTIME`, deploying the
   patched `vrclient_x64.dll`.
 
 ## Change log
@@ -200,3 +208,5 @@ Guest pieces: Proton `vrclient_x64` patch (`guest/proton-vrclient/patches`, LGPL
   vrclient**); new 3.2 (pipeline, frame ids, tests).
 * 2026-10-11 M2/M3 agent: section 4 written (submit via call 146 from the guest runtime, `WMTR_CTL_VR_QUERY`,
   `VRL_STATE/TIMING/POSES/INPUT/HAPTICS` structs added to vrlink.h on `vr-m23`).
+* 2026-10-11 integration agent (vr-int): host emits `VRL_STATE/TIMING/POSES/INPUT` and routes `VRL_HAPTICS` (section 3
+  table, section 4); `VRL_SOCKET_BUFFER`; link reader thread in the wmtr exporter.

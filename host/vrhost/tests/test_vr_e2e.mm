@@ -15,6 +15,9 @@
 #include "fake_headset.h"
 #include "pipeline/vr_pipeline.h"
 #include "session/clock.h"
+#include "session/pose_history.h"
+#include "wivrn/input_map.h"
+#include "wivrn_packets.h"
 #include "wivrn/wivrn_session.h"
 
 #include <algorithm>
@@ -31,6 +34,7 @@
 #define WINEMETAL_API
 #include "winemetal_thunks.h"
 extern "C" {
+#include "steamac_vr_guest.h"
 #include "wmtr_vr.h"
 }
 
@@ -148,14 +152,14 @@ int main()
 		                      .pin = "271828",
 		                      .known_keys_file = std::string(dir) + "/known_keys",
 		                      .log = [](const std::string & s) { printf("[server] %s\n", s.c_str()); }});
-		session.start(nullptr);
-		REQUIRE(session.port() > 0);
 
 		char name[96];
 		snprintf(name, sizeof name, "com.steamac.vrhost.e2etest.%d", int(getpid()));
 		int sv[2];
 		REQUIRE(socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0);
 		auto pipeline = std::make_unique<VrPipeline>(session, sv[1], name);
+		session.start(pipeline.get()); // the pipeline forwards state / input to the guest
+		REQUIRE(session.port() > 0);
 		wmtr_vr * vr = wmtr_vr_create(sv[0], name);
 		REQUIRE(vr);
 
@@ -163,28 +167,43 @@ int main()
 		std::map<uint64_t, int64_t> submit_ns;
 		std::vector<double> latency_ms;
 		std::atomic<bool> stop{false};
+		std::atomic<int> frames_from_pacer{0};
 		std::thread producer([&] {
 			Producer prod(src_w, src_h);
 			WMTVRSubmitInfo info{};
+			uint64_t last_frame = 0;
 			while (not stop)
 			{
-				if (not session.connected())
+				// what the guest runtime's WaitGetPoses does (guest/vr, M2): SVR_FRAME through the exporter's query, which
+				// answers from the host's newest VRL_TIMING / VRL_POSES / VRL_STATE
+				svr_frame_rep r{};
+				reinterpret_cast<svr_frame_req &>(r) = {{SVR_FRAME, sizeof(svr_frame_req)}, last_frame};
+				if (wmtr_vr_query(vr, &r, sizeof r) != 0 or not r.connected or not (r.pose[SVR_DEV_HEAD].flags & SVR_POSE_VALID))
 				{
-					std::this_thread::sleep_for(std::chrono::milliseconds(5));
-					continue;
+					std::this_thread::sleep_for(std::chrono::milliseconds(2));
+					continue; // no headset / no tracking yet: an OpenVR runtime reports no valid pose either
 				}
-				FrameTiming t = session.next_frame_timing();
+				if (r.wake_up > now_ns())
+					std::this_thread::sleep_for(std::chrono::nanoseconds(r.wake_up - now_ns()));
+				uint64_t frame = r.frame_id; // the pacer's id: WiVRn matches the headset's feedback by it
+				last_frame = frame;
+				frames_from_pacer++;
+				// per-eye pose = head pose +- IPD/2 along head x (as the guest runtime computes it)
+				const svr_pose & head = r.pose[SVR_DEV_HEAD];
+				Pose hp{.orientation = {head.orientation[0], head.orientation[1], head.orientation[2], head.orientation[3]},
+				        .position = {head.position[0], head.position[1], head.position[2]}};
 				std::array<Pose, 2> pose;
 				std::array<Fov, 2> fov;
-				if (not session.views_at(t.predicted_display, pose, fov))
-					continue; // no tracking yet (an OpenVR runtime reports no valid pose either)
-				// the session's frame id (WiVRn's pacer matches feedback by it; M2 gets it with the timing)
-				uint64_t frame = t.frame_id;
+				for (int e = 0; e < 2; e++)
+				{
+					pose[e] = multiply(hp, Pose{.position = {(e ? 0.5f : -0.5f) * r.ipd_m, 0, 0}});
+					fov[e] = {r.fov[e][0], r.fov[e][1], r.fov[e][2], r.fov[e][3]};
+				}
 				auto eye_tex = prod.render(uint32_t(frame));
 				for (int e = 0; e < 2; e++)
 					info.eye[e] = WMTVREye{(obj_handle_t)(__bridge void *)eye_tex[e], 0, 0, 0, 0, 0, 0};
 				info.frame_id = frame;
-				info.display_time = uint64_t(t.predicted_display);
+				info.display_time = uint64_t(r.predicted_display);
 				for (int e = 0; e < 2; e++)
 				{
 					float p[7] = {pose[e].orientation[0], pose[e].orientation[1], pose[e].orientation[2], pose[e].orientation[3],
@@ -204,7 +223,43 @@ int main()
 		});
 
 		int bad_colour = 0, checked = 0, wrong_index = 0, unreadable = 0;
+		// guest protocol through the link while a headset is connected (once): state, input mapping, haptics
+		bool guest_checked = false;
+		auto check_guest = [&] {
+			svr_hello_rep hello{};
+			reinterpret_cast<svr_hello_req &>(hello) = {{SVR_HELLO, sizeof(svr_hello_req)}, SVR_VERSION, uint32_t(getpid()), "vr_e2e"};
+			CHECK(wmtr_vr_query(vr, &hello, sizeof hello) == 0);
+			printf("guest view: connected=%u eye %ux%u %.0f Hz ipd %.1f mm name '%s'\n", hello.connected, hello.eye_width,
+			       hello.eye_height, hello.refresh_hz, hello.ipd_m * 1000, hello.name);
+			CHECK(hello.connected and std::abs(hello.ipd_m - 0.064f) < 0.002f and hello.refresh_hz > 0);
+			int hand = -1, idx = -1;
+			CHECK(wivrn_input_to_vrl(uint32_t(wivrn::device_id::RIGHT_TRIGGER_VALUE), hand, idx) and hand == 1 and
+			      idx == SVR_IN_TRIGGER_VALUE);
+			InputValue iv{uint32_t(wivrn::device_id::RIGHT_TRIGGER_VALUE), 0.75f, now_ns()};
+			pipeline->on_input(std::span(&iv, 1));
+			bool input_seen = false;
+			for (int i = 0; i < 100 and not input_seen; i++)
+			{
+				svr_frame_rep fr{};
+				reinterpret_cast<svr_frame_req &>(fr) = {{SVR_FRAME, sizeof(svr_frame_req)}, 0};
+				input_seen = wmtr_vr_query(vr, &fr, sizeof fr) == 0 and fr.input[1][SVR_IN_TRIGGER_VALUE] == 0.75f;
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			}
+			CHECK(input_seen); // WiVRn input -> VRL_INPUT -> the guest's snapshot
+			union
+			{
+				svr_haptic_req req;
+				svr_ack ack;
+			} hq{.req = {{SVR_HAPTIC, sizeof(svr_haptic_req)}, 1, 0.05f, 0, 0.5f}};
+			CHECK(wmtr_vr_query(vr, &hq, sizeof hq) == 0 and hq.ack.status == 0);
+			for (int i = 0; i < 100 and pipeline->haptics_routed() == 0; i++)
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			CHECK(pipeline->haptics_routed() == 1); // SVR_HAPTIC -> VRL_HAPTICS -> VrSession::haptics
+			guest_checked = true;
+		};
 		auto on_decoded = [&](int eye, uint64_t frame, CVPixelBufferRef img) {
+			if (not guest_checked and eye == 0 and frame > 10)
+				check_guest();
 			int64_t read = TestPattern::read_frame_index(img);
 			int cb, cr;
 			centre_chroma(img, cb, cr);
@@ -236,6 +291,13 @@ int main()
 		CHECK(unreadable * 20 <= checked);
 		CHECK(r.view_info_ok); // identity foveation, eye poses 64 mm apart, display time in headset clock
 		CHECK(bad_colour == 0 and checked >= 120);
+		auto stages = [&](const char * label) {
+			auto l = pipeline->take_latency();
+			printf("%s: ms p50/p99 submit->copied %.2f/%.2f copied->host %.3f/%.3f host->sent %.2f/%.2f compositor GPU %.2f\n",
+			       label, pct(l.submit_to_copied, .5), pct(l.submit_to_copied, .99), pct(l.copied_to_received, .5),
+			       pct(l.copied_to_received, .99), pct(l.received_to_sent, .5), pct(l.received_to_sent, .99), pct(l.compose_gpu, .5));
+		};
+		stages("identity");
 		printf("identity: submit -> decoded (both eyes) ms p50 %.2f p99 %.2f max %.2f (%zu frames)\n", pct(latency_ms, .5),
 		       pct(latency_ms, .99), pct(latency_ms, 1), latency_ms.size());
 
@@ -261,9 +323,13 @@ int main()
 			CHECK(f.foveation_y[e].size() > 1 and foveation_consistent(f.foveation_y[e], src_h, out_h));
 		}
 		CHECK(bad_colour == 0 and checked >= 120);
+		stages("foveated");
 		printf("foveated: submit -> decoded (both eyes) ms p50 %.2f p99 %.2f max %.2f (%zu frames)\n", pct(latency_ms, .5),
 		       pct(latency_ms, .99), pct(latency_ms, 1), latency_ms.size());
 
+		CHECK(frames_from_pacer >= 120);
+		CHECK(pipeline->timings_sent() > 0);
+		CHECK(guest_checked);
 		stop = true;
 		producer.join();
 		wmtr_vr_stats st;
@@ -280,8 +346,8 @@ int main()
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		printf("link close seen by the host after %.1f ms\n", (now_ns() - t_close) / 1e6);
 		CHECK(pipeline->peer_closed());
-		pipeline.reset();
 		session.stop();
+		pipeline.reset();
 		std::filesystem::remove_all(dir);
 	}
 	return test_result("vr_e2e");

@@ -7,6 +7,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <stdatomic.h>
+#include <pthread.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +54,10 @@ struct wmtr_vr {
   _Atomic uint64_t submits, sent, dropped, released, errors, swapchains;
   int warned;
   _Atomic int inflight; /* command buffers whose completion handler has not run */
-  /* newest host state for the guest's polls (executor thread only) */
+  /* newest host state for the guest's polls; under `lock` (the reader thread and the executor both drain) */
+  pthread_mutex_t lock;
+  pthread_t reader;
+  _Atomic int quit;
   struct vrl_state state;
   struct vrl_timing timing;
   struct vrl_poses poses;
@@ -161,17 +166,19 @@ swapchain_make(struct wmtr_vr *vr, int eye, uint32_t w, uint32_t h, uint32_t for
   return 1;
 }
 
-/* host packets (executor thread, non-blocking): VRL_RELEASE marks images free; state, timing, poses and input
- * replace the cached copies the guest's polls are answered from */
+/* host packets (non-blocking): VRL_RELEASE marks images free; state, timing, poses and input replace the cached
+ * copies the guest's polls are answered from. Called by the reader thread and on the executor before a submit or
+ * query (recursive lock: wmtr_vr_query holds it while answering). */
 static void
 drain_releases(struct wmtr_vr *vr) {
+  pthread_mutex_lock(&vr->lock);
   union {
     struct vrl_header h; struct vrl_release r; struct vrl_state s; struct vrl_timing t; struct vrl_poses p;
     struct vrl_input i; uint8_t raw[2048];
   } u;
   for (;;) {
     ssize_t n = recv(vr->fd, &u, sizeof u, MSG_DONTWAIT);
-    if (n <= 0) return;
+    if (n <= 0) break;
     if (n < (ssize_t)sizeof u.h || u.h.size != (uint32_t)n) continue;
     switch (u.h.type) {
     case VRL_RELEASE:
@@ -187,6 +194,23 @@ drain_releases(struct wmtr_vr *vr) {
     default: break;
     }
   }
+  pthread_mutex_unlock(&vr->lock);
+}
+
+/* The host sends timing and poses every frame whether or not the guest calls in; read them as they come so they
+ * never fill the socket and hold up VRL_RELEASE (a full receive buffer blocks the host's sends). One wake-up per
+ * host packet (about three per frame), only while VR is on. */
+static void *
+reader_main(void *arg) {
+  struct wmtr_vr *vr = arg;
+  pthread_setname_np("wmtr-vr-link");
+  while (!atomic_load(&vr->quit)) {
+    struct pollfd pf = {vr->fd, POLLIN, 0};
+    int r = poll(&pf, 1, 100);
+    if (r > 0 && (pf.revents & POLLIN)) drain_releases(vr);
+    else if (r > 0) usleep(10000); /* peer gone: nothing to read, keep the loop cheap until destroy */
+  }
+  return NULL;
 }
 
 static void
@@ -195,8 +219,8 @@ fill_view(const struct vrl_state *st, float fov[2][4], float *ipd) {
   *ipd = st->ipd_m;
 }
 
-int
-wmtr_vr_query(struct wmtr_vr *vr, void *buf, uint32_t size) {
+static int
+query_locked(struct wmtr_vr *vr, void *buf, uint32_t size) {
   struct svr_hdr *q = buf;
   if (size < sizeof *q || q->size > size) return STATUS_INVALID_PARAMETER;
   if (vr) {
@@ -265,6 +289,15 @@ wmtr_vr_query(struct wmtr_vr *vr, void *buf, uint32_t size) {
   default:
     return STATUS_INVALID_PARAMETER;
   }
+}
+
+int
+wmtr_vr_query(struct wmtr_vr *vr, void *buf, uint32_t size) {
+  if (!vr) return query_locked(NULL, buf, size);
+  pthread_mutex_lock(&vr->lock);
+  int r = query_locked(vr, buf, size);
+  pthread_mutex_unlock(&vr->lock);
+  return r;
 }
 
 int
@@ -353,8 +386,19 @@ wmtr_vr_create(int link_fd, const char *mach_name) {
   snprintf(vr->mach_name, sizeof vr->mach_name, "%s", mach_name);
   int on = 1;
   setsockopt(link_fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
+  pthread_mutexattr_t ma;
+  pthread_mutexattr_init(&ma);
+  pthread_mutexattr_settype(&ma, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(&vr->lock, &ma);
+  pthread_mutexattr_destroy(&ma);
+  /* the host sends VRL_TIMING/VRL_POSES every frame and they are read only when the guest calls in; the default
+   * AF_UNIX datagram space (net.local.dgram.recvspace, 4 KiB) fills in a few frames and would block the host's
+   * VRL_RELEASE sends behind them */
+  int space = VRL_SOCKET_BUFFER;
+  setsockopt(link_fd, SOL_SOCKET, SO_RCVBUF, &space, sizeof space);
   struct vrl_hello hello = {{VRL_HELLO, sizeof hello}, VRL_VERSION, (uint32_t)getpid()};
   send_packet(vr, &hello, sizeof hello);
+  pthread_create(&vr->reader, NULL, reader_main, vr);
   return vr;
 }
 
@@ -387,6 +431,8 @@ wmtr_vr_connect(const char *path, const char *mach_name) {
 void
 wmtr_vr_destroy(struct wmtr_vr *vr) {
   if (!vr) return;
+  atomic_store(&vr->quit, 1);
+  pthread_join(vr->reader, NULL);
   /* completion handlers reference vr; a bound keeps destroy from hanging on a wedged GPU */
   for (int i = 0; i < 2000 && atomic_load(&vr->inflight); i++) usleep(1000);
   [vr->queue release];
@@ -394,6 +440,7 @@ wmtr_vr_destroy(struct wmtr_vr *vr) {
   for (int e = 0; e < 2; e++) swapchain_free(&vr->sc[e]);
   if (vr->service) mach_port_deallocate(mach_task_self(), vr->service);
   [vr->device release];
+  pthread_mutex_destroy(&vr->lock);
   free(vr);
 }
 
