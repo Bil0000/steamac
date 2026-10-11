@@ -79,8 +79,13 @@ struct Options {
     /// Settings > Advanced "Frame latency" (kernel cmdline `steamac.frame_latency=1`): the guest's
     /// DXVK config gets dxgi.maxFrameLatency = 1 for the Vulkan path. Default false: unset.
     var frameLatency = false
-    /// Settings > Advanced "VR (experimental)" / --vr: start steamac-vrhost with the VM (VRHost). Default off.
+    /// Settings > VR "VR (experimental)" / --vr: start steamac-vrhost with the VM (VRHost) and tell the
+    /// guest (kernel cmdline `steamac.vr=1`). Default off.
     var vr = false
+    /// Settings > VR "Bitrate" / --vr-bitrate: total stream bitrate, Mbit/s.
+    var vrBitrateMbps = LauncherSettings.vrDefaultBitrateMbps
+    /// Settings > VR "Resolution per eye" / --vr-size WxH: "" = the headset's own stream size.
+    var vrEyeSize = ""
     var selftestVR = false
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
@@ -145,7 +150,7 @@ struct Options {
                       [--no-crash-reports] [--steam-client frame|deck|deckbeta]
                       [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan]
                       [--frame-latency | --no-frame-latency] [--lan-remote-play | --no-lan-remote-play]
-                      [--vr | --no-vr]
+                      [--vr | --no-vr] [--vr-bitrate MBIT] [--vr-size WxH]
            steamac-vm --selftest-display [--headless] [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-overlay [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-stall [--selftest-out DIR] [--display WxH]
@@ -241,12 +246,15 @@ struct Options {
                            dxgi.maxFrameLatency = 1 (Vulkan path only), trading some throughput for
                            lower input latency. Off means no key is added, so the guest side is
                            unchanged. --no-frame-latency turns it off for this run.
-      --vr                 VR, experimental (default: Settings > Advanced "VR (experimental)", off):
+      --vr                 VR, experimental (default: Settings > VR "VR (experimental)", off):
                            starts steamac-vrhost (WiVRn-compatible headset server, bundled) with the
                            VM and links it to the DXMT path's Metal executor, so games' eye textures
                            stream to a headset running the WiVRn client. Needs the DXMT graphics
-                           path. --no-vr turns it off for this run. Log:
+                           path; the guest is told with kernel cmdline steamac.vr=1 (no key when
+                           off). --no-vr turns it off for this run. Log:
                            ~/Library/Logs/es.fxgam.steamac/steamac-vrhost.log
+      --vr-bitrate MBIT    total VR stream bitrate, 5-200 Mbit/s (default: Settings > VR, 50)
+      --vr-size WxH        encoded size per eye (default: Settings > VR; the headset's own size)
       --selftest-vr        spawn/teardown self-test of steamac-vrhost (no VM, no headset)
 
     Creating a SteamOS disk (no Docker; the same code as Settings > Advanced "Create New Disk…"):
@@ -400,6 +408,14 @@ struct Options {
             case "--no-frame-latency": o.frameLatency = false
             case "--vr": o.vr = true
             case "--no-vr": o.vr = false
+            case "--vr-bitrate":
+                let n = try int(a)
+                guard LauncherSettings.vrBitrateRange.contains(n) else { throw OptionError("--vr-bitrate: 5-200 (Mbit/s)") }
+                o.vrBitrateMbps = n
+            case "--vr-size":
+                let s = try value(a)
+                guard LauncherSettings.vrEyeSizeValid(s) else { throw OptionError("--vr-size: WxH, even sides, 256-4096") }
+                o.vrEyeSize = s
             case "--selftest-vr": o.selftestVR = true
             case "--vulkan-driver":
                 let v = try value(a)
@@ -500,6 +516,12 @@ struct Options {
         on ? ("steamac.frame_latency", "1") : nil
     }
 
+    /// Settings > VR "VR (experimental)" -> kernel cmdline key: `steamac.vr=1` when this boot starts the
+    /// VR host, nothing otherwise (absent is the default, so the guest side is unchanged).
+    static func vrArg(_ on: Bool) -> (key: String, value: String)? {
+        on ? ("steamac.vr", "1") : nil
+    }
+
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
             || selftestMetalCache || selftestGameLayers || selftestVR || createDisk != nil || growDisk != nil
@@ -541,6 +563,7 @@ struct Options {
             add("steamac.gfx", o.graphicsPath.rawValue)
             // only written when on; absent is the default (off), so an explicit =0 needs no key
             if let a = Options.frameLatencyArg(o.frameLatency) { add(a.key, a.value) }
+            if let a = Options.vrArg(o.vr && VRHost.unavailableReason(o) == nil) { add(a.key, a.value) }
             if o.macTime {
                 add("steamac.tz", MacTime.zone)
                 add("steamac.clock24", MacTime.clock24.map { $0 ? "1" : "0" })
@@ -599,6 +622,8 @@ struct Options {
             ov[.frameLatency] = frameLatency ? "--frame-latency" : "--no-frame-latency"
         } else { frameLatency = s.frameLatency }
         if given("--vr") || given("--no-vr") { ov[.vrEnabled] = vr ? "--vr" : "--no-vr" } else { vr = s.vrEnabled }
+        if given("--vr-bitrate") { ov[.vrBitrateMbps] = "--vr-bitrate \(vrBitrateMbps)" } else { vrBitrateMbps = s.vrBitrateMbps }
+        if given("--vr-size") { ov[.vrEyeSize] = "--vr-size \(vrEyeSize)" } else { vrEyeSize = s.vrEyeSize }
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }

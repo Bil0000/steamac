@@ -1,7 +1,27 @@
 # VR (experimental)
 
-**Status: experimental, milestone M0.** A Mac-native VR host, `steamac-vrhost`, streams a test pattern to a standalone
-headset running the WiVRn client. No game, VM or guest is involved yet; nothing in the launcher starts it.
+**Status: experimental.** A Mac-native VR host, `steamac-vrhost`, streams a test pattern to a standalone headset
+running the WiVRn client, and the integrated host can receive game frames over the VR link described in
+`docs/vr-interfaces.md`. The launcher has an experimental VR settings panel and can start the separate host with the VM
+when enabled. The guest OpenVR runtime is not included in the end-user launcher yet, so an in-game VR path is not yet
+available.
+
+## Using the launcher
+
+1. Install the WiVRn v26.9 client for the headset as described below, and put the Mac and headset on the same LAN.
+2. In Launcher Settings → VR, enable **VR (experimental)**. This setting is off by default and is available only with
+   the DXMT graphics path. Start the VM; the launcher starts the separate `steamac-vrhost` process with it.
+3. Use the panel's status and pairing controls. When pairing is open, enter the displayed six-digit PIN in WiVRn on the
+   headset. Paired headsets reconnect with encryption enabled; use the panel to unpair a headset or open pairing for
+   another one. Resolution and bitrate changes are used the next time the host starts with the VM.
+4. The panel reports headset connection and host encoder/stream statistics. If the host is not running, it can still
+   show and remove the saved paired-headset list; pairing and live status require the host.
+
+**Limitations:** VR is experimental and off by default. The guest OpenVR runtime and the Proton `vrclient_x64` path are
+not included in the end-user launcher, so a game cannot currently submit eye frames through this UI. The headset server
+and encoder can be tested independently with `--testpattern`; the integrated host frame path is for development and is
+not yet an end-user in-game VR feature. Use a WiVRn v26.9 client only; newer protocol versions are incompatible. The
+encoder must meet the headset's refresh-rate budget; reduce per-eye resolution or refresh rate if frames cannot keep up.
 
 ## What works (M0)
 
@@ -31,7 +51,8 @@ headset running the WiVRn client. No game, VM or guest is involved yet; nothing 
   turns (rotation; the sphere is at infinity, so walking does not move it). The frame number is encoded in the top-left
   corner (16 blocks) for automated checks.
 
-Not yet: foveation (M1 ports `foveation.comp`), audio, game frames (M1), OpenVR in the guest (M2/M3).
+The integrated host frame path is described in `docs/vr-interfaces.md` section 3.2. Not yet available to end users:
+OpenVR in the guest (M2/M3), which is required for games to submit VR eye images; foveation and audio remain separate work.
 
 ## Licence
 

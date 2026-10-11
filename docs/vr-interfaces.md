@@ -198,7 +198,41 @@ Guest pieces: Proton `vrclient_x64` patch (`guest/proton-vrclient/patches`, LGPL
   (`SVR_HELLO` / `SVR_FRAME` / `SVR_HAPTIC` through `wmtr_vr_query`). **Open for the launcher:** `PROTON_VR_RUNTIME`, deploying the
   patched `vrclient_x64.dll`.
 
+## 5. Launcher control socket [decided, M7]
+
+The launcher and `steamac-vrhost` use a separate local control channel; this does not carry VR frames or GPU objects and
+is not a link to GPL code. `VRHost.swift` passes `--control-socket PATH` when spawning the separate host executable.
+The default path is `~/Library/Application Support/steamac/vrhost/control.sock`.
+
+* Transport: AF_UNIX `SOCK_STREAM`, one connection per command. The launcher writes one UTF-8 request terminated by `\n`,
+  reads one UTF-8 JSON object terminated by `\n`, and closes. The host accepts one request line (maximum 1024 bytes)
+  and closes after its reply. Protocol version is the integer `v: 1` in every JSON response. The socket is local to the
+  user account; it is not exposed on the LAN.
+* Requests are literal command lines (not JSON):
+
+| request | response |
+|---|---|
+| `status` | Current host/session state and stream counters. Includes `state` (`waiting`, `pairing`, `connected`), `port`, `bonjour`, `encryption`, `pin`, nullable `headset`, and `stream` statistics. |
+| `headsets` | `{"v":1,"headsets":[{"name":"…","last_connection":UNIX_TIME},…]}` for paired headsets. |
+| `pair on` | Enable pairing and generate a fresh PIN; returns the updated `status`. |
+| `pair off` | Stop accepting new pairings; already paired headsets can reconnect; returns the updated `status`. |
+| `unpair NAME` | Remove the named headset; returns the updated paired-headset list. |
+| `unpair-all` | Remove all paired headsets; returns the updated list. |
+
+Unknown requests and invalid unpair commands return `{"v":1,"error":"…"}`. If encryption is disabled, `pair on`
+returns an error because pairing is unavailable. Pairing PINs are local status data and are never sent to the headset by
+this control channel; the WiVRn pairing protocol verifies the PIN over its own encrypted pairing exchange. With the host
+stopped, the launcher can list or unpair saved headsets by invoking `steamac-vrhost --list-headsets --json` or its
+unpair CLI mode; status and pairing require the running control socket.
+
+The host starts its `VrSession` once with the active `SessionListener` (the integrated pipeline, optionally wrapped by
+the audio bridge), then creates this control server. On shutdown the control server is stopped, the session is stopped,
+and listener resources are released in their owning order. The control server is optional: failure to bind logs a
+warning and does not prevent the VR host from serving a headset.
+
 ## Change log
+
+* 2026-10-12 M7: document the launcher's local control socket, request/response contract and session lifecycle.
 
 * 2026-10-11 M0 agent: initial version (sections 1-3; section 4 placeholder).
 * 2026-10-11 M0 agent: section 2 rewritten to match the implemented `vr_session.h` (encoder input = `'420f'` IOSurface, `views_at`, timing, input ids).

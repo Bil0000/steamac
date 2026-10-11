@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// VR (experimental, Settings > Advanced, `--vr`): the VM process starts `steamac-vrhost`, a separate
+/// VR (experimental, Settings > VR, `--vr`): the VM process starts `steamac-vrhost`, a separate
 /// GPL-3.0-or-later executable in the app (Contents/MacOS; WiVRn-compatible headset server, compositor and
 /// encoder: host/vrhost, docs/vr.md). This process never links it; the coupling is the VR link of
 /// docs/vr-interfaces.md section 3: an AF_UNIX SOCK_DGRAM socketpair (the host's end passed as --link-fd)
@@ -51,13 +51,21 @@ enum VRHost {
             return
         }
         do {
-            let r = try start(extraArgs: [], logPath: logPath)
+            let r = try start(extraArgs: hostArgs(o), logPath: logPath)
             setenv("WMTR_VR_FD", String(r.fd), 1)
             setenv("WMTR_VR_MACH_NAME", r.machName, 1)
             log("vr: steamac-vrhost pid \(r.pid), link fd \(r.fd), mach name \(r.machName), log \(logPath)")
         } catch {
             log("vr: off, \(error)")
         }
+    }
+
+    /// What Settings > VR passes to the host of this boot: the control socket the panel reads
+    /// (VRControl), the total bitrate and, unless the headset's own size is used, the size per eye.
+    static func hostArgs(_ o: Options, controlSocket: String = VRControl.socketPath) -> [String] {
+        var a = ["--control-socket", controlSocket, "--bitrate", String(o.vrBitrateMbps * 1_000_000)]
+        if !o.vrEyeSize.isEmpty { a += ["--size", o.vrEyeSize] }
+        return a
     }
 
     /// Creates the link, spawns the host with its end, and returns our end (FD_CLOEXEC: no other child
@@ -161,15 +169,35 @@ enum VRSelfTest {
         check(getenv("WMTR_VR_FD") == nil && getenv("WMTR_VR_MACH_NAME") == nil, "VR off: link environment left set")
         check(VRHost.running == nil, "VR off: host started")
         check(Options().vr == false, "VR must default off")
+        // Settings > VR: on maps to steamac.vr=1, off adds no key; the encoder settings reach the host's
+        // command line, the headset's own size by default.
+        check(Options.vrArg(true)?.key == "steamac.vr" && Options.vrArg(true)?.value == "1", "VR on must map to steamac.vr=1")
+        check(Options.vrArg(false) == nil, "VR off must add no kernel key")
+        var enc = Options()
+        check(VRHost.hostArgs(enc, controlSocket: "/s") == ["--control-socket", "/s", "--bitrate", "50000000"],
+              "default host arguments: \(VRHost.hostArgs(enc, controlSocket: "/s"))")
+        enc.vrBitrateMbps = 80
+        enc.vrEyeSize = "1440x1584"
+        check(VRHost.hostArgs(enc, controlSocket: "/s").suffix(4) == ["--bitrate", "80000000", "--size", "1440x1584"],
+              "host arguments with bitrate and size: \(VRHost.hostArgs(enc, controlSocket: "/s"))")
+        check(LauncherSettings.vrEyeSizes.allSatisfy(LauncherSettings.vrEyeSizeValid)
+              && !["", "1440", "1441x1584", "8x8", "axb"].contains(where: LauncherSettings.vrEyeSizeValid), "eye size validation")
+        failures += VRPanelSelfTest.text()
 
         guard VRHost.path != nil else {
             log("selftest-vr: FAIL \(VRHost.executable) not in this build (set STEAMAC_VRHOST for a development build)")
             exit(1)
         }
+        // The host of this test keeps its pairing store and PIN file under a scratch HOME (never the
+        // user's paired headsets); its control socket is next to them.
+        let scratch = "/tmp/steamac-selftest-vr.\(getpid())"
+        try? FileManager.default.createDirectory(atPath: scratch, withIntermediateDirectories: true)
+        setenv("HOME", scratch, 1)
+        let sock = scratch + "/control.sock"
         for round in 1...2 {
             do {
                 // no Bonjour, fixed loopback-free port 0: the self-test must not show up on headsets
-                let r = try VRHost.start(extraArgs: ["--no-advertise", "--port", "0"], logPath: nil)
+                let r = try VRHost.start(extraArgs: ["--no-advertise", "--port", "0", "--control-socket", sock], logPath: nil)
                 setenv("WMTR_VR_FD", String(r.fd), 1)
                 setenv("WMTR_VR_MACH_NAME", r.machName, 1)
                 check(fcntl(r.fd, F_GETFD) & FD_CLOEXEC != 0, "our link end is inheritable")
@@ -181,6 +209,7 @@ enum VRSelfTest {
                 check(n >= 16 && words[0] == 1 && words[3] == UInt32(r.pid),
                       "round \(round): no VRL_HELLO from the host (got \(n) bytes, type \(words[0]), pid \(words[3]) vs \(r.pid))")
                 check(kill(r.pid, 0) == 0, "round \(round): host not running")
+                failures += VRPanelSelfTest.control(socket: sock, executable: VRHost.path!, round: round)
                 let how = VRHost.stop()
                 log("selftest-vr: round \(round): host pid \(r.pid), hello version \(words[2]), \(how)")
                 check(how.hasPrefix("exited on link close"), "round \(round): host did not end when the link closed (\(how))")
@@ -189,6 +218,7 @@ enum VRSelfTest {
                 check(false, "round \(round): \(error)")
             }
         }
+        try? FileManager.default.removeItem(atPath: scratch)
         log(failures == 0 ? "selftest-vr: PASS" : "selftest-vr: \(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }

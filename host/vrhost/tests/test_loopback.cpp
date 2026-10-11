@@ -5,6 +5,7 @@
 // PIN pairing (SMP), reconnect of a paired headset, wrong PIN, pairing disabled.
 #include "check.h"
 #include "fake_headset.h"
+#include "pattern_server.h"
 #include "pattern/test_pattern.h"
 #include "session/clock.h"
 #include "wivrn/wivrn_session.h"
@@ -18,82 +19,6 @@
 #include "crypto.h"
 
 using namespace vrhost;
-
-static CVPixelBufferRef make_nv12(uint32_t w, uint32_t h)
-{
-	CFDictionaryRef empty = CFDictionaryCreate(nullptr, nullptr, nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-	const void * k[] = {kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey};
-	const void * v[] = {empty, kCFBooleanTrue};
-	CFDictionaryRef attrs = CFDictionaryCreate(nullptr, k, v, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-	CVPixelBufferRef buf = nullptr;
-	CVPixelBufferCreate(nullptr, w, h, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, attrs, &buf);
-	CFRelease(attrs);
-	CFRelease(empty);
-	return buf;
-}
-
-
-// A WivrnSession with the test-pattern producer of `steamac-vrhost --testpattern`.
-struct Server
-{
-	WivrnSession session;
-	std::atomic<bool> stop{false};
-	std::thread producer;
-
-	static WivrnConfig local(WivrnConfig cfg)
-	{
-		cfg.port = 0;
-		cfg.advertise = false;
-		cfg.log = [](const std::string & s) { printf("[server] %s\n", s.c_str()); };
-		return cfg;
-	}
-	explicit Server(WivrnConfig cfg) :
-	        session(local(std::move(cfg)))
-	{
-		session.start(nullptr);
-		producer = std::thread([this] {
-			TestPattern pattern;
-			std::array<CVPixelBufferRef, 2> bufs{};
-			while (not stop)
-			{
-				auto info = session.headset();
-				if (not session.connected() or not info)
-				{
-					std::this_thread::sleep_for(std::chrono::milliseconds(10));
-					continue;
-				}
-				if (not bufs[0])
-					for (auto & b: bufs)
-						b = make_nv12(info->eye_width, info->eye_height);
-				FrameTiming t = session.next_frame_timing();
-				Frame f;
-				f.frame_id = t.frame_id;
-				f.display_time = t.predicted_display;
-				session.views_at(t.predicted_display, f.pose, f.fov);
-				for (int i = 0; i < 2; ++i)
-				{
-					pattern.render(bufs[i], f.pose[i], f.fov[i], f.frame_id);
-					f.eye[i].surface = CVPixelBufferGetIOSurface(bufs[i]);
-				}
-				session.submit(f);
-			}
-			for (auto b: bufs)
-				if (b)
-					CVPixelBufferRelease(b);
-		});
-	}
-	~Server()
-	{
-		stop = true;
-		producer.join();
-		session.stop();
-	}
-	void wait_disconnect()
-	{
-		for (int i = 0; i < 100 and session.connected(); ++i)
-			std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	}
-};
 
 static void print(const char * what, const FakeHeadsetResult & r)
 {

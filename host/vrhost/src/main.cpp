@@ -5,7 +5,9 @@
 //   --protocol             print the pinned WiVRn protocol hash and exit
 //   --link-fd N --mach-name NAME   game frames from steamac-vm (VR link, docs/vr-interfaces.md section 3)
 //   --show-pin             print the PIN of the running host (pairing mode)
-//   --list-headsets / --unpair NAME / --unpair-all   manage paired headsets
+//   --list-headsets [--json] / --unpair NAME / --unpair-all   manage paired headsets
+//   --control-socket PATH  status/pairing requests from the launcher (docs/vr-interfaces.md section 5)
+#include "control/control_server.h"
 #include "encoder/vt_encoder.h"
 #include "pattern/test_pattern.h"
 #include "pipeline/vr_pipeline.h"
@@ -34,6 +36,8 @@
 using namespace vrhost;
 
 static std::atomic<bool> g_quit{false};
+static std::string g_control_socket;              // --control-socket
+static std::atomic<double> g_pipeline_p50_ms{0}; // last link report, for the control socket
 
 static void usage()
 {
@@ -42,7 +46,8 @@ static void usage()
 	        "  --link-fd N         serve game frames from steamac-vm over this SOCK_DGRAM fd (with --mach-name)\n"
 	        "  --mach-name NAME    bootstrap name for the swapchain IOSurface ports\n"
 	        "  --link-socket PATH  manual runs: accept the link from wmtr_vr_connect at PATH\n"
-	        "       steamac-vrhost --show-pin | --list-headsets | --unpair NAME | --unpair-all\n"
+	        "  --control-socket PATH  answer status/pairing requests on this AF_UNIX socket (launcher VR panel)\n"
+	        "       steamac-vrhost --show-pin | --list-headsets [--json] | --unpair NAME | --unpair-all\n"
 	        "  --pair              accept new headsets (PIN pairing); default only when no headset is paired yet\n"
 	        "  --pin NNNNNN        pairing PIN (default: random, printed and readable with --show-pin)\n"
 	        "  --no-encryption     WiVRn's 'encryption disabled' mode (trusted LAN only)\n"
@@ -237,6 +242,39 @@ static void announce_pairing(WivrnSession & session, const WivrnConfig & cfg)
 		       cfg.encryption == WivrnConfig::Encryption::disabled ? "disabled" : "on");
 }
 
+static void write_pin(const std::string & pin)
+{
+	if (pin.empty())
+	{
+		std::error_code ec;
+		std::filesystem::remove(pin_file(), ec);
+		return;
+	}
+	std::filesystem::create_directories(pin_file().parent_path());
+	std::ofstream(pin_file(), std::ios::trunc) << pin << '\n';
+	chmod(pin_file().c_str(), 0600);
+}
+
+// The launcher's status/pairing socket, when asked for (never fatal: the host serves without it).
+static std::unique_ptr<ControlServer> make_control(WivrnSession & session)
+{
+	if (g_control_socket.empty())
+		return nullptr;
+	try
+	{
+		return std::make_unique<ControlServer>(g_control_socket, session,
+		                                       ControlServer::Hooks{
+		                                               .pipeline_latency_ms = [] { return g_pipeline_p50_ms.load(); },
+		                                               .pin_changed = write_pin,
+		                                       });
+	}
+	catch (std::exception & e)
+	{
+		printf("steamac-vrhost: %s (continuing without it)\n", e.what());
+		return nullptr;
+	}
+}
+
 static int testpattern(WivrnConfig cfg)
 {
 	cfg.log = [](const std::string & s) {
@@ -246,6 +284,7 @@ static int testpattern(WivrnConfig cfg)
 	WivrnSession session(cfg);
 	PatternSource src;
 	session.start(&src);
+	auto control = make_control(session);
 	printf("steamac-vrhost: listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n", session.port(),
 	       WivrnSession::protocol_version(), cfg.advertise ? ", advertised as _wivrn._tcp" : "");
 	announce_pairing(session, cfg);
@@ -297,9 +336,9 @@ static int testpattern(WivrnConfig cfg)
 			last_report = now_ns();
 		}
 	}
+	control.reset();
 	session.stop();
-	if (not session.pin().empty())
-		std::filesystem::remove(pin_file());
+	write_pin("");
 	for (auto b: bufs)
 		if (b)
 			CVPixelBufferRelease(b);
@@ -325,6 +364,7 @@ static int serve_link(WivrnConfig cfg, int link_fd, const std::string & link_soc
 	WivrnSession session(cfg);
 	VrPipeline pipeline(session, link_fd, mach_name);
 	session.start(&pipeline); // state / input to the guest
+	auto control = make_control(session);
 	printf("steamac-vrhost: VR link fd %d, mach name %s, listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n",
 	       link_fd, mach_name.c_str(), session.port(), WivrnSession::protocol_version(),
 	       cfg.advertise ? ", advertised as _wivrn._tcp" : "");
@@ -341,6 +381,7 @@ static int serve_link(WivrnConfig cfg, int link_fd, const std::string & link_soc
 			auto & ps = pipeline.stats();
 			auto l = pipeline.take_latency();
 			auto q = [](const std::vector<double> & v, double p) { return v.empty() ? 0.0 : pct(v, p); };
+			g_pipeline_p50_ms = q(l.total, .5);
 			printf("link frames %" PRIu64 " submitted %" PRIu64 " (no headset %" PRIu64 ") sent %" PRIu64 " idr %" PRIu64
 			       " | ms p50/p99: submit->copied %.2f/%.2f copied->host %.3f/%.3f host->sent %.2f/%.2f total %.2f/%.2f"
 			       " compositor GPU %.2f | last encode %.2f, headset decode %.2f\n",
@@ -354,7 +395,9 @@ static int serve_link(WivrnConfig cfg, int link_fd, const std::string & link_soc
 	}
 	printf("steamac-vrhost: %s\n", g_quit ? "stopping" : "VR link closed by steamac-vm, stopping");
 	fflush(stdout);
+	control.reset();
 	session.stop();
+	write_pin("");
 	return 0;
 }
 
@@ -376,7 +419,7 @@ int main(int argc, char ** argv)
 		unpair,
 	} mode = none;
 	std::string unpair_name;
-	bool pair = false;
+	bool pair = false, json = false;
 	WivrnConfig cfg;
 	uint32_t w = 0, h = 0;
 	SelftestOptions st;
@@ -424,6 +467,10 @@ int main(int argc, char ** argv)
 			mode = unpair;
 		else if (a == "--pair")
 			pair = true;
+		else if (a == "--json")
+			json = true;
+		else if (a == "--control-socket")
+			g_control_socket = next();
 		else if (a == "--pin")
 		{
 			cfg.pin = next();
@@ -505,6 +552,13 @@ int main(int argc, char ** argv)
 			}
 			case list_headsets: {
 				KnownKeys keys(KnownKeys::default_dir() / "known_keys");
+				if (json) // one object per line, the control socket's "headsets" entries
+				{
+					for (auto & k: keys.list())
+						printf("{\"name\":%s,\"last_connection\":%lld}\n", ControlServer::json_string(k.name).c_str(),
+						       (long long)k.last_connection);
+					return 0;
+				}
 				for (auto & k: keys.list())
 				{
 					time_t t = k.last_connection;
