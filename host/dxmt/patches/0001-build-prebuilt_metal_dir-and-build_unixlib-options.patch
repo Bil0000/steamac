@@ -1,7 +1,7 @@
-From b1e0e737975c38b7ddf53a9c8b47061d25801848 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: StonkGuy <68372320+StonkGuy@users.noreply.github.com>
 Date: Sat, 10 Oct 2026 04:23:05 +0300
-Subject: [PATCH] build: prebuilt_metal_dir and build_unixlib options
+Subject: [PATCH 01/23] build: prebuilt_metal_dir and build_unixlib options
 
 prebuilt_metal_dir takes dxmt_command.metallib and air_{msad,samplepos,
 tessellation}.air built from the same revision, so the tree builds where
@@ -18,7 +18,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  5 files changed, 34 insertions(+), 19 deletions(-)
 
 diff --git a/meson.build b/meson.build
-index e10c901..7cf523e 100644
+index e10c90191f15e4871c7b703f1f9376241f8255a0..7cf523efcea8196ba240834f6d5acd49424b407b 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -112,17 +112,19 @@ else
@@ -51,7 +51,7 @@ index e10c901..7cf523e 100644
  xxd = find_program('xxd')
  
 diff --git a/meson.options b/meson.options
-index 715b176..edcf082 100644
+index 715b17658d4a6c917bd6ec933042b42a0671fea8..edcf082f520ac7ff4e500e289a13cb55f62a27e2 100644
 --- a/meson.options
 +++ b/meson.options
 @@ -8,4 +8,6 @@ option('wine_builtin_dll', type : 'boolean', value : true)
@@ -64,7 +64,7 @@ index 715b176..edcf082 100644
 +option('prebuilt_metal_dir', type : 'string', value : '', description : 'Directory with dxmt_command.metallib and air_{msad,samplepos,tessellation}.air built by the same DXMT revision; used instead of xcrun metal when the Metal toolchain is not installed')
 +option('build_unixlib', type : 'boolean', value : true, description : 'Build the macOS unixlib (winemetal.so) and the native airconv library; false builds only the Windows PE dlls')
 diff --git a/src/airconv/meson.build b/src/airconv/meson.build
-index 8e0c8be..cbb9013 100644
+index 8e0c8bedbe5fe672c45ddd83a40868da1b9af11e..cbb9013ba7c08286c635466572d0a4c0a5d74349 100644
 --- a/src/airconv/meson.build
 +++ b/src/airconv/meson.build
 @@ -68,10 +68,18 @@ airconv_shaders = [
@@ -100,7 +100,7 @@ index 8e0c8be..cbb9013 100644
  endif
 \ No newline at end of file
 diff --git a/src/dxmt/meson.build b/src/dxmt/meson.build
-index 9d5bfe2..af9628f 100644
+index 9d5bfe2b723a8ee4129a43a3ef42c7b2eace1f39..af9628f02a01420da8cde5fe787c190f893648bc 100644
 --- a/src/dxmt/meson.build
 +++ b/src/dxmt/meson.build
 @@ -29,9 +29,12 @@ dxmt_shaders = [
@@ -120,7 +120,7 @@ index 9d5bfe2..af9628f 100644
  dxmt_shaders_header = hexdump_generator.process(dxmt_shaders_lib)
  
 diff --git a/src/winemetal/meson.build b/src/winemetal/meson.build
-index 858d4b3..15e4da9 100644
+index b3fa530d169e3080a20c6f689703813f5912be8f..7b27e297d56289fea33340d5960b33c2183c71a5 100644
 --- a/src/winemetal/meson.build
 +++ b/src/winemetal/meson.build
 @@ -57,6 +57,6 @@ custom_target('postprocess_lib',
@@ -131,7 +131,3 @@ index 858d4b3..15e4da9 100644
 +if (cpu_family == 'x86_64' or cpu_family == 'aarch64') and get_option('build_unixlib')
    subdir('unix')
  endif
-\ No newline at end of file
--- 
-2.39.5 (Apple Git-154)
-

@@ -2,7 +2,7 @@
 """dxmt_member_order_check.py DXMT_SRC: ArgumentEncodingContext's command contexts build pipelines through
 the context in their constructors (ClearUAV -> getComputePipeline -> ctx.device_), so `device_` and `lib`
 must be declared before every command-context member (members are constructed in declaration order).
-Fails on DXMT without host/dxmt/patches/0003."""
+Fails on DXMT before upstream fb451568 (formerly our patch 0003)."""
 import re, sys
 src = open(sys.argv[1] + "/src/dxmt/dxmt_context.hpp").read()
 body = src[src.index("class ArgumentEncodingContext {"):]
