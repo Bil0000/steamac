@@ -1,7 +1,8 @@
 # VR (experimental)
 
-**Status: experimental, milestone M0.** A Mac-native VR host, `steamac-vrhost`, streams a test pattern to a standalone
-headset running the WiVRn client. No game, VM or guest is involved yet; nothing in the launcher starts it.
+**Status: experimental, M0–M3 implemented and M4 integration in progress.** The host, guest OpenVR runtime, input/pose
+path and Proton DXMT texture submit have offline fake-host coverage. No headset-backed VRChat session has been run;
+M4 guest/FEX and host-launcher integration remain open. Nothing in the launcher starts it yet.
 
 ## What works (M0)
 
@@ -22,8 +23,9 @@ headset running the WiVRn client. No game, VM or guest is involved yet; nothing 
   turns (rotation; the sphere is at infinity, so walking does not move it). The frame number is encoded in the top-left
   corner (16 blocks) for automated checks.
 
-Not yet: PIN pairing/encryption (the code is vendored and built, not wired), WiVRn's feedback-driven pacer, foveation,
-audio, game frames (M1), OpenVR in the guest (M2/M3).
+Implemented since M0: PIN pairing/encryption, WiVRn's pacer, compositor foveation, audio transport, DXMT game-frame
+path (M1), guest OpenVR runtime/input (M2/M3), and Proton's DXMT texture-export patch (M4). The Proton bootstrap
+`IVRCompositor_028` adapter and M4 guest/FEX end-to-end run remain pending.
 
 ## Licence
 
@@ -85,11 +87,22 @@ What to check: the pattern appears; the red marker stays at the same place in th
 `steamac-vrhost` log prints frames, feedback and tracking counts every 5 s, the last encode time and the headset's
 decode time.
 
-## Next milestones
+## M4: headset-less VRChat path checklist
 
-* **M1:** game eye textures from DXMT over the wmtr ring into `steamac-vm`, shared with `steamac-vrhost` as IOSurfaces,
-  converted by a Metal compositor pass (WiVRn's `foveation.comp` in MSL) into the encoder input; WiVRn's pacer.
-* **M2/M3:** OpenVR in the guest (Proton `vrclient_x64` DXMT submit, poses, input), then VRChat. Guest side:
-  `docs/vr-guest.md`.
+Complete in order; the VM step is gated by the coordinator's memory guard and must not be attempted until cleared.
 
-Interfaces between these pieces: `docs/vr-interfaces.md`.
+- [x] Extract candidate OpenVR interface versions from installed VRChat binaries and Unity/IL2CPP metadata, without
+  launching the game. Inventory and caveat: `docs/vr-interfaces.md` and local provenance
+  `/Volumes/LEANWORK/vr-vrchat-interfaces.txt`.
+- [x] Implement DXMT D3D11 texture export in the pinned Proton `vrclient_x64` path and add a COM fake-texture test,
+  including array texture slices and a stock-Proton negative control.
+- [ ] Integrate M6 version adapters, especially `IVRCompositor_028`, and run the real Proton registry bootstrap path
+  (no manual registry-state bypass); verify `HmdSystemFactory` and `VRClientCoreFactory` resolve.
+- [ ] Run the Proton test and `guest/vr` fakehost/testapp under FEX in the VM; no VRChat launch is needed for this gate.
+- [ ] Verify the installer/launcher sets `PROTON_VR_RUNTIME`, installs the rebuilt PE DLL and Unix library, and restores
+  stock Proton files when VR is disabled.
+- [ ] Connect the host pipeline and fake headset, then confirm frame arrival, input/pose, haptics and clean shutdown.
+- [ ] Only after those pass, request explicit coordination for a VRChat live run. Before starting, confirm Steam does not
+  say the account is playing elsewhere; launch in the background without focus stealing. No debugger/ptrace/perf tools.
+
+Interfaces between components: `docs/vr-interfaces.md`. Guest build/test details: `docs/vr-guest.md`.

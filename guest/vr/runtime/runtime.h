@@ -53,7 +53,7 @@ class Runtime {
   uint32_t profile() const;
 
   // --- submit ---
-  // array_index: SubmitWithArrayIndex's slice, or ~0u (Submit: slice = eye for a 2-slice array texture)
+  // array_index: SubmitWithArrayIndex's explicit slice, or ~0u (Submit: use metadata slice for arrays).
   vr::EVRCompositorError submit(vr::EVREye eye, const vr::Texture_t *tex, const vr::VRTextureBounds_t *bounds,
                                 vr::EVRSubmitFlags flags, uint32_t array_index = ~0u);
   void post_present_handoff();  // sends the pending frame now

@@ -241,8 +241,9 @@ vr::EVRCompositorError Runtime::submit(vr::EVREye eye, const vr::Texture_t *tex,
   if (e.x == 0 && e.y == 0 && e.w == mt->width && e.h == mt->height) e.w = e.h = 0;  // whole texture
   e.flags = (flip ? SVR_EYE_FLIP_Y : 0) |
             (is_unorm8(mt->dxgi_format) && tex->eColorSpace != vr::ColorSpace_Linear ? SVR_EYE_SRGB : 0);
-  // single-pass stereo: a 2-slice array texture, slice = eye (OpenVR's TextureType_Metal convention)
-  e.slice = array_index != ~0u ? array_index : mt->array_size > 1 ? (uint32_t)eye : 0;
+  // Single-pass stereo uses an array texture with one eye per slice. Proton stores an explicit slice in the
+  // description for SubmitWithArrayIndex; otherwise array textures default to one slice per eye.
+  e.slice = array_index != ~0u ? array_index : mt->array_size > 1 ? mt->array_index : 0;
   (void)flags;
   if (mt->event_handle && mt->event_value >= pending_.wait_value) {
     pending_.wait_event = mt->event_handle;

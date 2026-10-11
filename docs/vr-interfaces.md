@@ -159,6 +159,50 @@ Guest pieces: Proton `vrclient_x64` patch (`guest/proton-vrclient/patches`, LGPL
   to it); route `VRL_HAPTICS` to `VrSession::haptics`. **Open for the launcher:** `PROTON_VR_RUNTIME`, deploying the
   patched `vrclient_x64.dll`.
 
+### 4.1 VRChat static interface probe (M4, 2026-10-12)
+
+Read-only ASCII/UTF-16 string scan of the installed VRChat x86-64 OpenVR/Unity plugins and IL2CPP metadata (no game
+launch). Full provenance and interface inventory: `/Volumes/LEANWORK/vr-vrchat-interfaces.txt`. These strings show
+versions present in the build, not proof every interface is requested at runtime; `STEAMAC_VR_LOG=1` remains the live
+request oracle.
+
+* `VRChat_Data/Plugins/x86_64/XRSDKOpenVR.dll`: `IVRSystem_022`, `IVRCompositor_028`, `IVRChaperone_004`,
+  `IVROverlay_027`, `IVROverlayView_003`.
+* `openvr_api.dll`: `IVRClientCore_003`, `IVRPaths_001`, `IVRControlPanel_006`, `IVRHeadsetView_001`,
+  `IVRVirtualDisplay_002`.
+* `global-metadata.dat` contains the current-generation set above plus `IVRInput_010`, `IVRChaperoneSetup_006`,
+  `IVRApplications_007`, `IVRSettings_003`, `IVRRenderModels_006`, `IVRScreenshots_001`, `IVRNotifications_002`,
+  `IVRTrackedCamera_006`, `IVRExtendedDisplay_001`, `IVRDriverManager_001`, `IVRResources_001`,
+  `IVRSpatialAnchors_001`, `IVRIOBuffer_002`, `IVRDebug_001`, `IVRProperties_001`, and `IVRBlockQueue_005`.
+  It also retains an older SDK generation: System_019, Compositor_022, Input_004, Overlay_018, Chaperone_003,
+  ChaperoneSetup_005, Applications_006, Settings_002, TrackedCamera_003, and IOBuffer_001.
+* **Critical Proton bootstrap:** Proton's `vrclient_init_registry` itself asks the runtime for `IVRClientCore_003`
+  and `IVRCompositor_028`, before the game factory/interface requests. Missing `_028` causes registry state -1 and
+  the game's runtime load to stop. Proton's Unix loader resolves both `HmdSystemFactory` and `VRClientCoreFactory`; the
+  runtime must export both. The M4 runtime adds `HmdSystemFactory` as a wrapper around `VRClientCoreFactory`.
+* These are C++ version interfaces. Proton's PE `vrclient_main.c` strips `FnTable:` before forwarding generic requests
+  to Unix and constructs Windows FnTables there; the Unix runtime need not supply FnTable variants for this path.
+* VRChat's Unity OpenVR subsystem manifest names OpenVR Display/Input and disables legacy input. Its SteamVR settings
+  select scene initialization, stereo mode 2 and mirror view. The binding assets include Touch, Knuckles, Vive and
+  other controller families; this is not evidence each binding is selected at runtime.
+
+### 4.2 Proton DXMT test (M4, offline)
+
+The pinned Proton PE+Unix `vrclient` build and a COM-object fake-texture test were run on x86 Linux in the prior M4
+session. That run verified exportable D3D11 texture routing, completion-event/value propagation, `[0,1]`
+`SubmitWithArrayIndex` slices, and the foreign-texture fallback; an installed unpatched Proton was a negative control.
+The harness has now been changed to assert reversed explicit slices `[1,0]`, specifically ensuring slice zero is not
+treated as “unset,” but this updated assertion has not yet been run. Local checks on macOS validate both Proton scripts'
+shell syntax, `MANUAL_REGISTRY` argument handling with the variable unset and set, generated OpenVR stub consistency,
+and portable runtime unit tests (32 checks, 0 failures). The Proton fake-texture harness itself requires the pinned x86
+Proton/Wine build and has not been rerun because the x86 host is offline. Rerun it in non-manual `_028` bootstrap mode
+once the M6 `_028` adapter is integrated. The guest/FEX run is separately blocked on explicit coordinator clearance of
+the VM memory guard; no live VRChat test has been run.
+
+The Proton harness invokes `vr-fakehost` as a background child; its return status and socket readiness are not yet
+asserted explicitly. Host logs and the app's per-submit checks currently provide the substantive assertions. Strengthen
+child/readiness failure handling when a deterministic failure fixture is available.
+
 ## Change log
 
 * 2026-10-11 M0 agent: initial version (sections 1-3; section 4 placeholder).

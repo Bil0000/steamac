@@ -173,7 +173,7 @@ struct svr_metal_texture {
   uint32_t width, height;
   uint32_t dxgi_format; /* DXGI_FORMAT of the D3D11 texture */
   uint32_t array_size, sample_count;
-  uint32_t pad;
+  uint32_t array_index; /* slice for this eye (SubmitWithArrayIndex; else the eye for an array texture, 0 otherwise) */
 };
 
 #endif
