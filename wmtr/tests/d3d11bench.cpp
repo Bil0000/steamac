@@ -1,5 +1,5 @@
 // d3d11bench: small, deterministic D3D11 load for comparing graphics paths.
-// Usage: d3d11bench.exe [--draws N] [--seconds S] [--width W] [--height H] [--vsync 0|1]
+// Usage: d3d11bench.exe [--draws N] [--seconds S] [--width W] [--height H] [--vsync 0|1] [--indexed 0|1]
 //                       [--overdraw K] [--csv path] [--label text] [--probe MS]
 // --probe MS (input-to-photon probe): on every key press or mouse motion the next frame is held back MS
 // milliseconds (and the clear colour flips). The host sees the gap in its presented-frame timestamps
@@ -24,6 +24,7 @@
 #include <cstring>
 #include <vector>
 
+static int g_indexed = 0;
 static int g_draws = 2000, g_seconds = 20, g_width = 1280, g_height = 800, g_vsync = 0, g_overdraw = 4;
 static const char *g_csv = "d3d11bench.csv";
 static const char *g_label = "run";
@@ -51,6 +52,15 @@ float4 ps_main(VSOut i) : SV_Target { return tex0.Sample(smp, i.uv) * tint; }
 struct FSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 FSOut fs_vs(uint id : SV_VertexID) {
   FSOut o; float2 p = float2((id << 1) & 2, id & 2); o.uv = p; o.pos = float4(p * float2(2, -2) + float2(-1, 1), 0.5, 1); return o; }
+// --indexed 1: the fill pass keeps a small local array and indexes it with a per-pixel value
+// (fxc emits an indexable temp, x0[r.x]): exercises how the shader compiler lowers dynamic indexing
+float4 fs_ps_idx(FSOut i) : SV_Target {
+  float4 a[8]; float2 uv = i.uv;
+  [unroll] for (int k = 0; k < 8; k++) a[k] = tex0.Sample(smp, frac(uv * (1.0 + 0.13 * k)));
+  float4 c = 0;
+  [loop] for (int n = 0; n < 24; n++) { uint j = (uint)(frac(uv.x * 7.3 + uv.y * 3.1 + n * 0.37) * 8.0) & 7; c += a[j]; a[(j + 3) & 7] *= 0.97; }
+  return float4(c.rgb * tint.rgb * (1.0 / 24), 0.08);
+}
 float4 fs_ps(FSOut i) : SV_Target {
   float3 c = 0; float2 uv = i.uv;
   [unroll] for (int k = 0; k < 24; k++) { uv = frac(uv * 1.37 + float2(0.11, 0.07) * k); c += tex0.Sample(smp, uv).rgb * (1.0 / 24); }
@@ -110,6 +120,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--height")) g_height = atoi(argv[i + 1]);
     else if (!strcmp(argv[i], "--vsync")) g_vsync = atoi(argv[i + 1]);
     else if (!strcmp(argv[i], "--overdraw")) g_overdraw = atoi(argv[i + 1]);
+    else if (!strcmp(argv[i], "--indexed")) g_indexed = atoi(argv[i + 1]);
     else if (!strcmp(argv[i], "--csv")) g_csv = argv[i + 1];
     else if (!strcmp(argv[i], "--label")) g_label = argv[i + 1];
     else if (!strcmp(argv[i], "--dump")) g_dump = argv[i + 1];
@@ -138,7 +149,7 @@ int main(int argc, char **argv) {
 
   step("device");
   ID3DBlob *vsb = compile("vs_main", "vs_5_0"), *psb = compile("ps_main", "ps_5_0");
-  ID3DBlob *fvb = compile("fs_vs", "vs_5_0"), *fpb = compile("fs_ps", "ps_5_0");
+  ID3DBlob *fvb = compile("fs_vs", "vs_5_0"), *fpb = compile(g_indexed ? "fs_ps_idx" : "fs_ps", "ps_5_0");
   step("compiled");
   ID3D11VertexShader *vs, *fvs; ID3D11PixelShader *ps, *fps;
   dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs);
