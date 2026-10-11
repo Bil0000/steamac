@@ -8,6 +8,11 @@
 // --probe-every SEC: the probe triggers itself every SEC seconds instead of waiting for input and prints
 // "probe-trigger <unix ns>" (guest wall clock through Wine) to --probe-log PATH (stdout is not kept under Steam's
 // launch chain): app-reaction-to-present latency, no input focus needed.
+// --vr W (VR eye-texture producer, steamac VR milestone M1): additionally renders the scene into two W x W*16/15
+// R8G8B8A8_UNORM_SRGB eye render targets per frame (left eye tinted red, right green) and hands them to the host
+// VR compositor: IMTLD3D11ExportableTexture (DXMT private interface) gives each eye's Metal texture plus the
+// shared event to wait for, WMTVRSubmit (winemetal.dll) sends the frame. Prints "vr: submitted N, failed M".
+// Needs StonkGuy/dxmt vr-export and a wmtr executor with a VR link (WMTR_VR_SOCKET + WMTR_VR_MACH_NAME).
 // Per frame: N draws of an instanced-free textured cube grid, each with its own constant buffer
 // update (Map WRITE_DISCARD), plus K full-screen overdraw passes with a moderately heavy pixel
 // shader (fill-rate/GPU load). Writes one CSV row per frame: frame,cpu_ms,present_ms,t_s.
@@ -31,6 +36,17 @@ static bool g_quit = false;
 static int g_probe_ms = 0;
 static double g_probe_every = 0;
 static const char *g_probe_log = "probe-triggers.txt";
+static int g_vr = 0;
+
+/* DXMT private interface (src/d3d11/d3d11_interfaces.hpp, StonkGuy/dxmt vr-export) */
+struct IMTLD3D11ExportableTexture : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE GetMetalTexture(UINT64 *pTexture, UINT64 *pSharedEvent, UINT64 *pSignalValue) = 0;
+};
+static const GUID IID_IMTLD3D11ExportableTexture = {0xad6245d1, 0x3a11, 0x4dd6, {0x87, 0xb7, 0x7a, 0x58, 0x04, 0x8b, 0x55, 0xd3}};
+/* winemetal.h (vr-export): struct WMTVRSubmitInfo, WMTVRSubmit */
+struct WMTVREye { UINT64 texture; UINT32 x, y, w, h, flags, slice; };
+struct WMTVRSubmitInfo { UINT64 frame_id, display_time; WMTVREye eye[2]; float pose[2][7]; float fov[2][4]; UINT64 wait_event, wait_value; };
+typedef UINT32 (*PFN_WMTVRSubmit)(const WMTVRSubmitInfo *);
 static volatile LONG g_input = 0; /* inputs seen since the last frame (probe mode) */
 static void step(const char *s) { fprintf(stderr, "step: %s\n", s); fflush(stderr); }
 
@@ -116,6 +132,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--probe")) g_probe_ms = atoi(argv[i + 1]);
     else if (!strcmp(argv[i], "--probe-every")) g_probe_every = atof(argv[i + 1]);
     else if (!strcmp(argv[i], "--probe-log")) g_probe_log = argv[i + 1];
+    else if (!strcmp(argv[i], "--vr")) g_vr = atoi(argv[i + 1]);
   }
   WNDCLASSA wc = {}; wc.lpfnWndProc = wndproc; wc.hInstance = GetModuleHandleA(nullptr); wc.lpszClassName = "d3d11bench";
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -176,6 +193,25 @@ int main(int argc, char **argv) {
   ID3D11Texture2D *bb; sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&bb);
   ID3D11RenderTargetView *rtv; dev->CreateRenderTargetView(bb, nullptr, &rtv); bb->Release();
 
+  /* VR eye targets */
+  ID3D11Texture2D *eye_tex[2] = {}; ID3D11RenderTargetView *eye_rtv[2] = {}; IMTLD3D11ExportableTexture *eye_exp[2] = {};
+  PFN_WMTVRSubmit vr_submit = nullptr; unsigned vr_ok = 0, vr_fail = 0;
+  int eye_w = g_vr, eye_h = g_vr * 16 / 15;
+  if (g_vr) {
+    D3D11_TEXTURE2D_DESC ed = {(UINT)eye_w, (UINT)eye_h, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, {1, 0}, D3D11_USAGE_DEFAULT,
+                               D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    for (int e = 0; e < 2; e++) {
+      dev->CreateTexture2D(&ed, nullptr, &eye_tex[e]);
+      dev->CreateRenderTargetView(eye_tex[e], nullptr, &eye_rtv[e]);
+      if (FAILED(eye_tex[e]->QueryInterface(IID_IMTLD3D11ExportableTexture, (void **)&eye_exp[e])))
+        fprintf(stderr, "vr: no IMTLD3D11ExportableTexture (not DXMT vr-export)\n");
+    }
+    HMODULE wm = GetModuleHandleA("winemetal.dll");
+    if (!wm) wm = LoadLibraryA("winemetal.dll");
+    vr_submit = wm ? (PFN_WMTVRSubmit)GetProcAddress(wm, "WMTVRSubmit") : nullptr;
+    if (!vr_submit) fprintf(stderr, "vr: winemetal.dll has no WMTVRSubmit\n");
+  }
+
   step("resources");
   FILE *csv = fopen(g_csv, "w");
   if (csv) fprintf(csv, "frame,cpu_ms,present_ms,t_s\n");
@@ -204,10 +240,10 @@ int main(int argc, char **argv) {
       Sleep(g_probe_ms); /* the gap the host looks for */
       flip = !flip;
     }
-    float clear[4] = {0.05f, flip ? 0.6f : 0.05f, 0.08f, 1};
-    ctx->ClearRenderTargetView(rtv, clear);
-    D3D11_VIEWPORT vp = {0, 0, (float)g_width, (float)g_height, 0, 1};
-    ctx->RSSetViewports(1, &vp); ctx->OMSetRenderTargets(1, &rtv, nullptr);
+    auto scene = [&](ID3D11RenderTargetView *target, int w, int h, const float clear[4]) {
+    ctx->ClearRenderTargetView(target, clear);
+    D3D11_VIEWPORT vp = {0, 0, (float)w, (float)h, 0, 1};
+    ctx->RSSetViewports(1, &vp); ctx->OMSetRenderTargets(1, &target, nullptr);
     UINT stride = 20, off = 0;
     ctx->IASetVertexBuffers(0, 1, &vb, &stride, &off); ctx->IASetInputLayout(il);
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -231,6 +267,27 @@ int main(int argc, char **argv) {
       ctx->OMSetBlendState(blend, nullptr, 0xffffffff);
       for (int k = 0; k < g_overdraw; k++) ctx->Draw(3, 0);
     }
+    };
+    float clear[4] = {0.05f, flip ? 0.6f : 0.05f, 0.08f, 1};
+    if (g_vr && vr_submit && eye_exp[0] && eye_exp[1]) {
+      WMTVRSubmitInfo vi = {};
+      vi.frame_id = frame + 1;
+      for (int e = 0; e < 2; e++) {
+        float ec[4] = {e ? 0.05f : 0.5f, e ? 0.5f : 0.05f, 0.08f, 1};
+        scene(eye_rtv[e], eye_w, eye_h, ec);
+      }
+      bool ok = true;
+      for (int e = 0; e < 2; e++) {
+        UINT64 ev = 0, val = 0;
+        ok = ok && SUCCEEDED(eye_exp[e]->GetMetalTexture(&vi.eye[e].texture, &ev, &val));
+        vi.wait_event = ev; vi.wait_value = val; /* one immediate context: the later value covers both eyes */
+        float pose[7] = {0, 0, 0, 1, e ? 0.032f : -0.032f, 1.6f, 0};
+        float fov[4] = {e ? -0.75f : -0.87f, e ? 0.87f : 0.75f, 0.82f, -0.9f};
+        memcpy(vi.pose[e], pose, sizeof pose); memcpy(vi.fov[e], fov, sizeof fov);
+      }
+      if (ok && vr_submit(&vi) == 0) vr_ok++; else vr_fail++;
+    }
+    scene(rtv, g_width, g_height, clear);
     QueryPerformanceCounter(&tb);
     if (g_dump && frame == 30) dump_frame(dev, ctx, sc);
     sc->Present(g_vsync ? 1 : 0, 0);
@@ -242,6 +299,7 @@ int main(int argc, char **argv) {
                      double(tc.QuadPart - tb.QuadPart) * 1000.0 / freq.QuadPart, now);
   }
   if (csv) fclose(csv);
+  if (g_vr) { printf("vr: submitted %u, failed %u\n", vr_ok, vr_fail); fflush(stdout); }
   // skip the first second (warm-up) in the summary
   std::vector<double> v; double acc = 0;
   for (double ms : frame_ms) { acc += ms; if (acc > 1000.0) v.push_back(ms); }

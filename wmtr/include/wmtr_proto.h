@@ -23,6 +23,8 @@
 #define WMTR_SLOT_BYTES (64u << 10)      /* reply slot payload */
 #define WMTR_ARENA_BLOB_BYTES (64u << 20)/* arena blob size */
 #define WMTR_MAX_BLOBS 1024
+/* winemetal unix calls: DXMT's table (src/wmtr_calls.inc, 0..145) plus WMTVRSubmit (146) */
+#define WMTR_NCALLS 147
 
 /* a pointer field in params/extra rewritten on the wire */
 #define WMTR_REF_EXTRA 0x5752000000000000ull /* | offset into this request's extra bytes */
