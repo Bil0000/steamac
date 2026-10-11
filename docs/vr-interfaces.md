@@ -20,7 +20,12 @@ Change it by editing this file; add a line to the change log at the bottom (who,
 * `steamac-vrhost` is a **separate executable**. It may contain WiVRn (GPL-3) code; `steamac-vm` must never link it.
   The only coupling is the IPC in section 3 (documented here, no shared code beyond a header of plain C structs,
   `host/vrhost/include/vrlink.h`, which is dual-licensed Apache-2.0 OR GPL-3.0-or-later so both sides can include it).
-* `steamac-vm` launches `steamac-vrhost` as a child (`posix_spawn`), and kills it with the VM.
+* `steamac-vm` launches `steamac-vrhost` as a child (`posix_spawn`), and kills it with the VM. **[implemented, vr-int]**
+  `host/launcher/Sources/steamac-vm/VRHost.swift`: Settings > Advanced "VR (experimental)" / `--vr` (default off; DXMT
+  path only), executable `Contents/MacOS/steamac-vrhost`, log `~/Library/Logs/es.fxgam.steamac/steamac-vrhost.log`.
+  The host stops when its link fd reaches end-of-file: steamac-vm's end is `FD_CLOEXEC` and nothing else holds it, so
+  libkrun's `_exit()` at VM stop ends the host without extra code; `VRHost.stop()` (close, then SIGTERM, SIGKILL) is
+  for the launcher's own exit paths. `--selftest-vr` checks spawn, `VRL_HELLO` and teardown.
 
 ## 2. VrSession — inside steamac-vrhost [decided, M0, implemented]
 
@@ -35,7 +40,7 @@ protocol is an adapter behind it (`WivrnSession` in `src/wivrn/`, an `AlvrSessio
 | `next_frame_timing()` | blocks until the next frame should start; returns `{wake_up, predicted_display, frame_id}` (host clock). **Changed (M0, vr-m0 after 1920a53):** WiVRn's pacer (feedback-driven, phase-locked to the headset vsync) replaces the fixed period; `frame_id` is the pacer's id and **must** be used as `Frame::frame_id` in `submit()` (the headset's feedback is matched by it). For `VRL_TIMING`, send this triple |
 | `views_at(t, pose[2], fov[2])` | per-eye pose (head pose at `t` × eye offset) and FOV in tracking space — what an OpenVR `WaitGetPoses` returns |
 | `pose_at(Device, t)` | head / grip / aim poses, interpolated or extrapolated (≤100 ms) from the tracking history |
-| `submit(Frame)` | `frame_id`, `display_time`, `pose[2]`, `fov[2]`, `eye[2].surface`; encodes both eyes and sends; the surfaces may be reused when it returns |
+| `submit(Frame)` | `frame_id`, `display_time`, `pose[2]`, `fov[2]`, `eye[2].surface`, `foveation[2]` (WiVRn `foveation_parameter` x/y the compositor applied; empty = identity; sent in `view_info`, vr-int); encodes both eyes and sends; the surfaces may be reused when it returns |
 | `haptics(Device, duration, frequency, amplitude)` | to the headset |
 | `request_idr()` | force an IDR on both streams |
 | `SessionListener` | `on_connected`, `on_disconnected`, `on_tracking(TrackedPose[])`, `on_input(InputValue[])`, `on_refresh_rate` |
@@ -80,11 +85,16 @@ M0/M2/M3 add their message structs there). Two channels, both set up when `steam
 | vm→host | `VRL_SWAPCHAIN` `vrl_swapchain` | id (new id on every recreate), image_count (3 per eye now), w, h, MTLPixelFormat, `VRL_SWAPCHAIN_SRGB` |
 | vm→host | `VRL_SUBMIT` `vrl_submit` | frame_id, display_time, app_submit_time, ready_time, per eye {swapchain, image, x,y,w,h, `VRL_EYE_FLIP_Y`}, pose[2][7] (xyzw, xyz, stage), fov[2][4] (l,r,u,d rad) |
 | host→vm | `VRL_RELEASE` `vrl_release` | swapchain, image, frame_id, release_time — per eye, after the compositor pass (image reusable) |
-| host→vm | `VRL_TIMING` | reserved (M0/M2) |
-| host→vm | `VRL_POSES` | reserved (M0/M2/M3) |
-| host→vm | `VRL_INPUT` | reserved (M3) |
-| vm→host | `VRL_HAPTICS` | reserved (M3) |
-| host→vm | `VRL_STATE` | reserved (M0) |
+| host→vm | `VRL_TIMING` `vrl_timing` | once per frame while a headset is connected: the pacer's frame_id, wake_up, predicted_display, refresh_hz (section 4) |
+| host→vm | `VRL_POSES` `vrl_poses` | once per frame, sent just before `VRL_TIMING`: all devices predicted to that frame's display time |
+| host→vm | `VRL_INPUT` `vrl_input` | on change: the whole `value[2][21]` table |
+| vm→host | `VRL_HAPTICS` `vrl_haptics` | hand, duration_s, frequency, amplitude → `VrSession::haptics` |
+| host→vm | `VRL_STATE` `vrl_state` | on headset connect / disconnect / refresh-rate change |
+
+Both ends set `SO_RCVBUF` to `VRL_SOCKET_BUFFER` (256 KiB; the macOS default for AF_UNIX datagrams is 4 KiB and fills
+in a few frames). Host sends are non-blocking, so a stalled vm side loses timing packets instead of stalling the frame
+clock; the vm side reads the link on its own thread (`wmtr-vr-link`), so per-frame packets never queue in front of
+`VRL_RELEASE`. A datagram socketpair gives no end-of-file on macOS: the host detects a closed vm end by `ENOTCONN`.
 
 Answers to the M1 open questions: DXMT eye textures are **not** IOSurface-backed (private render targets), so the vm
 side copies each eye into its own IOSurface swapchain image (one blit per eye; not separately timed, included in "submit → copy complete" below). MSAA
@@ -106,8 +116,16 @@ swapchain keeps the eye texture's MTLPixelFormat (RGBA8/BGRA8 (+_sRGB), RGBA16Fl
   `include/wmtr_vr.h`), never blocks the executor: GPU waits for `wait_event`, blits into a free swapchain image, sends
   `VRL_SUBMIT` on completion; no free image → frame dropped (counted). Attach: `wmtr_host_set_vr(h, wmtr_vr_create(fd,
   mach_name))` from the embedder, or env `WMTR_VR_SOCKET=<path>` + `WMTR_VR_MACH_NAME=<name>` at `wmtr_host_create`.
-  **To do for the launcher (M0/M1):** steamac-vm creates the socketpair, spawns steamac-vrhost with `--link-fd`/`--mach-name`,
-  and calls `wmtr_host_set_vr` (or sets the env before libkrun creates the wmtr context).
+  **[implemented, vr-int]** the launcher's path is env `WMTR_VR_FD=<n>` + `WMTR_VR_MACH_NAME` (libkrun loads
+  libwmtr_host into the steamac-vm process, so the fd number is valid there): the first wmtr context claims a `dup` of
+  it, later contexts get STATUS_NOT_SUPPORTED for call 146 until the owner ends; the launcher's end stays open, so the
+  host's headset session survives a game restart. Test: `wmtr_loopback` "vr fd attach".
+* **Texture lifetime [decided, vr-int].** The exporter copies on its own Metal queue after `wait_event`; Metal does
+  not order that against the producer's *later* work on DXMT's queue. A texture passed to `WMTVRSubmit` must not be
+  written again before the copy ran: the producer renders (or `CopyResource`s) each eye into a ring of **3** textures
+  and submits the frame's slot (`d3d11bench --vr` renders into the ring; **M2's `vrclient_x64` must copy the game's
+  eye texture into such a ring** before `GetMetalTexture`, since the game reuses its texture next frame, which is what
+  an OpenVR runtime's Submit copy guarantees on Windows). Without it `vr_e2e` decoded frame N carrying frame N+1.
 * **steamac-vrhost** (`host/vrhost/src/compositor/`, `compositor.cmake`): `VrLinkServer(fd, mach_name, sink)` receives
   swapchains/submits and releases images after the sink returns; `CompositorBridge(out_w, out_h, EyeEncoderSink&)` runs
   `EyeCompositor` per frame: Metal compute port of WiVRn's `foveation.comp` (same per-pixel source ranges from a port of
@@ -121,6 +139,24 @@ Measured (M2 Mac, `host/vrhost/tests/m1_pipeline_test`, both link ends in one pr
 GPU): 2064x2208 → 1248x1344 per eye at 90 Hz, 300 frames, 0 dropped: guest submit → copy complete p50 2.6 ms (includes
 the producer's own render it waits for), → host receive p50 0.015 ms, → encoder input p50 2.0 ms (compositor GPU
 1.7 ms for both eyes), total p50 4.6 / p99 8.9 ms.
+
+### 3.2 Integrated frame path (vr-int)
+
+`steamac-vrhost --link-fd N --mach-name NAME` (spawned by steamac-vm; `--link-socket PATH` for manual runs with
+`WMTR_VR_SOCKET`) runs `WivrnSession` + `VrPipeline` (`src/pipeline/`): `VrLinkServer` → `CompositorBridge` →
+`SessionEncoderSink` (`EyeEncoderSink` over `VrSession`: `'420f'` IOSurface pool of the stream size, both eyes →
+`VrSession::submit` with the link frame's id/display time/poses/FOVs and the foveation parameters). Frames arriving
+while no headset is connected are released without work. PIN pairing as in `--testpattern`. Every 5 s the log prints
+per-stage latency p50/p99.
+
+* **Frame ids:** the pipeline passes the guest's `frame_id` through. WiVRn's pacer learns only from frames submitted
+  with its own id (`FrameTiming::frame_id`); the guest gets it with `VRL_TIMING` (section 4) — until M0 sends that
+  packet, game frames stream with the guest's ids and the pacer runs on its defaults.
+* **Tests:** `vr_e2e` (ctest, `-DVRHOST_DXMT_DIR=<dxmt vr-export>`): producer (two sRGB eye textures, ring of 3, frame
+  number blocks, left red / right green, session frame ids and `views_at` poses) → `wmtr_vr_submit` → link →
+  `VrPipeline` → `WivrnSession` (PIN pairing, AES-128-CTR) → loopback test headset: frame numbers, eye colours, eye
+  poses, identity and foveated (WiVRn-consistent parameters received) streams, link-close teardown.
+  `vrhost-test-headset` is the same headset as a tool for a running host on the Mac.
 
 ## 4. Guest side (M2/M3) [implemented by M2/M3 on branch `vr-m23`, not yet live-tested]
 
@@ -155,14 +191,39 @@ Guest pieces: Proton `vrclient_x64` patch (`guest/proton-vrclient/patches`, LGPL
   order. Controller family `VRL_PROFILE_TOUCH` (Quest/Pico) or `VRL_PROFILE_INDEX`. **Input ids** = `enum svr_input`
   in `steamac_vr_guest.h` (trigger value/click/touch, squeeze value/click/force, thumbstick x/y/click/touch, A/X and B/Y
   click/touch, menu, system, thumbrest touch, trackpad x/y/touch/force); the adapter maps WiVRn `device_id`s to them.
-* **Open for M0:** emit the five packets above from `VrSession` (the M0 `input_ids.h` should become this table or map
-  to it); route `VRL_HAPTICS` to `VrSession::haptics`. **Open for the launcher:** `PROTON_VR_RUNTIME`, deploying the
+* **Host side (done on `vr-int`):** `VrPipeline` is the session's `SessionListener` (construct it, then
+  `VrSession::start(&pipeline)`): `VRL_STATE` from connect/disconnect/refresh, a frame-clock thread sends `VRL_POSES` +
+  `VRL_TIMING` from `next_frame_timing()`, `VRL_INPUT` on change through `src/wivrn/input_map.cpp` (WiVRn `device_id` →
+  `svr_input`), `VRL_HAPTICS` → `VrSession::haptics`. `vr_e2e` drives its producer the way the guest runtime does
+  (`SVR_HELLO` / `SVR_FRAME` / `SVR_HAPTIC` through `wmtr_vr_query`). **Open for the launcher:** `PROTON_VR_RUNTIME`, deploying the
   patched `vrclient_x64.dll`.
+
+## 6. VR audio region: steamac-vm / libkrun ↔ steamac-vrhost [decided, M5, implemented]
+
+Game audio goes to the headset and the headset microphone comes back through one shared-memory region, contract in
+`host/vrhost/include/vraudio.h` (plain C, mirrored in Rust by libkrun patch 0025 with a layout test).
+
+* steamac-vm creates the region (`vra_region_init`), hands it to libkrun (`krun_snd_set_vr_audio`) and passes the fd
+  to the host as `--audio-fd N`.
+* Two lock-free SPSC rings of interleaved S16LE frames (play: stereo, mic: mono, 8192 frames each); each side polls on
+  its own clock (libkrun: CoreAudio callback / virtio-snd pump; vrhost: `AudioBridge` 5 ms tick, the WiVRn quantum).
+* Routing follows the headset: vrhost publishes `VRA_HEADSET_SPEAKER` / `VRA_HEADSET_MIC` plus a heartbeat; libkrun
+  forwards playback and records from the mic ring only while they are set and the beat is younger than 1 s,
+  otherwise the guest's audio is the Mac's again.
+* In vrhost, `AudioBridge` wraps the session listener (the pipeline or the test pattern) and adds the microphone and
+  connect/disconnect handling. Tests: `test_audio` (vrhost ctest), the libkrun `vr_audio` unit tests.
+* **Open for the launcher:** creating the region and passing `--audio-fd` from `VRHost.swift`.
 
 ## Change log
 
 * 2026-10-11 M0 agent: initial version (sections 1-3; section 4 placeholder).
 * 2026-10-11 M0 agent: section 2 rewritten to match the implemented `vr_session.h` (encoder input = `'420f'` IOSurface, `views_at`, timing, input ids).
 * 2026-10-11 M1 agent: section 3 decided and implemented for the frame path: **SOCK_DGRAM instead of SOCK_SEQPACKET** (not supported on macOS), no shared event across processes (VRL_SUBMIT sent on copy completion), vrlink.h drafted; new 3.1 (DXMT `IMTLD3D11ExportableTexture` + `WMTVRSubmit` call 146, wmtr exporter, vrhost compositor + `EyeEncoderSink`).
+* 2026-10-11 integration agent (vr-int): section 1 launcher spawn implemented (`VRHost.swift`, `--vr`, Settings toggle);
+  `Frame::foveation` (section 2); `WMTR_VR_FD` attach and the texture-ring requirement (3.1, **action for M2: ring copy in
+  vrclient**); new 3.2 (pipeline, frame ids, tests).
 * 2026-10-11 M2/M3 agent: section 4 written (submit via call 146 from the guest runtime, `WMTR_CTL_VR_QUERY`,
   `VRL_STATE/TIMING/POSES/INPUT/HAPTICS` structs added to vrlink.h on `vr-m23`).
+* 2026-10-11 integration agent (vr-int): host emits `VRL_STATE/TIMING/POSES/INPUT` and routes `VRL_HAPTICS` (section 3
+  table, section 4); `VRL_SOCKET_BUFFER`; link reader thread in the wmtr exporter.
+* 2026-10-12 M5: section 6 (VR audio region).

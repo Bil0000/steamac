@@ -151,6 +151,10 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 			f = XrFovf{-0.9f, 0.8f, 0.85f, -0.9f};
 		info.supported_codecs = {wivrn::video_codec::h265, wivrn::video_codec::h264};
 		info.system_name = "fake";
+		if (o.speaker_channels)
+			info.speaker = fh::headset_info_packet::audio_description{o.speaker_channels, o.speaker_rate};
+		if (o.mic_channels)
+			info.microphone = fh::headset_info_packet::audio_description{o.mic_channels, o.mic_rate};
 		control.send(std::move(info));
 
 		std::array<VtDecoder, 2> dec{VtDecoder(true), VtDecoder(true)};
@@ -182,8 +186,42 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 			control.send(std::move(fb));
 		};
 
+		bool mic_on = false;
+		int64_t mic_start = 0;
+		auto send_mic = [&] {
+			if (not mic_on or not o.mic_channels)
+				return;
+			int64_t now = vrhost::now_ns();
+			size_t due = size_t((now - mic_start) * double(o.mic_rate) / 1e9);
+			size_t marker_at = size_t(o.mic_rate) * o.mic_marker_ms / 1000;
+			while (res.mic_frames_sent + o.mic_rate / 200 <= due)
+			{
+				size_t n = o.mic_rate / 200;
+				std::vector<int16_t> pcm(n * o.mic_channels);
+				for (size_t f = 0; f < n; ++f)
+				{
+					size_t k = res.mic_frames_sent + f;
+					int16_t v = int16_t(std::lround(8000 * std::sin(2 * M_PI * o.mic_tone_hz * double(k) / o.mic_rate)));
+					if (k >= marker_at and k < marker_at + 48)
+					{
+						v = 30000;
+						if (k == marker_at)
+							res.mic_marker_sent_ns = vrhost::now_ns();
+					}
+					for (int c = 0; c < o.mic_channels; ++c)
+						pcm[f * o.mic_channels + c] = v;
+				}
+				res.mic_frames_sent += n;
+				control.send(wivrn::audio_data{
+				        .timestamp = hs_now(),
+				        .payload = std::span(reinterpret_cast<uint8_t *>(pcm.data()), pcm.size() * 2),
+				});
+			}
+		};
+
 		while (res.decoded[0] < o.frames or res.decoded[1] < o.frames)
 		{
+			send_mic();
 			auto now = std::chrono::steady_clock::now();
 			if (now - last_tracking > std::chrono::milliseconds(5))
 			{
@@ -222,6 +260,40 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 				auto & d = std::get<th::video_stream_description>(pkt);
 				res.got_stream_description = d.width == o.eye_width and d.height == o.eye_height and d.codec[0] == wivrn::video_codec::h265;
 			}
+			else if (auto * ad = std::get_if<th::audio_stream_description>(&pkt))
+			{
+				bool spk = o.speaker_channels ? ad->speaker and ad->speaker->num_channels == o.speaker_channels and
+				                                        ad->speaker->sample_rate == o.speaker_rate
+				                              : not ad->speaker;
+				bool mic = o.mic_channels ? ad->microphone and ad->microphone->num_channels == o.mic_channels and
+				                                    ad->microphone->sample_rate == o.mic_rate
+				                          : not ad->microphone;
+				res.got_audio_description = spk and mic;
+			}
+			else if (auto * fc = std::get_if<th::feature_control>(&pkt))
+			{
+				if (fc->f == th::feature_control::microphone)
+				{
+					res.mic_feature.push_back(fc->state);
+					if (fc->state and not mic_on)
+						mic_start = vrhost::now_ns();
+					mic_on = fc->state;
+				}
+			}
+			else if (auto * a = std::get_if<wivrn::audio_data>(&pkt))
+			{
+				const int16_t * p = reinterpret_cast<const int16_t *>(a->payload.data());
+				size_t samples = a->payload.size() / 2;
+				res.speaker.insert(res.speaker.end(), p, p + samples);
+				res.speaker_packets++;
+				if (o.speaker_channels)
+				{
+					res.max_speaker_packet_frames = std::max(res.max_speaker_packet_frames, int(samples / o.speaker_channels));
+					res.speaker_arrivals.emplace_back(vrhost::now_ns(), res.speaker.size() / o.speaker_channels);
+				}
+			}
+			else if (auto * hp = std::get_if<th::haptics>(&pkt))
+				res.haptics.push_back({int(hp->id), int64_t(hp->duration.count()), hp->frequency, hp->amplitude});
 			else if (std::holds_alternative<th::tracking_control>(pkt))
 				res.got_tracking_control = not std::get<th::tracking_control>(pkt).pattern.empty();
 			else if (auto * s = std::get_if<th::video_stream_data_shard>(&pkt))
@@ -278,6 +350,11 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 
 				// view_info checks: identity foveation, both eye poses 64 mm apart, display time in headset clock
 				for (int e = 0; e < 2; ++e)
+				{
+					res.foveation_x[e] = vi.foveation[e].x;
+					res.foveation_y[e] = vi.foveation[e].y;
+				}
+				for (int e = 0; e < 2 and o.identity_foveation; ++e)
 					if (vi.foveation[e].x != std::vector<uint16_t>{o.eye_width} or vi.foveation[e].y != std::vector<uint16_t>{o.eye_height})
 						res.view_info_ok = false;
 				// (frames rendered before the first tracking packet arrived carry the default, all-zero view poses)
@@ -294,6 +371,8 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 				if (not img)
 					continue;
 				int64_t read = vrhost::TestPattern::read_frame_index(img);
+				if (o.on_decoded)
+					o.on_decoded(idx, frame_idx, img);
 				if (read != int64_t(frame_idx & 0xffff))
 					res.index_mismatch[idx]++;
 				res.decoded[idx]++;

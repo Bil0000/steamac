@@ -14,6 +14,7 @@
 #include <setjmp.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,7 @@
 #include "airconv_thunks.h"
 #include "wmtr_wire.h"
 #include "wmtr_host.h"
+#include "wmtr_vr.h"
 
 typedef int NTSTATUS;
 typedef NTSTATUS (*impl_fn)(void *);
@@ -36,7 +38,7 @@ extern const void *wmtr_impl_funcs[];
 #define WMTR_CLASS_B 2
 #define WMTR_CLASS_C 3
 #define WMTR_CLASS_N 4
-static const uint8_t call_class[146] = {
+static const uint8_t call_class[WMTR_NCALLS] = {
 #define X(i, n, t, c) [i] = WMTR_CLASS_##c,
 #include "wmtr_calls.inc"
 #undef X
@@ -66,6 +68,9 @@ struct wmtr_host {
   _Atomic uint64_t n_req, n_sync, n_bytes, n_worker, n_sleep;
   /* how long the executor polls an empty ring before it sleeps, in mach ticks (WMTR_HOST_SPIN_US) */
   _Atomic uint64_t spin_ticks;
+  /* VR export (call 146); owned when created from the environment */
+  struct wmtr_vr *_Atomic vr;
+  int owns_vr;
 };
 
 static int log_level = 1;
@@ -135,12 +140,12 @@ frames_out(void) {
  * t_ns,call,name,class,count,sync,exec_ns (plus rows 200/201: executor sleeps and kicks, in count);
  * consecutive snapshots give the per-frame call profile of a
  * running game (presentDrawable = calls 47/48) without touching the guest. Off (one getenv) unless set. */
-static const char *const call_name[146] = {
+static const char *const call_name[WMTR_NCALLS] = {
 #define X(i, n, t, c) [i] = #n,
 #include "wmtr_calls.inc"
 #undef X
 };
-static _Atomic uint64_t cs_count[146], cs_sync[146], cs_ns[146];
+static _Atomic uint64_t cs_count[WMTR_NCALLS], cs_sync[WMTR_NCALLS], cs_ns[WMTR_NCALLS];
 /* executor sleeps (ring empty after the spin) and kicks (a client woke it): rows 200/201, class 9 */
 static _Atomic uint64_t cs_sleeps, cs_kicks;
 static FILE *cs_file;
@@ -151,7 +156,7 @@ callstats_dump(void) {
   pthread_mutex_lock(&cs_lock);
   if (!cs_file) { pthread_mutex_unlock(&cs_lock); return; }
   uint64_t t = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-  for (int i = 0; i < 146; i++) {
+  for (int i = 0; i < WMTR_NCALLS; i++) {
     uint64_t n = atomic_load(&cs_count[i]);
     if (!n) continue;
     fprintf(cs_file, "%llu,%d,%s,%u,%llu,%llu,%llu\n", (unsigned long long)t, i, call_name[i] ? call_name[i] : "?",
@@ -239,7 +244,7 @@ callstats_on(void) {
 
 static inline void
 callstats_add(uint16_t call, int sync, uint64_t ns) {
-  if (call >= 146) return;
+  if (call >= WMTR_NCALLS) return;
   atomic_fetch_add_explicit(&cs_count[call], 1, memory_order_relaxed);
   if (sync) atomic_fetch_add_explicit(&cs_sync[call], 1, memory_order_relaxed);
   atomic_fetch_add_explicit(&cs_ns[call], ns, memory_order_relaxed);
@@ -430,8 +435,9 @@ vpool_keep(uint32_t slot, uint64_t obj) {
   pthread_mutex_unlock(&vpool_lock);
 }
 
-/* results returned autoreleased by DXMT's winemetal_unix.c (4ddb20e); +1 (new/alloc/copy) results and
- * non-object handles are not listed */
+/* results returned autoreleased by DXMT's winemetal_unix.c; +1 (new/alloc/copy) results and non-object
+ * handles are not listed. Out-errors (ret_error) are not either: the pinned DXMT returns them retained
+ * (utmapp/dxmt cc080d00), owned by the caller's WMT::Reference<WMT::Error> */
 static void
 keep_autoreleased(uint32_t slot, uint16_t call, uint8_t *params) {
   switch (call) {
@@ -449,15 +455,6 @@ keep_autoreleased(uint32_t slot, uint16_t call, uint8_t *params) {
     vpool_keep(slot, ret);
     break;
   }
-  case 25: vpool_keep(slot, ((struct unixcall_mtldevice_newlibrary *)params)->ret_error); break;
-  case 29: vpool_keep(slot, ((struct unixcall_mtldevice_newcomputepso *)params)->ret_error); break;
-  case 34: case 131: vpool_keep(slot, ((struct unixcall_mtldevice_newrenderpso *)params)->ret_error); break;
-  case 35: vpool_keep(slot, ((struct unixcall_mtldevice_newmeshrenderpso *)params)->ret_error); break;
-  case 98: vpool_keep(slot, ((struct unixcall_mtllibrary_newfunction_with_constants *)params)->ret_error); break;
-  case 112: vpool_keep(slot, ((struct unixcall_mtldevice_newbinaryarchive *)params)->ret_error); break;
-  case 113: vpool_keep(slot, ((struct unixcall_mtlbinaryarchive_serialize *)params)->ret_error); break;
-  case 132: vpool_keep(slot, ((struct unixcall_mtldevice_newresidencyset *)params)->ret_error); break;
-  case 144: vpool_keep(slot, ((struct unixcall_mtldevice_newlibrarywithsource *)params)->ret_error); break;
   default: break;
   }
 }
@@ -578,6 +575,8 @@ host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr
     if (lid) push_event(h, lid, 0);
     return STATUS_SUCCESS;
   }
+  case 146: /* WMTVRSubmit: the executor's VR exporter (not DXMT's unix side, which has no VR host) */
+    return wmtr_vr_submit(atomic_load(&h->vr), &((struct unixcall_wmtvr_submit *)params)->info);
   case 112: case 113: case 115: case 117: case 119: if (h->ops->map_path) {
     /* the path is the first relocated field of these calls */
     for (int i = 0; i < r->n_reloc; i++) {
@@ -639,8 +638,11 @@ execute(struct wmtr_host *h, uint8_t *rec, uint32_t len) {
   }
   if (st == STATUS_SUCCESS) {
     if (r->h.flags & WMTR_F_CONTROL) {
-      st = STATUS_SUCCESS; /* PING and HELLO need no work */
-    } else if (r->h.call < 146) {
+      if (r->h.call == WMTR_CTL_VR_QUERY) /* answered from cached state: never blocks the executor */
+        st = wmtr_vr_query(atomic_load(&h->vr), payload, r->h.params_size);
+      else
+        st = STATUS_SUCCESS; /* PING and HELLO need no work */
+    } else if (r->h.call < WMTR_NCALLS) {
       if (__atomic_load_n(&h->faulted, __ATOMIC_ACQUIRE)) {
         st = STATUS_ACCESS_VIOLATION; /* this client already faulted the executor: refuse further work */
       } else {
@@ -746,7 +748,7 @@ executor(void *arg) {
     atomic_fetch_add(&h->n_req, 1);
     atomic_fetch_add(&h->n_bytes, hdr.size);
     if (hdr.flags & WMTR_F_SYNC) atomic_fetch_add(&h->n_sync, 1);
-    uint8_t cls = hdr.call < 146 && !(hdr.flags & WMTR_F_CONTROL) ? call_class[hdr.call] : WMTR_CLASS_S;
+    uint8_t cls = hdr.call < WMTR_NCALLS && !(hdr.flags & WMTR_F_CONTROL) ? call_class[hdr.call] : WMTR_CLASS_S;
     if (cls == WMTR_CLASS_B || cls == WMTR_CLASS_C) {
       struct job *j = malloc(sizeof *j);
       j->h = h; j->len = hdr.size; j->copy = malloc(hdr.size);
@@ -760,6 +762,9 @@ executor(void *arg) {
   free(scratch);
   return NULL;
 }
+
+/* WMTR_VR_FD: set while one context owns the launcher's VR link */
+static _Atomic int vr_fd_claimed;
 
 struct wmtr_host *
 wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
@@ -787,8 +792,31 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
   pthread_attr_t a;
   pthread_attr_init(&a);
   pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INTERACTIVE, 0);
+  const char *vs = getenv("WMTR_VR_SOCKET"), *vf = getenv("WMTR_VR_FD"), *vm = getenv("WMTR_VR_MACH_NAME");
+  if (vf && *vf && vm && *vm) {
+    /* steamac-vm (same process) holds the socketpair end and spawned steamac-vrhost with the other one. One
+     * context at a time owns the link (a dup, so closing it does not end the host's session); others get
+     * STATUS_NOT_SUPPORTED for call 146 like plain DXMT. */
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&vr_fd_claimed, &expected, 1)) {
+      int fd = dup(atoi(vf));
+      struct wmtr_vr *vr = fd >= 0 ? wmtr_vr_create(fd, vm) : NULL;
+      LOG(vr ? 1 : 0, "VR link %s (fd %s, %s)\n", vr ? "attached" : "failed", vf, vm);
+      if (vr) { atomic_store(&h->vr, vr); h->owns_vr = 2; }
+      else atomic_store(&vr_fd_claimed, 0);
+    }
+  } else if (vs && *vs && vm && *vm) {
+    struct wmtr_vr *vr = wmtr_vr_connect(vs, vm);
+    LOG(vr ? 1 : 0, "VR link %s (%s, %s)\n", vr ? "connected" : "failed", vs, vm);
+    if (vr) { atomic_store(&h->vr, vr); h->owns_vr = 1; }
+  }
   pthread_create(&h->thread, &a, executor, h);
   return h;
+}
+
+void
+wmtr_host_set_vr(struct wmtr_host *h, struct wmtr_vr *vr) {
+  atomic_store(&h->vr, vr);
 }
 
 void
@@ -825,6 +853,11 @@ wmtr_host_destroy(struct wmtr_host *h) {
   h->n_views = 0;
   free(h->views); h->views = NULL; h->cap_views = 0;
   pthread_mutex_unlock(&h->view_lock);
+  if (h->owns_vr) {
+    wmtr_vr_destroy(atomic_exchange(&h->vr, NULL));
+    if (h->owns_vr == 2) atomic_store(&vr_fd_claimed, 0);
+    h->owns_vr = 0;
+  }
 }
 
 uint64_t

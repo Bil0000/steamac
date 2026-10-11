@@ -45,6 +45,12 @@ enum class Codec : uint8_t
 	raw,
 };
 
+// Interleaved S16 PCM as the headset plays/records it.
+struct AudioFormat
+{
+	uint32_t channels = 0, rate = 0;
+};
+
 struct HeadsetInfo
 {
 	uint32_t eye_width = 0, eye_height = 0; // stream size per eye
@@ -55,6 +61,7 @@ struct HeadsetInfo
 	std::vector<Codec> codecs; // most preferred first
 	bool hand_tracking = false, eye_gaze = false;
 	std::string name;
+	std::optional<AudioFormat> speaker, microphone; // absent: the headset has none
 };
 
 struct TrackedPose
@@ -89,6 +96,13 @@ struct EyeImage
 	IOSurfaceRef surface = nullptr;
 };
 
+// WiVRn foveation_parameter per eye (source-pixel counts per ratio, middle entry 1:1, see compositor/foveation_params.h).
+// Empty = identity (no foveation).
+struct Foveation
+{
+	std::vector<uint16_t> x, y;
+};
+
 struct Frame
 {
 	uint64_t frame_id = 0;
@@ -96,6 +110,7 @@ struct Frame
 	std::array<Pose, 2> pose;     // per-eye pose the app rendered with, in tracking (stage) space
 	std::array<Fov, 2> fov;
 	std::array<EyeImage, 2> eye;
+	std::array<Foveation, 2> foveation; // what the compositor applied; sent with the stream so the client undoes it
 };
 
 class SessionListener
@@ -107,6 +122,8 @@ public:
 	virtual void on_tracking(std::span<const TrackedPose>) {}
 	virtual void on_input(std::span<const InputValue>) {}
 	virtual void on_refresh_rate(float hz) {}
+	// Headset microphone PCM, HeadsetInfo::microphone format (only while set_microphone(true)).
+	virtual void on_microphone(std::span<const int16_t> pcm, ns time) {}
 };
 
 class VrSession
@@ -126,6 +143,10 @@ public:
 	virtual void submit(const Frame &) = 0;
 	virtual void haptics(Device, float duration_s, float frequency, float amplitude) = 0;
 	virtual void request_idr() = 0;
+	// Speaker PCM for the headset, HeadsetInfo::speaker format; send at the audio quantum (5 ms), not buffered.
+	virtual void send_audio(std::span<const int16_t> pcm) = 0;
+	// Ask the headset to start/stop sending its microphone (WiVRn feature_control). Remembered across reconnects.
+	virtual void set_microphone(bool on) = 0;
 };
 
 } // namespace vrhost

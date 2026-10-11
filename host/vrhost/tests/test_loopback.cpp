@@ -2,7 +2,9 @@
 // End-to-end over loopback: WivrnSession + test pattern (as in `steamac-vrhost --testpattern`) against the fake
 // headset: handshake, stream description, tracking control, timesync, shards over UDP (IDR over TCP), decode, frame
 // identity, IDR after a lost frame, and the incompatible-version path; then the same with WiVRn's encryption on:
-// PIN pairing (SMP), reconnect of a paired headset, wrong PIN, pairing disabled.
+// PIN pairing (SMP), reconnect of a paired headset, wrong PIN, pairing disabled; and audio both ways plus haptics
+// through the VR audio region (a simulated libkrun side on the other end of the shared memory).
+#include "audio/audio_bridge.h"
 #include "check.h"
 #include "fake_headset.h"
 #include "pattern/test_pattern.h"
@@ -10,12 +12,16 @@
 #include "wivrn/wivrn_session.h"
 
 #include <csignal>
+#include <fcntl.h>
+#include <future>
+#include <sys/mman.h>
 #include <filesystem>
 #include <cstdio>
 #include <thread>
 #include <unistd.h>
 
 #include "crypto.h"
+#include "wivrn_packets.h"
 
 using namespace vrhost;
 
@@ -37,6 +43,7 @@ static CVPixelBufferRef make_nv12(uint32_t w, uint32_t h)
 struct Server
 {
 	WivrnSession session;
+	std::unique_ptr<AudioBridge> audio;
 	std::atomic<bool> stop{false};
 	std::thread producer;
 
@@ -47,10 +54,12 @@ struct Server
 		cfg.log = [](const std::string & s) { printf("[server] %s\n", s.c_str()); };
 		return cfg;
 	}
-	explicit Server(WivrnConfig cfg) :
+	explicit Server(WivrnConfig cfg, vra_region * audio_region = nullptr) :
 	        session(local(std::move(cfg)))
 	{
-		session.start(nullptr);
+		if (audio_region)
+			audio = std::make_unique<AudioBridge>(audio_region, session, nullptr);
+		session.start(audio.get());
 		producer = std::thread([this] {
 			TestPattern pattern;
 			std::array<CVPixelBufferRef, 2> bufs{};
@@ -87,6 +96,7 @@ struct Server
 		stop = true;
 		producer.join();
 		session.stop();
+		audio.reset();
 	}
 	void wait_disconnect()
 	{
@@ -103,6 +113,167 @@ static void print(const char * what, const FakeHeadsetResult & r)
 	       r.timesync_queries, r.decoded[0], r.decoded[1], r.index_mismatch[0], r.index_mismatch[1], r.idr[0], r.idr[1],
 	       r.idr_after_drop, r.decoded_after_drop, r.shards, r.max_shard_bytes, r.view_info_ok, r.display_time_offset_ms,
 	       r.error.c_str());
+}
+
+static double tone_hz(const std::vector<int16_t> & v, uint32_t ch, uint32_t rate, size_t from, size_t to)
+{
+	int rising = 0;
+	size_t first = 0, last = 0;
+	for (size_t f = from + 1; f < to; ++f)
+		if (v[(f - 1) * ch] < 0 and v[f * ch] >= 0)
+		{
+			if (not rising)
+				first = f;
+			last = f;
+			rising++;
+		}
+	return rising > 1 ? double(rising - 1) * rate / double(last - first) : 0;
+}
+
+// 7. Audio both ways and haptics, as in a VR session: the region is created like steamac-vm does (shm, unlinked,
+// fd passed) and mapped through AudioBridge::map; the libkrun side is simulated by two threads: a "render callback"
+// writing a 1 kHz stereo tone into the play ring every 10 ms (a 480-frame CoreAudio IO buffer) with a marker burst,
+// and a "capture pump" that marks the mic ring active and reads it every 2 ms. The fake headset plays back what it
+// receives and sends a 440 Hz microphone tone with its own marker. Latency bound: marker written -> headset
+// received, and headset sent -> mic ring read, each below 30 ms on loopback (the bridge adds at most one 5 ms tick).
+static void test_audio()
+{
+	char name[64];
+	snprintf(name, sizeof name, "/vrhost-test-%d", getpid());
+	int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+	REQUIRE(fd >= 0);
+	shm_unlink(name);
+	REQUIRE(ftruncate(fd, VRA_REGION_BYTES) == 0);
+	{
+		void * p = mmap(nullptr, VRA_REGION_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		REQUIRE(p != MAP_FAILED);
+		vra_region_init(static_cast<vra_region *>(p));
+		munmap(p, VRA_REGION_BYTES);
+	}
+	vra_region * hostside = AudioBridge::map(fd);  // steamac-vrhost --audio-fd
+	REQUIRE(hostside != nullptr);
+	auto * vm = static_cast<vra_region *>(mmap(nullptr, VRA_REGION_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+	REQUIRE(vm != MAP_FAILED); // the libkrun side's own mapping
+	close(fd);
+	{
+		int bad = shm_open("/vrhost-test-bad", O_RDWR | O_CREAT, 0600);
+		shm_unlink("/vrhost-test-bad");
+		ftruncate(bad, VRA_REGION_BYTES);
+		CHECK(AudioBridge::map(bad) == nullptr); // zeroed region: refused
+		close(bad);
+	}
+
+	Server srv({.encryption = WivrnConfig::Encryption::disabled}, hostside);
+
+	std::atomic<bool> stop{false};
+	std::atomic<int64_t> marker_written{0}, mic_marker_read{0};
+	std::atomic<size_t> written{0}, mic_read{0};
+	std::atomic<double> mic_hz{0};
+	std::atomic<bool> saw_headset{false};
+	std::thread render([&] {
+		std::atomic_ref<uint32_t>(vm->play.rate).store(48000, std::memory_order_release);
+		const size_t chunk = 480, marker_at = 48000 * 6 / 10; // 600 ms in
+		std::vector<int16_t> buf(chunk * 2);
+		size_t k = 0;
+		auto t = std::chrono::steady_clock::now();
+		while (not stop)
+		{
+			for (size_t f = 0; f < chunk; ++f, ++k)
+			{
+				int16_t v = int16_t(std::lround(8000 * std::sin(2 * M_PI * 1000 * double(k) / 48000)));
+				if (k >= marker_at and k < marker_at + 48)
+					v = 30000;
+				buf[2 * f] = buf[2 * f + 1] = v;
+			}
+			if (k - chunk <= marker_at and marker_at < k)
+				marker_written = now_ns();
+			if (std::atomic_ref<uint32_t>(vm->headset).load() == (VRA_HEADSET_SPEAKER | VRA_HEADSET_MIC))
+				saw_headset = true;
+			pcm::ring_write(vm->play, vm->play_data, buf.data(), chunk);
+			written += chunk;
+			t += std::chrono::milliseconds(10);
+			std::this_thread::sleep_until(t);
+		}
+	});
+	std::thread capture([&] {
+		std::atomic_ref<uint32_t>(vm->mic.active).store(1, std::memory_order_release);
+		std::vector<int16_t> got;
+		std::vector<int16_t> buf(4096);
+		while (not stop)
+		{
+			size_t n = pcm::ring_read(vm->mic, vm->mic_data, buf.data(), buf.size());
+			for (size_t i = 0; i < n; ++i)
+				if (buf[i] > 25000 and not mic_marker_read)
+					mic_marker_read = now_ns();
+			got.insert(got.end(), buf.begin(), buf.begin() + n);
+			mic_read += n;
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
+		if (got.size() > 4800)
+			mic_hz = tone_hz(got, 1, 48000, 0, std::min<size_t>(got.size(), 48000 * 25 / 100)); // before the marker
+	});
+
+	auto fut = std::async(std::launch::async, [&] {
+		return run_fake_headset({.port = srv.session.port(), .frames = 110, .speaker_channels = 2, .speaker_rate = 48000,
+		                         .mic_channels = 1, .mic_rate = 48000});
+	});
+	// haptics to the left controller while streaming, one with out-of-range values (clamped by the session)
+	for (int i = 0; i < 200 and not srv.session.connected(); ++i)
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	srv.session.haptics(Device::left_grip, 0.1f, 160, 0.5f);
+	srv.session.haptics(Device::right_grip, 9.f, NAN, 7.f);
+	auto r = fut.get();
+	stop = true;
+	render.join();
+	capture.join();
+	print("audio", r);
+
+	CHECK(r.error.empty());
+	CHECK(r.got_audio_description);
+	CHECK(saw_headset); // the VM side saw the headset's speaker and microphone announced
+	CHECK(vm->beat > 20);
+	CHECK(not r.mic_feature.empty() and r.mic_feature.back());
+	// speaker: everything written while connected arrives in <= 5 ms packets, at 1 kHz, marker within 30 ms
+	size_t frames = r.speaker.size() / 2;
+	int64_t marker_recv = 0;
+	size_t marker_idx = 0;
+	for (size_t f = 0; f < frames; ++f)
+		if (r.speaker[2 * f] > 25000 and r.speaker[2 * f + 1] > 25000)
+		{
+			marker_idx = f;
+			break;
+		}
+	for (auto & [t, n]: r.speaker_arrivals)
+		if (marker_idx and n > marker_idx)
+		{
+			marker_recv = t;
+			break;
+		}
+	double spk_lat = marker_recv && marker_written ? (marker_recv - marker_written) / 1e6 : -1;
+	double spk_hz = marker_idx > 4800 ? tone_hz(r.speaker, 2, 48000, 0, marker_idx - 10) : 0;
+	double mic_lat = mic_marker_read && r.mic_marker_sent_ns ? (mic_marker_read - r.mic_marker_sent_ns) / 1e6 : -1;
+	auto & bst = srv.audio->stats();
+	printf("audio: speaker %zu frames in %d packets (max %d frames), %.1f Hz, marker latency %.2f ms, discarded %llu; "
+	       "mic sent %zu read %zu, %.1f Hz, marker latency %.2f ms; haptics %zu\n",
+	       frames, r.speaker_packets, r.max_speaker_packet_frames, spk_hz, spk_lat,
+	       (unsigned long long)bst.speaker_discarded.load(), r.mic_frames_sent, mic_read.load(), mic_hz.load(), mic_lat,
+	       r.haptics.size());
+	CHECK(r.max_speaker_packet_frames <= 240);
+	CHECK(std::abs(spk_hz - 1000) < 5);
+	CHECK(spk_lat >= 0 and spk_lat < 30);
+	CHECK(frames + bst.speaker_discarded >= written.load() * 9 / 10);
+	CHECK(r.mic_frames_sent > 4800 and mic_read.load() + 480 >= r.mic_frames_sent);
+	CHECK(std::abs(mic_hz.load() - 440) < 5);
+	CHECK(mic_lat >= 0 and mic_lat < 30);
+	REQUIRE(r.haptics.size() == 2);
+	CHECK(r.haptics[0].device == int(wivrn::device_id::LEFT_CONTROLLER_HAPTIC));
+	CHECK(std::abs(r.haptics[0].duration_ns - 100'000'000) < 10 and r.haptics[0].frequency == 160 and r.haptics[0].amplitude == 0.5f);
+	CHECK(r.haptics[1].device == int(wivrn::device_id::RIGHT_CONTROLLER_HAPTIC));
+	CHECK(r.haptics[1].duration_ns == 5'000'000'000 and r.haptics[1].frequency == 0 and r.haptics[1].amplitude == 1.f);
+	CHECK(srv.session.stats().haptics == 2);
+	munmap(vm, VRA_REGION_BYTES);
+	// hostside stays mapped until exit (the bridge is gone with srv)
 }
 
 int main()
@@ -209,5 +380,6 @@ int main()
 		CHECK(unknown.handshake_state == "pairing_disabled");
 	}
 	std::filesystem::remove_all(dir_template);
+	test_audio();
 	return test_result("loopback");
 }

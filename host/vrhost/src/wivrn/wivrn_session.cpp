@@ -258,6 +258,7 @@ struct WivrnSession::impl
 	std::optional<HeadsetInfo> info;
 	std::atomic<bool> is_connected{false};
 	std::atomic<float> refresh{72};
+	std::atomic<bool> mic_wanted{false}; // set_microphone(); re-sent on every connection
 
 	ClockOffset clock;
 	std::array<PoseHistory, size_t(Device::count)> history;
@@ -507,6 +508,10 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	h.hand_tracking = hi.hand_tracking;
 	h.eye_gaze = hi.eye_gaze;
 	h.name = hi.system_name;
+	if (hi.speaker and hi.speaker->num_channels and hi.speaker->sample_rate)
+		h.speaker = AudioFormat{hi.speaker->num_channels, hi.speaker->sample_rate};
+	if (hi.microphone and hi.microphone->num_channels and hi.microphone->sample_rate)
+		h.microphone = AudioFormat{hi.microphone->num_channels, hi.microphone->sample_rate};
 	refresh = h.preferred_refresh_rate;
 	pacer.set_frame_duration(uint64_t(1e9 / h.preferred_refresh_rate));
 	pacer.reset();
@@ -557,6 +562,19 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	}
 	tc.motions_to_photons = latency;
 	control->send(std::move(tc));
+
+	// Audio as WiVRn's audio_pipewire resume(): the streams the headset offered, in its own formats (the bridge
+	// converts), and whether it should send its microphone.
+	th::audio_stream_description ad{};
+	if (h.speaker)
+		ad.speaker = th::audio_stream_description::device{uint8_t(h.speaker->channels), h.speaker->rate};
+	if (h.microphone)
+		ad.microphone = th::audio_stream_description::device{uint8_t(h.microphone->channels), h.microphone->rate};
+	if (ad.speaker or ad.microphone)
+	{
+		control->send(std::move(ad));
+		control->send(th::feature_control{th::feature_control::microphone, h.microphone and mic_wanted.load()});
+	}
 
 	{
 		std::lock_guard lock(cnx_mutex);
@@ -653,9 +671,17 @@ void WivrnSession::impl::handle(fh::packets && packet)
 			        if (listener)
 				        listener->on_refresh_rate(pkt.to);
 		        }
+		        else if constexpr (std::is_same_v<T, wivrn::audio_data>)
+		        {
+			        stats.mic_packets++;
+			        if (listener and pkt.payload.size() >= 2)
+				        listener->on_microphone(
+				                std::span(reinterpret_cast<const int16_t *>(pkt.payload.data()), pkt.payload.size() / 2),
+				                clock.from_headset(pkt.timestamp));
+		        }
 		        else
 		        {
-			        // Remaining packets (audio, hand/body/face tracking, app launcher, battery, ...) are not used by M0.
+			        // Remaining packets ( hand/body/face tracking, app launcher, battery, ...) are not used by M0.
 		        }
 	        },
 	        std::move(packet));
@@ -788,9 +814,10 @@ void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferR
 	{
 		vi.pose[i] = to_xr(f.pose[i]);
 		vi.fov[i] = to_xr(f.fov[i]);
-		// Identity foveation: one 1:1 band covering the whole axis (stream_defoveator::defoveated_size = W x H).
-		vi.foveation[i].x = {width};
-		vi.foveation[i].y = {height};
+		// The compositor's foveation (WiVRn foveation_parameter), or identity: one 1:1 band covering the whole axis
+		// (stream_defoveator::defoveated_size = W x H).
+		vi.foveation[i].x = f.foveation[i].x.empty() ? std::vector<uint16_t>{width} : f.foveation[i].x;
+		vi.foveation[i].y = f.foveation[i].y.empty() ? std::vector<uint16_t>{height} : f.foveation[i].y;
 	}
 	vi.alpha = false;
 	shard.view_info = vi;
@@ -1006,13 +1033,17 @@ void WivrnSession::submit(const Frame & f)
 
 void WivrnSession::haptics(Device d, float duration_s, float frequency, float amplitude)
 {
+	// docs/vr-interfaces.md 5.3: NaN/negative -> 0, duration at most 5 s, amplitude 0..1; frequency 0 = the
+	// runtime's default (OpenXR XR_FREQUENCY_UNSPECIFIED), duration 0 = the shortest pulse (XR_MIN_HAPTIC_DURATION).
+	auto clean = [](float v, float hi) { return std::isfinite(v) ? std::clamp(v, 0.f, hi) : 0.f; };
 	std::lock_guard lock(p->cnx_mutex);
 	th::haptics h{
 	        .id = from_device(d),
-	        .duration = std::chrono::nanoseconds(int64_t(duration_s * 1e9)),
-	        .frequency = frequency,
-	        .amplitude = amplitude,
+	        .duration = std::chrono::nanoseconds(int64_t(double(clean(duration_s, 5.f)) * 1e9)),
+	        .frequency = clean(frequency, 1e5f),
+	        .amplitude = clean(amplitude, 1.f),
 	};
+	p->stats.haptics++;
 	if (p->stream)
 		p->stream->send(std::move(h));
 	else if (p->control)
@@ -1023,5 +1054,28 @@ void WivrnSession::request_idr()
 {
 	for (auto & i: p->idr)
 		i.request();
+}
+void WivrnSession::send_audio(std::span<const int16_t> pcm)
+{
+	if (pcm.empty() or not p->is_connected)
+		return;
+	std::lock_guard lock(p->cnx_mutex);
+	if (not p->control)
+		return;
+	// Like WiVRn's speaker_process: one packet per quantum on the control channel, stamped with the send time.
+	p->control->send(wivrn::audio_data{
+	        .timestamp = p->clock.to_headset(now_ns()),
+	        .payload = std::span(reinterpret_cast<uint8_t *>(const_cast<int16_t *>(pcm.data())), pcm.size_bytes()),
+	});
+	p->stats.audio_packets++;
+}
+
+void WivrnSession::set_microphone(bool on)
+{
+	if (p->mic_wanted.exchange(on) == on)
+		return;
+	std::lock_guard lock(p->cnx_mutex);
+	if (p->control and p->info and p->info->microphone)
+		p->control->send(th::feature_control{th::feature_control::microphone, on});
 }
 } // namespace vrhost

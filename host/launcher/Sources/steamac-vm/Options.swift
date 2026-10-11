@@ -79,6 +79,9 @@ struct Options {
     /// Settings > Advanced "Frame latency" (kernel cmdline `steamac.frame_latency=1`): the guest's
     /// DXVK config gets dxgi.maxFrameLatency = 1 for the Vulkan path. Default false: unset.
     var frameLatency = false
+    /// Settings > Advanced "VR (experimental)" / --vr: start steamac-vrhost with the VM (VRHost). Default off.
+    var vr = false
+    var selftestVR = false
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
     var gvproxyPath: String?
@@ -142,6 +145,7 @@ struct Options {
                       [--no-crash-reports] [--steam-client frame|deck|deckbeta]
                       [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan]
                       [--frame-latency | --no-frame-latency] [--lan-remote-play | --no-lan-remote-play]
+                      [--vr | --no-vr]
            steamac-vm --selftest-display [--headless] [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-overlay [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-stall [--selftest-out DIR] [--display WxH]
@@ -237,6 +241,13 @@ struct Options {
                            dxgi.maxFrameLatency = 1 (Vulkan path only), trading some throughput for
                            lower input latency. Off means no key is added, so the guest side is
                            unchanged. --no-frame-latency turns it off for this run.
+      --vr                 VR, experimental (default: Settings > Advanced "VR (experimental)", off):
+                           starts steamac-vrhost (WiVRn-compatible headset server, bundled) with the
+                           VM and links it to the DXMT path's Metal executor, so games' eye textures
+                           stream to a headset running the WiVRn client. Needs the DXMT graphics
+                           path. --no-vr turns it off for this run. Log:
+                           ~/Library/Logs/es.fxgam.steamac/steamac-vrhost.log
+      --selftest-vr        spawn/teardown self-test of steamac-vrhost (no VM, no headset)
 
     Creating a SteamOS disk (no Docker; the same code as Settings > Advanced "Create New Disk…"):
       --create-disk PATH   download the signed SteamOS bundle of the branch (default: the saved setting,
@@ -387,6 +398,9 @@ struct Options {
             case "--selftest-graphics-path": o.selftestGraphicsPath = true
             case "--frame-latency": o.frameLatency = true
             case "--no-frame-latency": o.frameLatency = false
+            case "--vr": o.vr = true
+            case "--no-vr": o.vr = false
+            case "--selftest-vr": o.selftestVR = true
             case "--vulkan-driver":
                 let v = try value(a)
                 guard let d = LauncherSettings.VulkanDriver(rawValue: v) else {
@@ -488,7 +502,7 @@ struct Options {
 
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
-            || selftestMetalCache || selftestGameLayers || createDisk != nil || growDisk != nil
+            || selftestMetalCache || selftestGameLayers || selftestVR || createDisk != nil || growDisk != nil
             || showSSHPassword != nil
     }
 
@@ -584,6 +598,7 @@ struct Options {
         if given("--frame-latency") || given("--no-frame-latency") {
             ov[.frameLatency] = frameLatency ? "--frame-latency" : "--no-frame-latency"
         } else { frameLatency = s.frameLatency }
+        if given("--vr") || given("--no-vr") { ov[.vrEnabled] = vr ? "--vr" : "--no-vr" } else { vr = s.vrEnabled }
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }

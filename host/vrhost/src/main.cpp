@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // steamac-vrhost: Mac-native VR host. M0 modes:
+//   --audio-fd N           game audio / headset microphone via the VR audio region (docs/vr-interfaces.md section 6)
 //   --testpattern          serve a world-locked test pattern to a WiVRn client (Quest/Pico app, Steam Frame client)
 //   --selftest-encoder     headless VideoToolbox latency self-test (no network, no headset)
 //   --protocol             print the pinned WiVRn protocol hash and exit
+//   --link-fd N --mach-name NAME   game frames from steamac-vm (VR link, docs/vr-interfaces.md section 3)
 //   --show-pin             print the PIN of the running host (pairing mode)
 //   --list-headsets / --unpair NAME / --unpair-all   manage paired headsets
+#include "audio/audio_bridge.h"
 #include "encoder/vt_encoder.h"
 #include "pattern/test_pattern.h"
+#include "pipeline/vr_pipeline.h"
 #include "session/clock.h"
 #include "wivrn/annexb.h"
 #include "wivrn/known_keys.h"
@@ -23,6 +27,8 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <memory>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <string>
 #include <memory>
@@ -37,7 +43,11 @@ static void usage()
 {
 	fprintf(stderr,
 	        "usage: steamac-vrhost [--testpattern] [--selftest-encoder] [--protocol]\n"
+	        "  --link-fd N         serve game frames from steamac-vm over this SOCK_DGRAM fd (with --mach-name)\n"
+	        "  --mach-name NAME    bootstrap name for the swapchain IOSurface ports\n"
+	        "  --link-socket PATH  manual runs: accept the link from wmtr_vr_connect at PATH\n"
 	        "       steamac-vrhost --show-pin | --list-headsets | --unpair NAME | --unpair-all\n"
+	        "  --audio-fd N        VR audio region fd from steamac-vm (game audio to the headset, its microphone back)\n"
 	        "  --pair              accept new headsets (PIN pairing); default only when no headset is paired yet\n"
 	        "  --pin NNNNNN        pairing PIN (default: random, printed and readable with --show-pin)\n"
 	        "  --no-encryption     WiVRn's 'encryption disabled' mode (trusted LAN only)\n"
@@ -217,17 +227,9 @@ static std::filesystem::path pin_file()
 	return KnownKeys::default_dir() / "pin";
 }
 
-static int testpattern(WivrnConfig cfg)
+// PIN for a new headset (printed and readable with --show-pin), or the pairing state.
+static void announce_pairing(WivrnSession & session, const WivrnConfig & cfg)
 {
-	cfg.log = [](const std::string & s) {
-		printf("[vrhost] %s\n", s.c_str());
-		fflush(stdout);
-	};
-	WivrnSession session(cfg);
-	PatternSource src;
-	session.start(&src);
-	printf("steamac-vrhost: listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n", session.port(),
-	       WivrnSession::protocol_version(), cfg.advertise ? ", advertised as _wivrn._tcp" : "");
 	if (auto pin = session.pin(); not pin.empty())
 	{
 		printf("To pair a new headset use PIN code: %s\n", pin.c_str());
@@ -238,6 +240,30 @@ static int testpattern(WivrnConfig cfg)
 	else
 		printf("encryption %s, pairing disabled (--pair to pair a new headset)\n",
 		       cfg.encryption == WivrnConfig::Encryption::disabled ? "disabled" : "on");
+}
+
+static int g_audio_fd = -1;
+
+static int testpattern(WivrnConfig cfg)
+{
+	cfg.log = [](const std::string & s) {
+		printf("[vrhost] %s\n", s.c_str());
+		fflush(stdout);
+	};
+	WivrnSession session(cfg);
+	PatternSource src;
+	std::unique_ptr<AudioBridge> audio;
+	if (g_audio_fd >= 0)
+	{
+		vra_region * region = AudioBridge::map(g_audio_fd);
+		if (not region)
+			return 1;
+		audio = std::make_unique<AudioBridge>(region, session, &src);
+	}
+	session.start(audio ? static_cast<SessionListener *>(audio.get()) : &src);
+	printf("steamac-vrhost: listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n", session.port(),
+	       WivrnSession::protocol_version(), cfg.advertise ? ", advertised as _wivrn._tcp" : "");
+	announce_pairing(session, cfg);
 	fflush(stdout);
 
 	TestPattern pattern;
@@ -287,11 +313,77 @@ static int testpattern(WivrnConfig cfg)
 		}
 	}
 	session.stop();
+	audio.reset();
 	if (not session.pin().empty())
 		std::filesystem::remove(pin_file());
 	for (auto b: bufs)
 		if (b)
 			CVPixelBufferRelease(b);
+	return 0;
+}
+
+// Game frames: VR link -> compositor -> WiVRn session. Ends on SIGTERM/SIGINT or when steamac-vm closes the link.
+static int serve_link(WivrnConfig cfg, int link_fd, const std::string & link_socket, const std::string & mach_name,
+                      int audio_fd)
+{
+	cfg.log = [](const std::string & s) {
+		printf("[vrhost] %s\n", s.c_str());
+		fflush(stdout);
+	};
+	if (link_fd < 0)
+	{
+		printf("steamac-vrhost: waiting for the VR link on %s\n", link_socket.c_str());
+		fflush(stdout);
+		while (link_fd < 0 and not g_quit)
+			link_fd = VrLinkServer::accept_one(link_socket, 1000);
+		if (link_fd < 0)
+			return 0;
+	}
+	WivrnSession session(cfg);
+	VrPipeline pipeline(session, link_fd, mach_name);
+	vra_region * audio_region = nullptr;
+	std::unique_ptr<AudioBridge> audio;
+	if (audio_fd >= 0)
+	{
+		audio_region = AudioBridge::map(audio_fd);
+		if (not audio_region)
+			return 1;
+		audio = std::make_unique<AudioBridge>(audio_region, session, &pipeline);
+	}
+	session.start(audio ? static_cast<SessionListener *>(audio.get()) : &pipeline); // state / input / audio to the guest
+	printf("steamac-vrhost: VR link fd %d, mach name %s, listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n",
+	       link_fd, mach_name.c_str(), session.port(), WivrnSession::protocol_version(),
+	       cfg.advertise ? ", advertised as _wivrn._tcp" : "");
+	announce_pairing(session, cfg);
+	fflush(stdout);
+	ns last_report = now_ns();
+	while (not g_quit and not pipeline.peer_closed())
+	{
+		timespec ts{0, 50'000'000};
+		nanosleep(&ts, nullptr);
+		if (now_ns() - last_report > 5'000'000'000)
+		{
+			auto & s = session.stats();
+			auto & ps = pipeline.stats();
+			auto l = pipeline.take_latency();
+			auto q = [](const std::vector<double> & v, double p) { return v.empty() ? 0.0 : pct(v, p); };
+			printf("link frames %" PRIu64 " submitted %" PRIu64 " (no headset %" PRIu64 ") sent %" PRIu64 " idr %" PRIu64
+			       " | ms p50/p99: submit->copied %.2f/%.2f copied->host %.3f/%.3f host->sent %.2f/%.2f total %.2f/%.2f"
+			       " compositor GPU %.2f | last encode %.2f, headset decode %.2f\n",
+			       ps.received.load(), ps.submitted.load(), ps.no_headset.load(), s.frames_sent.load(), s.idr_sent.load(),
+			       q(l.submit_to_copied, .5), q(l.submit_to_copied, .99), q(l.copied_to_received, .5),
+			       q(l.copied_to_received, .99), q(l.received_to_sent, .5), q(l.received_to_sent, .99), q(l.total, .5),
+			       q(l.total, .99), q(l.compose_gpu, .5), s.last_encode_ns / 1e6, s.last_feedback_decode_ns / 1e6);
+			fflush(stdout);
+			last_report = now_ns();
+		}
+	}
+	printf("steamac-vrhost: %s\n", g_quit ? "stopping" : "VR link closed by steamac-vm, stopping");
+	fflush(stdout);
+	session.stop();
+	audio.reset(); // joins its tick thread and clears the guest-facing headset capability word
+	if (audio_region)
+		munmap(audio_region, VRA_REGION_BYTES);
 	return 0;
 }
 
@@ -305,6 +397,7 @@ int main(int argc, char ** argv)
 	{
 		none,
 		pattern,
+		link,
 		selftest,
 		protocol,
 		show_pin,
@@ -316,6 +409,8 @@ int main(int argc, char ** argv)
 	WivrnConfig cfg;
 	uint32_t w = 0, h = 0;
 	SelftestOptions st;
+	int link_fd = -1;
+	std::string mach_name, link_socket;
 	for (int i = 1; i < argc; ++i)
 	{
 		std::string a = argv[i];
@@ -333,6 +428,18 @@ int main(int argc, char ** argv)
 			mode = selftest;
 		else if (a == "--protocol")
 			mode = protocol;
+		else if (a == "--link-fd")
+		{
+			mode = link;
+			link_fd = std::stoi(next());
+		}
+		else if (a == "--link-socket")
+		{
+			mode = link;
+			link_socket = next();
+		}
+		else if (a == "--mach-name")
+			mach_name = next();
 		else if (a == "--show-pin")
 			mode = show_pin;
 		else if (a == "--list-headsets")
@@ -344,6 +451,8 @@ int main(int argc, char ** argv)
 		}
 		else if (a == "--unpair-all")
 			mode = unpair;
+		else if (a == "--audio-fd")
+			g_audio_fd = std::stoi(next());
 		else if (a == "--pair")
 			pair = true;
 		else if (a == "--pin")
@@ -442,6 +551,12 @@ int main(int argc, char ** argv)
 				return 0;
 			}
 			case pattern:
+			case link:
+				if (mode == link and mach_name.empty())
+				{
+					usage();
+					return 2;
+				}
 				// WiVRn's main.cpp: encryption on, pairing when asked or while no headset is paired yet.
 				if (cfg.encryption != WivrnConfig::Encryption::disabled)
 					cfg.encryption = pair or KnownKeys(KnownKeys::default_dir() / "known_keys").list().empty()
@@ -449,7 +564,7 @@ int main(int argc, char ** argv)
 					                         : WivrnConfig::Encryption::enabled;
 				cfg.width = w;
 				cfg.height = h;
-				return testpattern(cfg);
+				return mode == link ? serve_link(cfg, link_fd, link_socket, mach_name, g_audio_fd) : testpattern(cfg);
 			case none:
 				usage();
 				return 2;

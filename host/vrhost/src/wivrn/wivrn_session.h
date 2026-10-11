@@ -43,7 +43,7 @@ struct WivrnConfig
 struct WivrnStats
 {
 	std::atomic<uint64_t> paired{0}, frames_sent{0}, idr_sent{0}, idr_requests{0}, feedback{0}, tracking{0}, timesync{0},
-	        bytes_sent{0};
+	        bytes_sent{0}, audio_packets{0}, mic_packets{0}, haptics{0};
 	std::atomic<int64_t> last_encode_ns{0};
 	std::atomic<int64_t> last_feedback_decode_ns{0}; // received_from_decoder - received_first_packet, headset clock
 };
@@ -64,6 +64,8 @@ public:
 	void submit(const Frame &) override;
 	void haptics(Device, float duration_s, float frequency, float amplitude) override;
 	void request_idr() override;
+	void send_audio(std::span<const int16_t> pcm) override;
+	void set_microphone(bool on) override;
 
 	int port() const;
 	std::string pin() const; // the pairing PIN ("" unless encryption == pairing) // bound port (useful with port = 0 in tests)

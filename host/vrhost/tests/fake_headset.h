@@ -3,9 +3,11 @@
 // disabled, or PIN pairing + AES-128-CTR with WiVRn's own crypto/smp/secrets code) over loopback, sends headset info / tracking / timesync answers / feedback, and reassembles and decodes the
 // video shards with VideoToolbox. The end-to-end check against the real WiVRn client is done separately (docs/vr.md).
 #pragma once
+#include <CoreVideo/CoreVideo.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,6 +28,17 @@ struct FakeHeadsetOptions
 	int64_t decode_ns = 0;
 	int64_t display_period_ns = 0; // 0 = report no blit/display times
 	int64_t display_phase_ns = 0;
+	bool identity_foveation = true;          // view_info must carry identity foveation (game frames: foveated)
+	std::function<void(int eye, uint64_t frame_idx, CVPixelBufferRef)> on_decoded; // optional content check
+	// Audio (WiVRn headset_info speaker/microphone). Microphone: once the server enables it (feature_control), send
+	// a mic_tone_hz sine (amplitude 8000) in 5 ms packets, with a full-scale marker of 48 frames mic_marker_ms after
+	// the first packet.
+	uint8_t speaker_channels = 0; // 0 = no speaker
+	uint32_t speaker_rate = 48000;
+	uint8_t mic_channels = 0; // 0 = no microphone
+	uint32_t mic_rate = 48000;
+	double mic_tone_hz = 440;
+	int mic_marker_ms = 300;
 };
 
 struct FakeHeadsetResult
@@ -45,6 +58,22 @@ struct FakeHeadsetResult
 	int shards = 0, max_shard_bytes = 0;
 	bool view_info_ok = true;    // first shard carries view_info with identity foveation and plausible poses
 	double display_time_offset_ms = 0; // view_info.display_time - (host now + clock_offset), last frame
+	std::array<std::vector<uint16_t>, 2> foveation_x, foveation_y; // view_info foveation of the last decoded frame
+	// audio
+	bool got_audio_description = false; // matches what the headset offered
+	std::vector<bool> mic_feature;      // feature_control(microphone) states received, in order
+	std::vector<int16_t> speaker;       // all speaker PCM received, interleaved
+	int speaker_packets = 0, max_speaker_packet_frames = 0;
+	std::vector<std::pair<int64_t, size_t>> speaker_arrivals; // (host ns, frames received so far after it)
+	int64_t mic_marker_sent_ns = 0;     // host clock
+	size_t mic_frames_sent = 0;
+	struct Haptic
+	{
+		int device;
+		int64_t duration_ns;
+		float frequency, amplitude;
+	};
+	std::vector<Haptic> haptics;
 };
 
 FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions &);

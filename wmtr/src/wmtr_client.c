@@ -310,7 +310,7 @@ static NTSTATUS send_built_flags(uint16_t call, uint16_t extra_flags, void *para
 #define WMTR_CLS_B 2
 #define WMTR_CLS_C 3
 #define WMTR_CLS_N 1
-static const uint8_t call_cls[146] = {
+static const uint8_t call_cls[WMTR_NCALLS] = {
 #define X(i, n, t, c) [i] = WMTR_CLS_##c,
 #include "wmtr_calls.inc"
 #undef X
@@ -375,7 +375,7 @@ send_built_flags(uint16_t call, uint16_t extra_flags, void *params, uint32_t par
   struct wmtr_slot *s = &slots[slot];
   if (__atomic_load_n(&s->done_seq, __ATOMIC_ACQUIRE) < seq) {
     __atomic_store_n(&s->waiting, 1, __ATOMIC_SEQ_CST);
-    int cls = (extra_flags & WMTR_F_CONTROL) || call >= 146 ? WMTR_CLS_S : call_cls[call];
+    int cls = (extra_flags & WMTR_F_CONTROL) || call >= WMTR_NCALLS ? WMTR_CLS_S : call_cls[call];
     T->wait(T, &s->done_seq, seq, slot, wmtr_spin_budget_ns(cls));
     __atomic_store_n(&s->waiting, 0, __ATOMIC_RELAXED);
   }
@@ -577,6 +577,8 @@ marshal_sm50_args(uint32_t field_off, const struct SM50_SHADER_COMPILATION_ARGUM
     case SM50_SHADER_GS_PASS_THROUGH: sz = sizeof(struct SM50_SHADER_GS_PASS_THROUGH_DATA); break;
     case SM50_SHADER_PSO_GEOMETRY_SHADER: sz = sizeof(struct SM50_SHADER_PSO_GEOMETRY_SHADER_DATA); break;
     case SM50_SHADER_PSO_TESSELLATOR: sz = sizeof(struct SM50_SHADER_PSO_TESSELLATOR_DATA); break;
+    /* D3D12: the serialized root signature (ROOT_SIGNATURE2: the vertex stage's, for tessellation) */
+    case SM50_SHADER_ROOT_SIGNATURE: case SM50_SHADER_ROOT_SIGNATURE2: sz = sizeof(struct SM50_SHADER_ROOT_SIGNATURE_DATA); break;
     default: LOG(0, "sm50 arg type %u not remotable\n", a->type); B.error = 1; return;
     }
     uint32_t o = b_grow(sz);
@@ -588,6 +590,9 @@ marshal_sm50_args(uint32_t field_off, const struct SM50_SHADER_COMPILATION_ARGUM
       const struct SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT_DATA *d = (const void *)a;
       b_in(o + OFF(struct SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT_DATA, elements), d->elements,
            (uint64_t)d->num_elements * sizeof(struct SM50_STREAM_OUTPUT_ELEMENT));
+    } else if (a->type == SM50_SHADER_ROOT_SIGNATURE || a->type == SM50_SHADER_ROOT_SIGNATURE2) {
+      const struct SM50_SHADER_ROOT_SIGNATURE_DATA *d = (const void *)a;
+      b_in(o + OFF(struct SM50_SHADER_ROOT_SIGNATURE_DATA, bytecode), d->bytecode, (uint64_t)d->bytecode_length);
     } else if (a->type == SM50_SHADER_IA_INPUT_LAYOUT) {
       const struct SM50_SHADER_IA_INPUT_LAYOUT_DATA *d = (const void *)a;
       b_in(o + OFF(struct SM50_SHADER_IA_INPUT_LAYOUT_DATA, elements), d->elements,
@@ -822,12 +827,12 @@ dispatch(uint16_t call, void *params, uint32_t size, int sync) {
 #define WMTR_SYNC_B 1
 #define WMTR_SYNC_C 1
 #define WMTR_SYNC_N 1
-static const uint8_t call_sync[146] = {
+static const uint8_t call_sync[WMTR_NCALLS] = {
 #define X(i, n, t, c) [i] = WMTR_SYNC_##c,
 #include "wmtr_calls.inc"
 #undef X
 };
-static const uint32_t call_size[146] = {
+static const uint32_t call_size[WMTR_NCALLS] = {
 #define X(i, n, t, c) [i] = WMTR_SIZEOF_##c(t),
 #define WMTR_SIZEOF_A(t) sizeof(t)
 #define WMTR_SIZEOF_S(t) sizeof(t)
@@ -863,12 +868,13 @@ entry(uint16_t call, void *params) {
 #define E(n) static NTSTATUS e##n(void *p) { return entry(n, p); }
 #define E10(n) E(n##0) E(n##1) E(n##2) E(n##3) E(n##4) E(n##5) E(n##6) E(n##7) E(n##8) E(n##9)
 E(0) E(1) E(2) E(3) E(4) E(5) E(6) E(7) E(8) E(9) E10(1) E10(2) E10(3) E10(4) E10(5) E10(6) E10(7) E10(8) E10(9)
-E10(10) E10(11) E10(12) E10(13) E(140) E(141) E(142) E(143) E(144) E(145)
+E10(10) E10(11) E10(12) E10(13) E(140) E(141) E(142) E(143) E(144) E(145) E(146)
 #define P(n) e##n,
 #define P10(n) P(n##0) P(n##1) P(n##2) P(n##3) P(n##4) P(n##5) P(n##6) P(n##7) P(n##8) P(n##9)
-__attribute__((visibility("default"))) const void *__wine_unix_call_funcs[146] = {
+__attribute__((visibility("default"))) const void *__wine_unix_call_funcs[WMTR_NCALLS] = {
     P(0) P(1) P(2) P(3) P(4) P(5) P(6) P(7) P(8) P(9) P10(1) P10(2) P10(3) P10(4) P10(5) P10(6) P10(7) P10(8) P10(9)
-        P10(10) P10(11) P10(12) P10(13) P(140) P(141) P(142) P(143) P(144) P(145)};
+        P10(10) P10(11) P10(12) P10(13) P(140) P(141) P(142) P(143) P(144) P(145) P(146)};
+_Static_assert(WMTR_NCALLS == 147, "add entries for new calls above");
 
 /* test hook: wait through the transport for *done >= seq on reply slot `slot` */
 __attribute__((visibility("default"))) int
@@ -888,4 +894,26 @@ wmtr_debug_ping(void) {
   b_begin(&dummy, 8);
   B.force_sync = 1;
   return send_built_flags(WMTR_CTL_PING, WMTR_F_CONTROL, &dummy, 8);
+}
+
+/* guest VR runtime link (guest/vr/runtime/transport.cpp): one message of the guest VR protocol
+ * (guest/vr/include/steamac_vr_guest.h) answered by the executor's VR exporter on this process's own
+ * context, so the same ring orders it with the DXMT work. Returns 0 or a negative errno. */
+__attribute__((visibility("default"))) int
+wmtr_vr_call(const void *req, uint32_t req_size, void *rep, uint32_t rep_cap) {
+  pthread_once(&init_once, wmtr_init);
+  if (!init_ok) return -ENODEV;
+  uint8_t buf[4096] __attribute__((aligned(8)));
+  uint32_t size = WMTR_ALIGN8(req_size > rep_cap ? req_size : rep_cap);
+  if (!req || !rep || req_size < 8 || size > sizeof buf) return -EINVAL;
+  memset(buf, 0, size);
+  memcpy(buf, req, req_size);
+  b_begin(buf, size);
+  B.force_sync = 1;
+  NTSTATUS st = send_built_flags(WMTR_CTL_VR_QUERY, WMTR_F_CONTROL, buf, size);
+  if (st) return -EIO;
+  uint32_t got = ((const uint32_t *)buf)[1]; /* reply header: op, size */
+  if (got < 8 || got > rep_cap) return -EPROTO;
+  memcpy(rep, buf, got);
+  return 0;
 }

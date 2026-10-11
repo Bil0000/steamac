@@ -85,10 +85,13 @@ target_link_options(wivrn-pacer PUBLIC -fexperimental-library)
 add_library(vrhost-core STATIC
 	src/session/clock.cpp
 	src/session/pose_history.cpp
+	src/audio/pcm.cpp
+	src/audio/audio_bridge.cpp
 	src/wivrn/wivrn_session.cpp
 	src/wivrn/known_keys.cpp
 	src/wivrn/dnssd_publisher.cpp
 	src/wivrn/annexb.cpp
+	src/wivrn/input_map.cpp
 	src/encoder/vt_encoder.mm
 	src/pattern/test_pattern.mm)
 target_include_directories(vrhost-core PUBLIC src include)
@@ -98,8 +101,14 @@ target_link_libraries(vrhost-core PUBLIC wivrn-common wivrn-pacer
 target_compile_options(vrhost-core PRIVATE -Wall -Wextra -Wno-unused-parameter)
 set_source_files_properties(src/encoder/vt_encoder.mm src/pattern/test_pattern.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
 
+# --- game frames (M1 compositor + VR link) and the pipeline into the session ---
+include(compositor.cmake)
+target_sources(vrhost-compositor PRIVATE src/pipeline/vr_pipeline.mm)
+set_source_files_properties(src/pipeline/vr_pipeline.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+target_link_libraries(vrhost-compositor PUBLIC vrhost-core)
+
 add_executable(steamac-vrhost src/main.cpp)
-target_link_libraries(steamac-vrhost PRIVATE vrhost-core)
+target_link_libraries(steamac-vrhost PRIVATE vrhost-core vrhost-compositor)
 # Ad hoc signature with a stable identifier (macOS keys Local Network permission and TCC prompts on it).
 add_custom_command(TARGET steamac-vrhost POST_BUILD
 	COMMAND codesign --force --sign - --identifier com.steamac.vrhost $<TARGET_FILE:steamac-vrhost>
@@ -109,7 +118,7 @@ add_custom_command(TARGET steamac-vrhost POST_BUILD
 option(VRHOST_TESTS "Build the tests" ON)
 if(VRHOST_TESTS)
 enable_testing()
-foreach(t protocol annexb pose_history encoder loopback pacer crypto)
+foreach(t protocol annexb pose_history encoder loopback pacer crypto audio)
 	add_executable(test_${t} tests/test_${t}.cpp)
 	target_link_libraries(test_${t} PRIVATE vrhost-core)
 	add_test(NAME ${t} COMMAND test_${t})
@@ -119,6 +128,29 @@ target_sources(test_encoder PRIVATE tests/vt_decode.mm)
 target_sources(test_loopback PRIVATE tests/vt_decode.mm)
 set_source_files_properties(tests/vt_decode.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
 set_tests_properties(encoder loopback PROPERTIES TIMEOUT 60)
+# the test headset as a tool, for a running steamac-vrhost (docs/vr.md "Testing without a headset")
+add_executable(vrhost-test-headset tests/test_headset_tool.mm tests/fake_headset.cpp tests/vt_decode.mm)
+set_source_files_properties(tests/test_headset_tool.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+target_link_libraries(vrhost-test-headset PRIVATE vrhost-core)
+
+# End-to-end game-frame test (wmtr exporter -> link -> compositor -> session -> test headset). The exporter
+# (wmtr/src/wmtr_vr.m) needs the WMTVRSubmitInfo layout from a StonkGuy/dxmt vr-export checkout.
+set(VRHOST_DXMT_DIR "" CACHE PATH "StonkGuy/dxmt vr-export checkout (enables the vr_e2e test)")
+if(VRHOST_DXMT_DIR)
+	enable_language(OBJC)
+	set(wmtr_dir ${CMAKE_CURRENT_SOURCE_DIR}/../../wmtr)
+	add_library(vrhost-test-exporter STATIC ${wmtr_dir}/src/wmtr_vr.m)
+	target_include_directories(vrhost-test-exporter PRIVATE include ${wmtr_dir}/include ${CMAKE_CURRENT_SOURCE_DIR}/../../guest/vr/include ${VRHOST_DXMT_DIR}/src/winemetal)
+	target_compile_options(vrhost-test-exporter PRIVATE -w)
+	add_executable(test_vr_e2e tests/test_vr_e2e.mm tests/fake_headset.cpp tests/vt_decode.mm)
+	target_include_directories(test_vr_e2e PRIVATE ${wmtr_dir}/include ${CMAKE_CURRENT_SOURCE_DIR}/../../guest/vr/include ${VRHOST_DXMT_DIR}/src/winemetal)
+	set_source_files_properties(tests/test_vr_e2e.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+	target_link_libraries(test_vr_e2e PRIVATE vrhost-core vrhost-compositor vrhost-test-exporter "-framework Metal")
+	add_test(NAME vr_e2e COMMAND test_vr_e2e)
+	set_tests_properties(vr_e2e PROPERTIES TIMEOUT 90)
+else()
+	message(STATUS "vr_e2e test off: set VRHOST_DXMT_DIR to a StonkGuy/dxmt vr-export checkout")
+endif()
 endif()
 
 # --- packaging check: the executable must not load OpenSSL (or anything else) from Homebrew ---

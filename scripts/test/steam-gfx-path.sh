@@ -6,6 +6,8 @@
 #   update    a Proton update rewrites stock files (new version): the next run keeps the NEW stock files and re-applies
 #   vulkan    Proton's files are back byte for byte (the updated ones), every added file and marker is gone,
 #             prefixes hold Proton's DXVK again and nothing else changed
+#   d3d12     a payload with d3d12.dll replaces vkd3d-proton's d3d12.dll where a Proton has one (P1, not P2); a
+#             payload without it puts vkd3d-proton's back
 #   missing   steamac.gfx=dxmt without the DXMT files leaves everything stock
 #   poisoned  a kept original that is a DXMT file (kept by an older script from a payload it no longer knows) is never
 #             kept and never restored: the file stays, a log line points at Steam's Verify integrity, the backup goes
@@ -23,12 +25,19 @@ for p in "$P1" "$P2"; do
   mkdir -p "$p/files/share/default_pfx/drive_c/windows/system32"
   ln -s ../../../../../lib/wine/x86_64-windows/d3d11.dll "$p/files/share/default_pfx/drive_c/windows/system32/d3d11.dll"
 done
+# an ARM64 Proton: DXVK/vkd3d-proton sets, but no x86-64 Wine; it must stay stock
+P3=$ST/steamapps/common/Proton-arm64
+mkdir -p "$P3/files/lib/wine/dxvk/x86_64-windows" "$P3/files/lib/wine/vkd3d-proton/x86_64-windows"
+for f in d3d11 dxgi d3d10core; do blob "$P3/files/lib/wine/dxvk/x86_64-windows/$f.dll" a; done
+blob "$P3/files/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll" a
+mkdir -p "$P1/files/lib/wine/vkd3d-proton/x86_64-windows"
+for f in d3d12 d3d12core; do blob "$P1/files/lib/wine/vkd3d-proton/x86_64-windows/$f.dll" r; done
 for a in 100 200; do
   s=$ST/steamapps/compatdata/$a/pfx/drive_c/windows/system32; mkdir -p "$s"
   for f in d3d11 dxgi d3d10core; do cp "$P1/files/lib/wine/dxvk/x86_64-windows/$f.dll" "$s/"; done; blob "$s/kernel32.dll" k
 done
 X=$T/dxmt; mkdir -p "$X/x86_64-windows" "$X/x86_64-unix"
-for f in d3d11 dxgi d3d10core winemetal; do blob "$X/x86_64-windows/$f.dll" m; done; blob "$X/x86_64-unix/winemetal.so" s
+for f in d3d11 dxgi d3d10core winemetal d3d12; do blob "$X/x86_64-windows/$f.dll" m; done; blob "$X/x86_64-unix/winemetal.so" s
 snap() { (cd "$T" && find steam -type f | LC_ALL=C sort | while read -r f; do echo "$f $(cksum < "$f")"; done
   find steam -type l | LC_ALL=C sort | while read -r f; do echo "$f -> $(readlink "$f")"; done); }
 run() { echo "$1" > "$T/cmdline"
@@ -47,6 +56,13 @@ for p in "$P1" "$P2"; do
   cmp -s "$p/files/share/default_pfx/drive_c/windows/system32/winemetal.dll" "$X/x86_64-windows/winemetal.dll" \
     || fail dxmt "$p prefix template has no winemetal.dll link"
 done
+V=$P1/files/lib/wine/vkd3d-proton/x86_64-windows
+for f in dxvk/x86_64-windows/d3d11 vkd3d-proton/x86_64-windows/d3d12; do
+  [ "$(tr -d a < "$P3/files/lib/wine/$f.dll")" = "" ] || fail arm64 "ARM64 Proton $f.dll touched"; done
+grep -q "cannot set up" "$T/log" && fail arm64 "error for the ARM64 Proton: $(grep 'cannot set up' "$T/log" | head -1)"
+isdxmt "$V/d3d12.dll" || fail d3d12 "P1 d3d12.dll is not DXMT (native copy)"
+[ "$(tr -d r < "$V/d3d12core.dll")" = "" ] || fail d3d12 "d3d12core.dll touched"
+[ -e "$P2/files/lib/wine/vkd3d-proton" ] && fail d3d12 "P2 got a vkd3d-proton directory"
 for a in 100 200; do
   cmp -s "$ST/steamapps/compatdata/$a/pfx/drive_c/windows/system32/winemetal.dll" "$X/x86_64-windows/winemetal.dll" || fail dxmt "prefix $a placeholder"
 done
@@ -67,6 +83,7 @@ for f in d3d11 dxgi d3d10core winemetal; do blob "$X2/x86_64-windows/$f.dll" n; 
 rm -f "$T"/state/orig/*/installed   # state as left by a version of this script that kept no checksums
 run "steamac.gfx=dxmt" "$X2"
 [ "$(head -c 64 "$P2/files/lib/wine/dxvk/x86_64-windows/d3d11.dll" | tr -d n)" = "" ] || fail payload "new payload not installed"
+[ "$(tr -d r < "$V/d3d12.dll")" = "" ] || fail d3d12 "payload without d3d12.dll left DXMT's d3d12.dll in place"
 X=$X2
 run "steamac.gfx=vulkan" "$X2"
 [ "$(cksum < "$P1/files/lib/wine/dxvk/x86_64-windows/dxgi.dll")" = "$upd" ] || fail vulkan "P1 dxgi is not the updated stock file"
