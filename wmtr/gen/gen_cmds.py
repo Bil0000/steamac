@@ -8,7 +8,8 @@ for kind, fn in (('BLIT', '_MTLBlitCommandEncoder_encodeCommands'), ('COMPUTE', 
                  ('RENDER', '_MTLRenderCommandEncoder_encodeCommands')):
     body = src[src.index('\n' + fn + '(') :]
     body = body[: body.index('\n}\n')]
-    cases = re.findall(r'case (\w+):(?:\s*\{)?\s*(?:struct (wmtcmd_\w+) \*body)?', body)
+    # a case may start with guards (`if (...) break;`) before its body cast
+    cases = re.findall(r'case (\w+):(?:\s*\{)?(?:\s*if \([^;{}]*\)\s*break;)*\s*(?:struct (wmtcmd_\w+) \*body)?', body)
     pending = []
     for enum, st in cases:
         pending.append(enum)
