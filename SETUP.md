@@ -72,20 +72,22 @@ Settings > Advanced > **Graphics path**: **DXMT (lean)** or **Vulkan (classic)**
 
 | path | what it is | when to use it |
 |---|---|---|
-| **DXMT (lean)** | Direct3D 11 (and 10) goes through DXMT, which produces Metal calls. They run natively on the Mac over a dedicated virtio-gpu channel and are shown in a Metal layer inside the window. DXVK, Venus, virglrenderer and the Vulkan-to-Metal layer are not involved | Direct3D 11 games, including VRChat, when the lean path works for you |
-| **Vulkan (classic)** | Direct3D goes through DXVK to Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK to Metal on the Mac. This is upstream steamac's path | fallback if a game misbehaves on DXMT or EAC fails; Direct3D 12 games |
+| **DXMT (lean)** | Direct3D 11 (and 10) goes through DXMT, which produces Metal calls. They run natively on the Mac over a dedicated virtio-gpu channel and are shown in a Metal layer inside the window. DXVK, Venus, virglrenderer and the Vulkan-to-Metal layer are not involved | Direct3D 11 games, including VRChat, when the lean path works for you; simple Direct3D 12 games (experimental) |
+| **Vulkan (classic)** | Direct3D goes through DXVK to Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK to Metal on the Mac. This is upstream steamac's path | fallback if a game misbehaves on DXMT or EAC fails; Direct3D 12 games that need more than DXMT offers |
 
 How it works: at every boot the guest reads the launcher setting. With DXMT, every installed Proton's DXVK files (d3d11,
-dxgi, d3d10core) are replaced by DXMT's before Steam starts, and again when Steam updates a Proton during the session.
+dxgi, d3d10core) and its vkd3d-proton d3d12.dll are replaced by DXMT's before Steam starts, and again when Steam updates a Proton during the session.
 With Vulkan, Proton's own files are restored byte for byte. There is no per-game compatibility tool and no extra step:
 the setting applies to every game, and the game just launches. If the DXMT library is missing from the app, the launcher
 falls back to Vulkan.
 
-- Direct3D 12 games under the DXMT setting are untested or limited (DXMT's Direct3D 12 support stops at feature level
-  11_1 with no DXIL, and Direct3D 12 is not replaced by this setup). Use **Vulkan** for them.
+- Direct3D 12 under the DXMT setting is experimental: DXMT's Direct3D 12 offers feature level 11_1, shader model 5.1
+  (DXBC, no DXIL), no ray tracing, no tiled resources, and ExecuteIndirect stalls the GPU. A Direct3D 12 game that
+  needs more fails to start or renders wrongly; use **Vulkan** for it (vkd3d-proton). There is no automatic per-game
+  fallback: with DXMT's dxgi in place, vkd3d-proton's d3d12 cannot present, so the switch is the setting.
 - EAC with DXMT on a real game prefix is unverified until your first launch. If EAC fails on DXMT, switch to Vulkan.
 - The default is **Vulkan (classic)** until the DXMT path has been measured ahead of it.
-- DXMT covers Direct3D 11 and 10 only.
+- DXMT covers Direct3D 11 and 10, and Direct3D 12 within the limits above.
 
 Settings > Advanced > **Vulkan driver** (KosmicKrisp or MoltenVK) applies to the Vulkan path only.
 

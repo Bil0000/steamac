@@ -1,6 +1,6 @@
 // d3d12bench: D3D12 feature probe + the same load as d3d11bench, for comparing D3D12 implementations.
 // Usage: d3d12bench.exe [--draws N] [--overdraw K] [--seconds S] [--width W] [--height H] [--label L]
-//                       [--probe-only 1] [--indirect 1]
+//                       [--probe-only 1] [--indirect 1] [--out FILE]
 // Prints "PROBE name=value" lines (CheckFeatureSupport results and functional checks), then
 // "RESULT ..." like d3d11bench (first second excluded). Shaders are SM 5.1 DXBC compiled at runtime.
 #define WIN32_LEAN_AND_MEAN
@@ -64,6 +64,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--label")) g_label = argv[i + 1];
     else if (!strcmp(argv[i], "--probe-only")) g_probe_only = atoi(argv[i + 1]);
     else if (!strcmp(argv[i], "--indirect")) g_indirect = atoi(argv[i + 1]);
+    else if (!strcmp(argv[i], "--out")) freopen(argv[i + 1], "w", stdout); /* stdout is lost under Steam's launch chain */
   }
   IDXGIFactory4 *factory; CHECKHR(CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void **)&factory));
   ID3D12Device *dev = nullptr;
