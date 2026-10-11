@@ -3,10 +3,13 @@
 //   --testpattern          serve a world-locked test pattern to a WiVRn client (Quest/Pico app, Steam Frame client)
 //   --selftest-encoder     headless VideoToolbox latency self-test (no network, no headset)
 //   --protocol             print the pinned WiVRn protocol hash and exit
+//   --show-pin             print the PIN of the running host (pairing mode)
+//   --list-headsets / --unpair NAME / --unpair-all   manage paired headsets
 #include "encoder/vt_encoder.h"
 #include "pattern/test_pattern.h"
 #include "session/clock.h"
 #include "wivrn/annexb.h"
+#include "wivrn/known_keys.h"
 #include "wivrn/wivrn_session.h"
 
 #include <CoreVideo/CoreVideo.h>
@@ -18,6 +21,9 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+#include <fstream>
+#include <sys/stat.h>
 #include <string>
 #include <memory>
 #include <thread>
@@ -31,6 +37,10 @@ static void usage()
 {
 	fprintf(stderr,
 	        "usage: steamac-vrhost [--testpattern] [--selftest-encoder] [--protocol]\n"
+	        "       steamac-vrhost --show-pin | --list-headsets | --unpair NAME | --unpair-all\n"
+	        "  --pair              accept new headsets (PIN pairing); default only when no headset is paired yet\n"
+	        "  --pin NNNNNN        pairing PIN (default: random, printed and readable with --show-pin)\n"
+	        "  --no-encryption     WiVRn's 'encryption disabled' mode (trusted LAN only)\n"
 	        "  --port N            TCP/UDP port (default 9757)\n"
 	        "  --no-advertise      do not publish _wivrn._tcp via Bonjour\n"
 	        "  --tcp-only          send everything over TCP\n"
@@ -38,7 +48,9 @@ static void usage()
 	        "  --frames N          self-test frames (default 600)\n"
 	        "  --fps F             self-test frame rate (default 90)\n"
 	        "  --codec hevc|h264   self-test codec (default hevc)\n"
-	        "  --bitrate BPS       total bitrate (default 50000000)\n");
+	        "  --bitrate BPS       total bitrate (default 50000000)\n"
+	        "  self-test tuning:   --layout eyes|serial|sbs  --prioritize-speed  --max-frame-delay N  --qp N\n"
+	        "                      --no-low-latency-rc  --csv (one summary line)\n");
 }
 
 static CVPixelBufferRef make_nv12(uint32_t w, uint32_t h)
@@ -62,26 +74,61 @@ static double pct(std::vector<double> v, double q)
 	return v[std::min(v.size() - 1, size_t(q * (v.size() - 1) + 0.5))];
 }
 
-static int selftest_encoder(uint32_t w, uint32_t h, int frames, float fps, EncoderConfig::Codec codec, uint32_t bitrate)
+struct SelftestOptions
 {
-	printf("encoder self-test: %s %ux%u per eye, 2 eyes encoded concurrently, %d frames at %.0f fps, %.1f Mbit/s per eye, "
-	       "hardware + low-latency RC required\n",
-	       codec == EncoderConfig::Codec::hevc ? "HEVC" : "H.264", w, h, frames, fps, bitrate / 1e6);
-	std::array<std::unique_ptr<VtEncoder>, 2> enc;
-	for (auto & e: enc)
-		e = std::make_unique<VtEncoder>(EncoderConfig{.codec = codec, .width = w, .height = h, .fps = fps, .bitrate_bps = bitrate});
-	printf("hardware encoder: %s, low-latency rate control: %s\n", enc[0]->hardware() ? "yes" : "no", enc[0]->low_latency() ? "yes" : "no");
+	uint32_t w = 1832, h = 1920; // per eye
+	int frames = 600;
+	float fps = 90;
+	EncoderConfig enc;           // codec, bitrate per eye and tuning knobs
+	enum class Layout
+	{
+		eyes,   // one session per eye, encoded concurrently (what WivrnSession does)
+		serial, // one session per eye, one after the other
+		sbs,    // one session, both eyes side by side (2W x H)
+	} layout = Layout::eyes;
+	bool csv = false;
+};
+
+static int selftest_encoder(const SelftestOptions & o)
+{
+	using Layout = SelftestOptions::Layout;
+	const char * layout_name = o.layout == Layout::eyes ? "eyes" : o.layout == Layout::serial ? "serial" : "sbs";
+	const char * codec_name = o.enc.codec == EncoderConfig::Codec::hevc ? "hevc" : "h264";
+	int sessions = o.layout == Layout::sbs ? 1 : 2;
+	uint32_t sw = o.layout == Layout::sbs ? 2 * o.w : o.w;
+	EncoderConfig ec = o.enc;
+	ec.width = sw;
+	ec.height = o.h;
+	ec.fps = o.fps;
+	if (o.layout == Layout::sbs)
+		ec.bitrate_bps *= 2;
+	if (not o.csv)
+		printf("encoder self-test: %s %ux%u per eye, layout %s (%d session(s) of %ux%u), %d frames at %.0f fps, "
+		       "%.1f Mbit/s per eye, low-latency RC %s, prioritize speed %s, max frame delay %d, QP %d\n",
+		       codec_name, o.w, o.h, layout_name, sessions, sw, o.h, o.frames, o.fps, o.enc.bitrate_bps / 1e6,
+		       o.enc.low_latency_rc ? "on" : "off", o.enc.prioritize_speed ? "on" : "off", o.enc.max_frame_delay, o.enc.qp);
+	std::vector<std::unique_ptr<VtEncoder>> enc;
+	for (int i = 0; i < sessions; ++i)
+		enc.push_back(std::make_unique<VtEncoder>(ec));
+	if (not o.csv)
+	{
+		printf("hardware encoder: %s, low-latency rate control: %s\n", enc[0]->hardware() ? "yes" : "no", enc[0]->low_latency() ? "yes" : "no");
+		for (auto & r: enc[0]->rejected())
+			printf("property not accepted: %s\n", r.c_str());
+	}
 	TestPattern pattern;
-	std::array<CVPixelBufferRef, 2> buf{make_nv12(w, h), make_nv12(w, h)};
+	std::vector<CVPixelBufferRef> buf;
+	for (int i = 0; i < sessions; ++i)
+		buf.push_back(make_nv12(sw, o.h));
 
 	std::vector<double> eye_ms, frame_ms, render_ms;
 	size_t bytes = 0;
 	int idr = 0, bad_ps = 0;
 	Fov fov{-0.9f, 0.8f, 0.85f, -0.9f};
-	ns period = ns(1e9 / fps);
+	ns period = ns(1e9 / o.fps);
 	ns next = now_ns();
 	int late = 0;
-	for (int i = 0; i < frames; ++i)
+	for (int i = 0; i < o.frames; ++i)
 	{
 		float yaw = 0.5f * std::sin(i * 0.02f);
 		Pose eye{.orientation = {0, std::sin(yaw / 2), 0, std::cos(yaw / 2)}};
@@ -90,14 +137,20 @@ static int selftest_encoder(uint32_t w, uint32_t h, int frames, float fps, Encod
 			pattern.render(b, eye, fov, i);
 		ns r1 = now_ns();
 		bool force = (i % 120) == 0 and i > 0; // exercise IDR on request
-		std::array<EncodedFrame, 2> f;
-		std::thread t([&] { f[1] = enc[1]->encode(buf[1], r1, force); });
-		f[0] = enc[0]->encode(buf[0], r1, force);
-		t.join();
+		std::vector<EncodedFrame> f(sessions);
+		if (o.layout == Layout::eyes)
+		{
+			std::thread t([&] { f[1] = enc[1]->encode(buf[1], r1, force); });
+			f[0] = enc[0]->encode(buf[0], r1, force);
+			t.join();
+		}
+		else
+			for (int e = 0; e < sessions; ++e)
+				f[e] = enc[e]->encode(buf[e], r1, force);
 		ns r2 = now_ns();
 		frame_ms.push_back((r2 - r1) / 1e6);
 		render_ms.push_back((r1 - r0) / 1e6);
-		if (r2 - r0 > period)
+		if (r2 - r1 > period)
 			++late;
 		for (auto & e: f)
 		{
@@ -108,7 +161,7 @@ static int selftest_encoder(uint32_t w, uint32_t h, int frames, float fps, Encod
 		{
 			++idr;
 			auto nals = annexb::split(f[0].annexb);
-			bool ok = codec != EncoderConfig::Codec::hevc or
+			bool ok = o.enc.codec != EncoderConfig::Codec::hevc or
 			          (nals.size() >= 4 and annexb::hevc_nal_type(nals[0]) == annexb::hevc_vps and
 			           annexb::hevc_nal_type(nals[1]) == annexb::hevc_sps and annexb::hevc_nal_type(nals[2]) == annexb::hevc_pps);
 			if (not ok)
@@ -124,17 +177,29 @@ static int selftest_encoder(uint32_t w, uint32_t h, int frames, float fps, Encod
 	}
 	for (auto b: buf)
 		CVPixelBufferRelease(b);
-	auto line = [](const char * name, const std::vector<double> & v) {
-		printf("%-34s min %6.2f  p50 %6.2f  p95 %6.2f  p99 %6.2f  max %6.2f\n", name, pct(v, 0), pct(v, 0.5), pct(v, 0.95),
-		       pct(v, 0.99), pct(v, 1));
-	};
-	line("encode latency per eye (ms):", eye_ms);
-	line("both eyes, submit to last NAL (ms):", frame_ms);
-	line("pattern render 2 eyes (ms):", render_ms);
-	printf("frames %d, frames over the %.2f ms budget: %d, IDR %d (expected %d), avg %.1f KB/eye-frame, %.1f Mbit/s total, "
-	       "IDR without VPS/SPS/PPS: %d\n",
-	       frames, period / 1e6, late, idr, 1 + (frames - 1) / 120, bytes / 2048.0 / frames, bytes * 8.0 * fps / frames / 1e6, bad_ps);
-	return bad_ps == 0 and idr == 1 + (frames - 1) / 120 ? 0 : 1;
+	double mbps = bytes * 8.0 * o.fps / o.frames / 1e6;
+	if (o.csv)
+	{
+		// codec,layout,eye_w,eye_h,fps,lowlat,speed,delay,qp,session_p50,session_p95,frame_p50,frame_p95,frame_p99,budget,late,mbps
+		printf("%s,%s,%u,%u,%.0f,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.1f\n", codec_name, layout_name, o.w, o.h,
+		       o.fps, o.enc.low_latency_rc, o.enc.prioritize_speed, o.enc.max_frame_delay, o.enc.qp, pct(eye_ms, 0.5),
+		       pct(eye_ms, 0.95), pct(frame_ms, 0.5), pct(frame_ms, 0.95), pct(frame_ms, 0.99), period / 1e6, late, mbps);
+		fflush(stdout);
+	}
+	else
+	{
+		auto line = [](const char * name, const std::vector<double> & v) {
+			printf("%-34s min %6.2f  p50 %6.2f  p95 %6.2f  p99 %6.2f  max %6.2f\n", name, pct(v, 0), pct(v, 0.5), pct(v, 0.95),
+			       pct(v, 0.99), pct(v, 1));
+		};
+		line("encode latency per session (ms):", eye_ms);
+		line("both eyes, submit to last NAL (ms):", frame_ms);
+		line("pattern render (ms):", render_ms);
+		printf("frames %d, frames over the %.2f ms budget: %d, IDR %d (expected %d), %.1f Mbit/s total, "
+		       "IDR without VPS/SPS/PPS: %d\n",
+		       o.frames, period / 1e6, late, idr, 1 + (o.frames - 1) / 120, mbps, bad_ps);
+	}
+	return bad_ps == 0 and idr == 1 + (o.frames - 1) / 120 ? 0 : 1;
 }
 
 class PatternSource : public SessionListener
@@ -147,6 +212,11 @@ public:
 	void on_disconnected() override { printf("disconnected\n"); }
 };
 
+static std::filesystem::path pin_file()
+{
+	return KnownKeys::default_dir() / "pin";
+}
+
 static int testpattern(WivrnConfig cfg)
 {
 	cfg.log = [](const std::string & s) {
@@ -158,12 +228,21 @@ static int testpattern(WivrnConfig cfg)
 	session.start(&src);
 	printf("steamac-vrhost: listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n", session.port(),
 	       WivrnSession::protocol_version(), cfg.advertise ? ", advertised as _wivrn._tcp" : "");
+	if (auto pin = session.pin(); not pin.empty())
+	{
+		printf("To pair a new headset use PIN code: %s\n", pin.c_str());
+		std::filesystem::create_directories(pin_file().parent_path());
+		std::ofstream(pin_file(), std::ios::trunc) << pin << '\n';
+		chmod(pin_file().c_str(), 0600);
+	}
+	else
+		printf("encryption %s, pairing disabled (--pair to pair a new headset)\n",
+		       cfg.encryption == WivrnConfig::Encryption::disabled ? "disabled" : "on");
 	fflush(stdout);
 
 	TestPattern pattern;
 	std::array<CVPixelBufferRef, 2> bufs{};
 	uint32_t bw = 0, bh = 0;
-	uint64_t frame = 0;
 	ns last_report = now_ns();
 	while (not g_quit)
 	{
@@ -187,16 +266,15 @@ static int testpattern(WivrnConfig cfg)
 		}
 		FrameTiming t = session.next_frame_timing();
 		Frame f;
-		f.frame_id = frame;
+		f.frame_id = t.frame_id;
 		f.display_time = t.predicted_display;
 		session.views_at(t.predicted_display, f.pose, f.fov);
 		for (int i = 0; i < 2; ++i)
 		{
-			pattern.render(bufs[i], f.pose[i], f.fov[i], frame);
+			pattern.render(bufs[i], f.pose[i], f.fov[i], f.frame_id);
 			f.eye[i].surface = CVPixelBufferGetIOSurface(bufs[i]);
 		}
 		session.submit(f);
-		++frame;
 		if (now_ns() - last_report > 5'000'000'000)
 		{
 			auto & s = session.stats();
@@ -209,6 +287,8 @@ static int testpattern(WivrnConfig cfg)
 		}
 	}
 	session.stop();
+	if (not session.pin().empty())
+		std::filesystem::remove(pin_file());
 	for (auto b: bufs)
 		if (b)
 			CVPixelBufferRelease(b);
@@ -226,13 +306,16 @@ int main(int argc, char ** argv)
 		none,
 		pattern,
 		selftest,
-		protocol
+		protocol,
+		show_pin,
+		list_headsets,
+		unpair,
 	} mode = none;
+	std::string unpair_name;
+	bool pair = false;
 	WivrnConfig cfg;
 	uint32_t w = 0, h = 0;
-	int frames = 600;
-	float fps = 90;
-	auto codec = EncoderConfig::Codec::hevc;
+	SelftestOptions st;
 	for (int i = 1; i < argc; ++i)
 	{
 		std::string a = argv[i];
@@ -250,6 +333,31 @@ int main(int argc, char ** argv)
 			mode = selftest;
 		else if (a == "--protocol")
 			mode = protocol;
+		else if (a == "--show-pin")
+			mode = show_pin;
+		else if (a == "--list-headsets")
+			mode = list_headsets;
+		else if (a == "--unpair")
+		{
+			mode = unpair;
+			unpair_name = next();
+		}
+		else if (a == "--unpair-all")
+			mode = unpair;
+		else if (a == "--pair")
+			pair = true;
+		else if (a == "--pin")
+		{
+			cfg.pin = next();
+			pair = true;
+			if (cfg.pin.size() != 6 or cfg.pin.find_first_not_of("0123456789") != std::string::npos)
+			{
+				fprintf(stderr, "steamac-vrhost: the PIN is 6 digits\n");
+				return 2;
+			}
+		}
+		else if (a == "--no-encryption")
+			cfg.encryption = WivrnConfig::Encryption::disabled;
 		else if (a == "--port")
 			cfg.port = std::stoi(next());
 		else if (a == "--no-advertise")
@@ -266,13 +374,28 @@ int main(int argc, char ** argv)
 			}
 		}
 		else if (a == "--frames")
-			frames = std::stoi(next());
+			st.frames = std::stoi(next());
 		else if (a == "--fps")
-			fps = std::stof(next());
+			st.fps = std::stof(next());
+		else if (a == "--layout")
+		{
+			auto l = next();
+			st.layout = l == "sbs" ? SelftestOptions::Layout::sbs : l == "serial" ? SelftestOptions::Layout::serial : SelftestOptions::Layout::eyes;
+		}
+		else if (a == "--no-low-latency-rc")
+			st.enc.low_latency_rc = false;
+		else if (a == "--prioritize-speed")
+			st.enc.prioritize_speed = true;
+		else if (a == "--max-frame-delay")
+			st.enc.max_frame_delay = std::stoi(next());
+		else if (a == "--qp")
+			st.enc.qp = std::stoi(next());
+		else if (a == "--csv")
+			st.csv = true;
 		else if (a == "--bitrate")
 			cfg.bitrate_bps = std::stoul(next());
 		else if (a == "--codec")
-			codec = next() == "h264" ? EncoderConfig::Codec::h264 : EncoderConfig::Codec::hevc;
+			st.enc.codec = next() == "h264" ? EncoderConfig::Codec::h264 : EncoderConfig::Codec::hevc;
 		else
 		{
 			usage();
@@ -287,8 +410,43 @@ int main(int argc, char ** argv)
 				printf("%016" PRIx64 "\n", WivrnSession::protocol_version());
 				return 0;
 			case selftest:
-				return selftest_encoder(w ? w : 1832, h ? h : 1920, frames, fps, codec, cfg.bitrate_bps / 2);
+				st.w = w ? w : 1832;
+				st.h = h ? h : 1920;
+				st.enc.bitrate_bps = cfg.bitrate_bps / 2;
+				return selftest_encoder(st);
+			case show_pin: {
+				std::ifstream f(pin_file());
+				std::string pin;
+				if (not (f >> pin))
+				{
+					fprintf(stderr, "steamac-vrhost: no host is waiting for a new headset (start it with --pair)\n");
+					return 1;
+				}
+				printf("%s\n", pin.c_str());
+				return 0;
+			}
+			case list_headsets: {
+				KnownKeys keys(KnownKeys::default_dir() / "known_keys");
+				for (auto & k: keys.list())
+				{
+					time_t t = k.last_connection;
+					char when[32];
+					strftime(when, sizeof when, "%Y-%m-%d %H:%M", localtime(&t));
+					printf("%-32s last connected %s\n", k.name.c_str(), when);
+				}
+				return 0;
+			}
+			case unpair: {
+				KnownKeys keys(KnownKeys::default_dir() / "known_keys");
+				printf("removed %d headset(s)\n", keys.remove(unpair_name));
+				return 0;
+			}
 			case pattern:
+				// WiVRn's main.cpp: encryption on, pairing when asked or while no headset is paired yet.
+				if (cfg.encryption != WivrnConfig::Encryption::disabled)
+					cfg.encryption = pair or KnownKeys(KnownKeys::default_dir() / "known_keys").list().empty()
+					                         ? WivrnConfig::Encryption::pairing
+					                         : WivrnConfig::Encryption::enabled;
 				cfg.width = w;
 				cfg.height = h;
 				return testpattern(cfg);

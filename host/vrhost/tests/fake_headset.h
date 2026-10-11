@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Test-only headset that follows the WiVRn v26.9 client connection sequence (client/wivrn_client.cpp, encryption
-// disabled) over loopback, sends headset info / tracking / timesync answers / feedback, and reassembles and decodes the
+// disabled, or PIN pairing + AES-128-CTR with WiVRn's own crypto/smp/secrets code) over loopback, sends headset info / tracking / timesync answers / feedback, and reassembles and decodes the
 // video shards with VideoToolbox. The end-to-end check against the real WiVRn client is done separately (docs/vr.md).
 #pragma once
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct FakeHeadsetOptions
@@ -18,12 +19,21 @@ struct FakeHeadsetOptions
 	uint16_t eye_width = 640, eye_height = 704;
 	int timeout_ms = 20000;
 	int64_t clock_offset_ns = 5'000'000'000; // headset clock = host clock + this
+	std::string private_key; // headset X448 key (PEM); empty = a new one each run
+	std::string pin = "000000"; // what the "user" types when the server asks for a PIN
+	// Synthetic headset timing for the pacer: the headset's decoder finishes this long after the frame's first shard,
+	// and blits/displays on a vsync grid of display_period_ns (phase display_phase_ns) in the headset clock.
+	int64_t decode_ns = 0;
+	int64_t display_period_ns = 0; // 0 = report no blit/display times
+	int64_t display_phase_ns = 0;
 };
 
 struct FakeHeadsetResult
 {
 	std::string error;            // empty on success of the protocol part
 	std::string handshake_state;  // to_headset::crypto_handshake state name
+	bool encrypted = false;
+	std::vector<std::pair<uint64_t, int64_t>> display_times; // (frame index, view_info.display_time) stream 0
 	bool got_stream_description = false;
 	bool got_tracking_control = false;
 	int timesync_queries = 0;

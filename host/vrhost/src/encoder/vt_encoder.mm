@@ -16,6 +16,7 @@ struct VtEncoder::impl
 	VTCompressionSessionRef session = nullptr;
 	bool hw = false;
 	bool lowlat = false;
+	std::vector<std::string> rejected;
 
 	std::mutex mutex;
 	std::condition_variable cv;
@@ -96,7 +97,7 @@ VtEncoder::VtEncoder(const EncoderConfig & cfg) :
 	p->cfg = cfg;
 	const void * spec_keys[] = {kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder,
 	                            kVTVideoEncoderSpecification_EnableLowLatencyRateControl};
-	const void * spec_values[] = {kCFBooleanTrue, kCFBooleanTrue};
+	const void * spec_values[] = {kCFBooleanTrue, cfg.low_latency_rc ? kCFBooleanTrue : kCFBooleanFalse};
 	CFDictionaryRef spec = CFDictionaryCreate(nullptr, spec_keys, spec_values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
 	int32_t pixfmt = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
@@ -129,6 +130,25 @@ VtEncoder::VtEncoder(const EncoderConfig & cfg) :
 	set_prop(s, kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2, false);
 	set_prop(s, kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2, false);
 
+	auto opt = [&](CFStringRef key, CFTypeRef v, const char * name) {
+		if (VTSessionSetProperty(s, key, v) != noErr)
+			p->rejected.push_back(name);
+	};
+	auto opt_num = [&](CFStringRef key, double v, const char * name) {
+		CFNumberRef n = CFNumberCreate(nullptr, kCFNumberDoubleType, &v);
+		opt(key, n, name);
+		CFRelease(n);
+	};
+	if (cfg.prioritize_speed)
+		opt(kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, kCFBooleanTrue, "PrioritizeEncodingSpeedOverQuality");
+	if (cfg.max_frame_delay >= 0)
+		opt_num(kVTCompressionPropertyKey_MaxFrameDelayCount, cfg.max_frame_delay, "MaxFrameDelayCount");
+	if (cfg.qp > 0)
+	{
+		opt_num(kVTCompressionPropertyKey_MinAllowedFrameQP, cfg.qp, "MinAllowedFrameQP");
+		opt_num(kVTCompressionPropertyKey_MaxAllowedFrameQP, cfg.qp, "MaxAllowedFrameQP");
+	}
+
 	// RequireHardwareAcceleratedVideoEncoder makes session creation fail without a hardware encoder. The read-back
 	// property is not supported by every encoder (the low-latency HEVC one returns an error), so only an explicit
 	// "false" counts as software.
@@ -141,7 +161,7 @@ VtEncoder::VtEncoder(const EncoderConfig & cfg) :
 		CFRelease(hw);
 	}
 	// Session creation fails when EnableLowLatencyRateControl cannot be honoured, so a session = low-latency RC.
-	p->lowlat = true;
+	p->lowlat = cfg.low_latency_rc;
 	if (not p->hw)
 		throw std::runtime_error("VideoToolbox picked a software encoder; hardware is required");
 	VTCompressionSessionPrepareToEncodeFrames(s);
@@ -201,6 +221,7 @@ void VtEncoder::set_bitrate(uint32_t bps)
 
 bool VtEncoder::hardware() const { return p->hw; }
 bool VtEncoder::low_latency() const { return p->lowlat; }
+const std::vector<std::string> & VtEncoder::rejected() const { return p->rejected; }
 const EncoderConfig & VtEncoder::config() const { return p->cfg; }
 CVPixelBufferPoolRef VtEncoder::pool() const { return VTCompressionSessionGetPixelBufferPool(p->session); }
 } // namespace vrhost

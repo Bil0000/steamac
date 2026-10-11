@@ -1,12 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Parts adapted from WiVRn v26.9 (GPL-3.0-or-later): server/driver/wivrn_connection.cpp (handshake sequence),
 // server/driver/clock_offset.cpp (clock regression), server/encoder/idr_handler.cpp (IDR state machine),
-// server/encoder/video_encoder.cpp (SendData sharding and timing).
+// server/encoder/video_encoder.cpp (SendData sharding and timing). The crypto handshake, PIN check (SMP) and
+// AES-CTR socket encryption use WiVRn's own common/ code unmodified; the pacer is WiVRn's server/compositor/pacer.cpp
+// unmodified.
 #include "wivrn/wivrn_session.h"
 
 #include "encoder/vt_encoder.h"
 #include "session/clock.h"
 #include "wivrn/dnssd_publisher.h"
+#include "wivrn/known_keys.h"
+
+#include "compositor/pacer.h"
+#include "crypto.h"
+#include "driver/clock_offset.h"
+#include "secrets.h"
+#include "smp.h"
 
 #include "protocol_version.h"
 #include "wivrn_packets.h"
@@ -91,6 +100,7 @@ public:
 		return b != 0;
 	}
 	int64_t to_headset(int64_t t) const { return t + b; }
+	wivrn::clock_offset offset() const { return wivrn::clock_offset{.b = b, .stable = stable()}; }
 	int64_t from_headset(int64_t t) const { return t - b; }
 };
 
@@ -262,8 +272,12 @@ struct WivrnSession::impl
 	std::array<IdrState, 2> idr;
 	EncoderConfig::Codec codec = EncoderConfig::Codec::hevc;
 
-	// pacing
-	ns next_wake = 0;
+	// pacing: WiVRn's pacer, fed by the headset's feedback packets
+	wivrn::pacer pacer{1'000'000'000 / 72};
+
+	// encryption / pairing
+	std::unique_ptr<KnownKeys> keys;
+	std::string pin;
 
 	void log(const std::string & s)
 	{
@@ -302,18 +316,30 @@ static T expect(control_socket & ctl, stream_socket * strm, std::chrono::millise
 		if (strm and (fds[1].revents & POLLIN))
 		{
 			// Not UDP::receive_from_raw(): it sizes the buffer with recvfrom(MSG_PEEK | MSG_TRUNC), which returns the
-			// datagram length on Linux but 0 on macOS. Unencrypted (M0), so a plain recvfrom is equivalent.
+			// datagram length on Linux but 0 on macOS. Peek the sender address, then let the socket read and decrypt
+			// the datagram (UDP::receive_raw, AES-CTR when encryption is on).
 			sockaddr_in6 from{};
 			socklen_t from_len = sizeof(from);
-			auto buffer = std::make_shared<uint8_t[]>(65536);
-			ssize_t n = recvfrom(strm->get_fd(), buffer.get(), 65536, 0, (sockaddr *)&from, &from_len);
-			if (n <= 0)
+			uint8_t peek;
+			if (recvfrom(strm->get_fd(), &peek, 1, MSG_PEEK, (sockaddr *)&from, &from_len) < 0)
 				continue;
 			if (peer and memcmp(&from.sin6_addr, &peer->sin6_addr, sizeof(from.sin6_addr)) != 0)
-				continue; // wrong sender, like wivrn_connection
-			wivrn::deserialization_packet raw{buffer, std::span<uint8_t>(buffer.get(), size_t(n))};
-			auto pkt = raw.deserialize<fh::packets>();
-			if (auto * v = std::get_if<T>(&pkt))
+			{
+				recv(strm->get_fd(), &peek, 1, 0); // wrong sender, like wivrn_connection: drop it
+				continue;
+			}
+			std::optional<fh::packets> pkt;
+			try
+			{
+				pkt = strm->receive();
+			}
+			catch (std::exception &)
+			{
+				continue; // undecodable (e.g. wrong key): ignore, like a lost datagram
+			}
+			if (not pkt)
+				continue;
+			if (auto * v = std::get_if<T>(&*pkt))
 			{
 				if (udp_port)
 					*udp_port = ntohs(from.sin6_port);
@@ -357,10 +383,60 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 	}
 	log("headset '" + hs.name + "' connected, protocol ok");
 
-	// M0 bring-up: encryption disabled (LAN only). PIN pairing (X448 + SMP + AES-CTR) is the next step; the
-	// vendored crypto/smp/secrets code is already built in.
-	ctl.send(th::crypto_handshake{.state = th::crypto_handshake::crypto_state::encryption_disabled});
-	expect<fh::crypto_handshake>(ctl, nullptr, 10s); // client confirms its (absent) encryption setup
+	// Crypto handshake: WiVRn v26.9 wivrn_connection::init(), same states and order.
+	using cs = th::crypto_handshake::crypto_state;
+	using Enc = WivrnConfig::Encryption;
+	std::string headset_public_key = KnownKeys::clean_key(hs.public_key);
+	bool is_public_key_known = cfg.encryption != Enc::disabled and keys->contains(headset_public_key);
+	switch (cfg.encryption)
+	{
+		case Enc::disabled:
+			ctl.send(th::crypto_handshake{.state = cs::encryption_disabled});
+			break;
+
+		case Enc::enabled:
+			if (not is_public_key_known)
+			{
+				ctl.send(th::crypto_handshake{.state = cs::pairing_disabled});
+				throw std::runtime_error("headset '" + hs.name + "' is not paired and pairing is disabled");
+			}
+			[[fallthrough]];
+
+		case Enc::pairing: {
+			crypto::key headset_key = crypto::key::from_public_key(hs.public_key);
+			// Ephemeral key pair just for exchanging the AES key
+			crypto::key server_key = crypto::key::generate_x448_keypair();
+			ctl.send(th::crypto_handshake{
+			        .public_key = server_key.public_key(),
+			        .state = is_public_key_known ? cs::client_already_paired : cs::pin_needed,
+			});
+			if (not is_public_key_known)
+			{
+				log("headset '" + hs.name + "' is not paired: waiting for the PIN");
+				try
+				{
+					crypto::smp pin_check;
+					auto msg1 = expect<fh::pin_check_1>(ctl, nullptr, 2min).message;
+					auto msg2 = pin_check.step2(msg1, pin);
+					ctl.send(th::pin_check_2{msg2});
+					auto msg3 = expect<fh::pin_check_3>(ctl, nullptr, 10s).message;
+					auto [msg4, pin_match] = pin_check.step4(msg3);
+					ctl.send(th::pin_check_4{msg4});
+					if (not pin_match)
+						throw std::runtime_error("incorrect PIN from headset '" + hs.name + "'");
+				}
+				catch (crypto::smp_cheated &)
+				{
+					throw std::runtime_error("unable to check the PIN");
+				}
+			}
+			secrets s{server_key, headset_key, is_public_key_known ? "000000" : pin};
+			ctl.set_aes_key_and_ivs(s.control_key, s.control_iv_from_headset, s.control_iv_to_headset);
+			strm.set_aes_key_and_ivs(s.stream_key, s.stream_iv_header_from_headset, s.stream_iv_header_to_headset);
+			break;
+		}
+	}
+	expect<fh::crypto_handshake>(ctl, nullptr, 10s); // client confirms its encryption setup
 
 	ctl.send(th::handshake{.stream_port = port});
 	int client_port = -1;
@@ -385,6 +461,16 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 	{
 		throw std::runtime_error(std::string("headset info: ") + e.what());
 	}
+
+	if (cfg.encryption == Enc::pairing and not is_public_key_known)
+	{
+		keys->add({.public_key = headset_public_key, .name = hs.name});
+		stats.paired++;
+		log("headset '" + hs.name + "' paired (" + keys->file().string() + ")");
+	}
+	else if (cfg.encryption != Enc::disabled)
+		keys->touch(headset_public_key);
+	log(cfg.encryption == Enc::disabled ? "encryption disabled" : "encryption on (AES-128-CTR)");
 }
 
 void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
@@ -422,6 +508,8 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	h.eye_gaze = hi.eye_gaze;
 	h.name = hi.system_name;
 	refresh = h.preferred_refresh_rate;
+	pacer.set_frame_duration(uint64_t(1e9 / h.preferred_refresh_rate));
+	pacer.reset();
 
 	// HEVC when the client lists it (all Quest/Pico/Frame clients do), else H.264.
 	bool hevc = std::ranges::contains(h.codecs, Codec::hevc);
@@ -530,6 +618,7 @@ void WivrnSession::impl::handle(fh::packets && packet)
 			        stats.feedback++;
 			        if (pkt.received_from_decoder and pkt.received_first_packet)
 				        stats.last_feedback_decode_ns = pkt.received_from_decoder - pkt.received_first_packet;
+			        pacer.on_feedback(pkt, clock.offset());
 			        if (pkt.stream_index < 2 and idr[pkt.stream_index].on_feedback(pkt.frame_index, pkt.sent_to_decoder != 0))
 			        {
 				        stats.idr_requests++;
@@ -559,6 +648,8 @@ void WivrnSession::impl::handle(fh::packets && packet)
 		        else if constexpr (std::is_same_v<T, fh::refresh_rate_changed>)
 		        {
 			        refresh = pkt.to;
+			        if (pkt.to > 0)
+				        pacer.set_frame_duration(uint64_t(1e9 / pkt.to));
 			        if (listener)
 				        listener->on_refresh_rate(pkt.to);
 		        }
@@ -712,6 +803,8 @@ void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferR
 	};
 
 	std::unique_lock lock(cnx_mutex);
+	if (not control)
+		return; // disconnected while encoding
 	bool use_stream = stream and not cfg.tcp_only;
 	// IDR frames go on the reliable channel (WiVRn's `control` flag for SendData), P frames on UDP.
 	bool on_control = not use_stream or out.idr;
@@ -754,6 +847,10 @@ WivrnSession::WivrnSession(WivrnConfig cfg) :
         p(std::make_unique<impl>())
 {
 	p->cfg = std::move(cfg);
+	p->keys = std::make_unique<KnownKeys>(p->cfg.known_keys_file.empty() ? KnownKeys::default_dir() / "known_keys"
+	                                                                     : std::filesystem::path(p->cfg.known_keys_file));
+	if (p->cfg.encryption == WivrnConfig::Encryption::pairing)
+		p->pin = p->cfg.pin.empty() ? KnownKeys::random_pin() : p->cfg.pin;
 	std::random_device rd;
 	char buf[17];
 	snprintf(buf, sizeof buf, "%08x%08x", rd(), rd());
@@ -815,6 +912,11 @@ std::optional<HeadsetInfo> WivrnSession::headset() const
 	return p->info;
 }
 
+std::string WivrnSession::pin() const
+{
+	return p->pin;
+}
+
 int WivrnSession::port() const
 {
 	return p->bound_port;
@@ -827,20 +929,20 @@ const WivrnStats & WivrnSession::stats() const
 
 FrameTiming WivrnSession::next_frame_timing()
 {
-	// M0 pacing: fixed period at the headset refresh rate; the frame is predicted to be displayed one motion-to-photon
-	// budget later. WiVRn's feedback-driven pacer (compositor/pacer.cpp) replaces this in M1.
-	ns period = ns(1e9 / std::max(1.0f, p->refresh.load()));
+	// WiVRn's pacer: the display time comes from the headset's feedback (decode and display times, phase locked to
+	// the headset's blit), not from a fixed rate. Its wake-up time includes a 3 ms margin by which Monado expects the
+	// application to wake early; steamac-vrhost is the application here, so it wakes that much before it.
+	static constexpr ns app_margin = 3'000'000; // pacer.cpp margin_ns
+	int64_t frame_id, wake_up, desired_present, slop, predicted_display;
+	p->pacer.predict(frame_id, wake_up, desired_present, slop, predicted_display);
+	ns wake = wake_up - app_margin;
 	ns now = now_ns();
-	if (p->next_wake == 0 or p->next_wake < now - period)
-		p->next_wake = now;
-	ns wake = p->next_wake;
-	p->next_wake += period;
 	if (wake > now)
 	{
 		timespec ts{.tv_sec = time_t((wake - now) / 1'000'000'000), .tv_nsec = long((wake - now) % 1'000'000'000)};
 		nanosleep(&ts, nullptr);
 	}
-	return {wake, wake + 40'000'000};
+	return {.wake_up = wake, .predicted_display = predicted_display, .frame_id = uint64_t(frame_id)};
 }
 
 std::optional<TrackedPose> WivrnSession::pose_at(Device d, ns t)
@@ -864,6 +966,8 @@ void WivrnSession::submit(const Frame & f)
 {
 	if (not p->is_connected)
 		return;
+	// "present" for the pacer = the frame reaches the encoder (WiVRn marks it after the compositor's GPU submit).
+	p->pacer.mark_timing_point(COMP_TARGET_TIMING_POINT_SUBMIT_END, int64_t(f.frame_id), now_ns());
 	std::array<CVPixelBufferRef, 2> buf{};
 	for (int eye = 0; eye < 2; ++eye)
 		if (f.eye[eye].surface and CVPixelBufferCreateWithIOSurface(nullptr, f.eye[eye].surface, nullptr, &buf[eye]) != kCVReturnSuccess)
