@@ -16,6 +16,12 @@
 #include "wmtr_proto.h"
 #include "wmtr_transport.h"
 #include "wmtr_host.h"
+#include "wmtr_vr.h"
+#include "vrlink.h"
+#include <IOSurface/IOSurface.h>
+#include <servers/bootstrap.h>
+#include <sys/socket.h>
+#include <poll.h>
 
 typedef int NTSTATUS;
 typedef NTSTATUS (*fn_t)(void *);
@@ -79,7 +85,7 @@ static NTSTATUS f_newfunction(void *a) {
   p->ret = strlen((const char *)(uintptr_t)p->arg) * 1000 + p->handle;
   return 0;
 }
-const void *wmtr_impl_funcs[146] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
+const void *wmtr_impl_funcs[WMTR_NCALLS] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
                                     [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [5] = f_fault, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
@@ -109,6 +115,141 @@ struct wmtr_transport *wmtr_transport_create(void) {
 }
 static NTSTATUS remote(int call, void *p) { return ((fn_t)__wine_unix_call_funcs[call])(p); }
 static NTSTATUS native(int call, void *p) { return ((fn_t)wmtr_impl_funcs[call])(p); }
+
+
+/* ---------------- VR export (call 146) ---------------- */
+extern kern_return_t bootstrap_register2(mach_port_t, name_t, mach_port_t, uint64_t);
+static mach_port_t vr_port;
+static IOSurfaceRef vr_surf[16][VRL_MAX_IMAGES];
+static uint32_t vr_fmt[16];
+/* the steamac-vrhost end, minimal: next packet; swapchain ports are taken from the Mach port */
+static int vr_recv(int fd, void *buf, size_t n, int timeout_ms) {
+  struct pollfd pf = {fd, POLLIN, 0};
+  if (poll(&pf, 1, timeout_ms) != 1) return -1;
+  int r = (int)recv(fd, buf, n, 0);
+  struct vrl_header *h = buf;
+  if (r >= (int)sizeof(struct vrl_swapchain) && h->type == VRL_SWAPCHAIN) {
+    struct vrl_swapchain *sc = buf;
+    struct vrl_mach_swapchain_rcv m;
+    memset(&m, 0, sizeof m);
+    if (mach_msg(&m.msg.header, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof m, vr_port, 2000, MACH_PORT_NULL) == KERN_SUCCESS &&
+        m.msg.swapchain_id == sc->id && sc->id < 16) {
+      for (uint32_t i = 0; i < m.msg.image_count; i++) {
+        vr_surf[sc->id][i] = IOSurfaceLookupFromMachPort(m.msg.ports[i].name);
+        mach_port_deallocate(mach_task_self(), m.msg.ports[i].name);
+      }
+      vr_fmt[sc->id] = sc->pixel_format;
+    }
+  }
+  return r;
+}
+static int vr_next(int fd, uint32_t type, void *buf, size_t n) {
+  for (int i = 0; i < 16; i++) {
+    if (vr_recv(fd, buf, n, 3000) <= 0) return 0;
+    if (((struct vrl_header *)buf)->type == type) return 1;
+  }
+  return 0;
+}
+static uint32_t pattern(int eye, uint32_t x, uint32_t y) { return 0xff000000u | ((eye ? 0x00ff00u : 0x0000ffu) ^ (((x * 3 + y * 5) & 0xff) << 16)); }
+static int surface_matches(IOSurfaceRef s, int eye, uint32_t ox, uint32_t oy, uint32_t w, uint32_t h) {
+  IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL);
+  const uint8_t *b = IOSurfaceGetBaseAddress(s); size_t bpr = IOSurfaceGetBytesPerRow(s);
+  int ok = IOSurfaceGetWidth(s) == w && IOSurfaceGetHeight(s) == h;
+  for (uint32_t y = 0; ok && y < h; y++)
+    for (uint32_t x = 0; ok && x < w; x++) ok = ((const uint32_t *)(b + y * bpr))[x] == pattern(eye, ox + x, oy + y);
+  IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
+  return ok;
+}
+static void test_vr(id<MTLDevice> dev) {
+  struct unixcall_wmtvr_submit sub;
+  memset(&sub, 0, sizeof sub);
+  CHECK(wmtr_vr_submit(NULL, &sub.info) == (int)0xC00000BB, "no exporter: not STATUS_NOT_SUPPORTED");
+  char name[64]; snprintf(name, sizeof name, "com.steamac.vrhost.test.%d", (int)getpid());
+  mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &vr_port);
+  mach_port_insert_right(mach_task_self(), vr_port, vr_port, MACH_MSG_TYPE_MAKE_SEND);
+  kern_return_t kr = bootstrap_register2(bootstrap_port, name, vr_port, 0);
+  CHECK(kr == KERN_SUCCESS, "bootstrap_register2: %d", kr);
+  int sv[2]; socketpair(AF_UNIX, SOCK_DGRAM, 0, sv);
+  struct wmtr_vr *vr = wmtr_vr_create(sv[0], name);
+  wmtr_host_set_vr(H, vr);
+  union { struct vrl_header h; struct vrl_hello hello; struct vrl_submit s; uint8_t raw[1024]; } u;
+  CHECK(vr_next(sv[1], VRL_HELLO, &u, sizeof u) && u.hello.version == VRL_VERSION, "no VRL_HELLO");
+  /* two eye textures: an atlas-style left eye (sub-rect) and a whole right eye */
+  id<MTLTexture> tex[2];
+  uint32_t TW = 320, TH = 200;
+  for (int e = 0; e < 2; e++) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB width:TW height:TH mipmapped:NO];
+    d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+    tex[e] = [dev newTextureWithDescriptor:d];
+    uint32_t *px = malloc(TW * TH * 4);
+    for (uint32_t y = 0; y < TH; y++) for (uint32_t x = 0; x < TW; x++) px[y * TW + x] = pattern(e, x, y);
+    [tex[e] replaceRegion:MTLRegionMake2D(0, 0, TW, TH) mipmapLevel:0 withBytes:px bytesPerRow:TW * 4];
+    free(px);
+  }
+  /* the guest's rendering is ordered through a shared event: the export must wait for it */
+  id<MTLSharedEvent> ev = [dev newSharedEvent];
+  sub.info.frame_id = 7; sub.info.display_time = 123456789;
+  sub.info.eye[0] = (struct WMTVREye){(obj_handle_t)tex[0], 16, 8, 256, 128, WMTVR_EYE_FLIP_Y, 0};
+  sub.info.eye[1] = (struct WMTVREye){(obj_handle_t)tex[1], 0, 0, 0, 0, 0, 0};
+  for (int e = 0; e < 2; e++) {
+    float pose[7] = {0, 0, 0, 1, e ? 0.032f : -0.032f, 1.6f, 0};
+    float fov[4] = {-0.9f, 0.8f, 0.85f, -0.95f};
+    memcpy(sub.info.pose[e], pose, sizeof pose); memcpy(sub.info.fov[e], fov, sizeof fov);
+  }
+  sub.info.wait_event = (obj_handle_t)ev; sub.info.wait_value = 1;
+  remote(146, &sub);
+  struct unixcall_generic_obj_uint64_ret sync = {0}; remote(39, &sync);
+  /* not signalled yet: nothing may arrive */
+  struct pollfd pf = {sv[1], POLLIN, 0};
+  int got_early = 0;
+  while (poll(&pf, 1, 200) == 1) { vr_recv(sv[1], &u, sizeof u, 0); if (u.h.type == VRL_SUBMIT) got_early = 1; }
+  CHECK(!got_early, "VRL_SUBMIT before the guest's work completed");
+  ev.signaledValue = 1;
+  int ok = vr_next(sv[1], VRL_SUBMIT, &u, sizeof u);
+  CHECK(ok && u.s.frame_id == 7 && u.s.display_time == 123456789 && u.s.ready_time >= u.s.app_submit_time, "VRL_SUBMIT");
+  if (ok) {
+    CHECK(u.s.eye[0].w == 256 && u.s.eye[0].h == 128 && (u.s.eye[0].flags & VRL_EYE_FLIP_Y) && u.s.eye[1].w == TW && u.s.eye[1].h == TH,
+          "eye rects %ux%u %ux%u", u.s.eye[0].w, u.s.eye[0].h, u.s.eye[1].w, u.s.eye[1].h);
+    CHECK(u.s.pose[1][4] == 0.032f && u.s.fov[0][3] == -0.95f, "pose/fov not passed through");
+    for (int e = 0; e < 2; e++) {
+      IOSurfaceRef sf = u.s.eye[e].swapchain < 16 ? vr_surf[u.s.eye[e].swapchain][u.s.eye[e].image] : NULL;
+      CHECK(sf && vr_fmt[u.s.eye[e].swapchain] == MTLPixelFormatRGBA8Unorm_sRGB, "eye %d: no surface", e);
+      if (sf) CHECK(surface_matches(sf, e, e ? 0 : 16, e ? 0 : 8, e ? TW : 256, e ? TH : 128), "eye %d pixels differ", e);
+    }
+  }
+  /* back-pressure: 3 images per eye, one still held by the host -> of 3 more frames, 2 go out and 1 drops */
+  struct vrl_submit held = u.s;
+  sub.info.wait_event = 0; sub.info.wait_value = 0;
+  for (int i = 0; i < 3; i++) { sub.info.frame_id = 8 + i; remote(146, &sub); }
+  remote(39, &sync);
+  int n = 0;
+  while (n < 2 && vr_next(sv[1], VRL_SUBMIT, &u, sizeof u)) n++;
+  struct wmtr_vr_stats st; wmtr_vr_get_stats(vr, &st);
+  CHECK(n == 2 && st.dropped == 1 && st.swapchains == 2, "back-pressure: %d sent, %llu dropped, %llu swapchains", n, st.dropped, st.swapchains);
+  /* releasing the held image lets the next frame through */
+  struct vrl_release rel = {{VRL_RELEASE, sizeof rel}, held.eye[0].swapchain, held.eye[0].image, held.frame_id, 0};
+  send(sv[1], &rel, sizeof rel, 0);
+  rel.swapchain = held.eye[1].swapchain; rel.image = held.eye[1].image; send(sv[1], &rel, sizeof rel, 0);
+  sub.info.frame_id = 20; remote(146, &sub); remote(39, &sync);
+  CHECK(vr_next(sv[1], VRL_SUBMIT, &u, sizeof u) && u.s.frame_id == 20, "frame after release not sent");
+  /* a size change recreates the swapchain (new ports, new id) */
+  sub.info.eye[0].w = 128; sub.info.eye[0].h = 64; sub.info.frame_id = 21;
+  remote(146, &sub); remote(39, &sync);
+  /* all images of eye 1 may be busy now; free everything first */
+  ok = vr_next(sv[1], VRL_SUBMIT, &u, sizeof u);
+  wmtr_vr_get_stats(vr, &st);
+  CHECK(st.swapchains == 3, "resize: %llu swapchains", st.swapchains);
+  /* a bad handle (MSAA / missing) is rejected without touching the link */
+  sub.info.eye[1].texture = 0; uint64_t errs = st.errors;
+  CHECK(wmtr_vr_submit(vr, &sub.info) == (int)0xC000000D, "null eye texture accepted");
+  wmtr_vr_get_stats(vr, &st);
+  CHECK(st.errors == errs + 1, "error not counted");
+  wmtr_host_set_vr(H, NULL);
+  wmtr_vr_destroy(vr);
+  close(sv[1]);
+  [tex[0] release]; [tex[1] release]; [ev release];
+  printf("vr: submits=%llu sent=%llu dropped=%llu released=%llu swapchains=%llu\n", st.submits, st.sent, st.dropped, st.released, st.swapchains);
+}
 
 static char frames_path[64];
 int main(void) {
@@ -232,6 +373,7 @@ int main(void) {
             "caller-placed buffer ret %llx mem %p", cb2.ret, ci.memory.ptr);
       free(own);
     }
+    test_vr(dev);
     struct wmtr_host_stats st; wmtr_host_get_stats(H, &st);
     printf("requests=%llu sync=%llu bytes=%llu\n", st.requests, st.sync_requests, st.bytes);
     { /* an autoreleased result outside any client pool must outlive the request (DXMT reads it next) */
