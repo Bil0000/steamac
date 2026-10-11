@@ -72,8 +72,15 @@ class Compositor : public StubIVRCompositor {
     return true;
   }
   uint32_t GetFrameTimings(Compositor_FrameTiming *t, uint32_t n) override {
-    for (uint32_t i = 0; i < n; i++)
-      if (!GetFrameTiming(&t[i], i)) return i;
+    // older versions of the struct are smaller: the array stride is the caller's m_nSize, not sizeof
+    if (!t || !n) return 0;
+    uint32_t stride = t->m_nSize;
+    if (stride < sizeof(uint32_t) * 2 || stride > sizeof(*t)) return 0;
+    for (uint32_t i = 0; i < n; i++) {
+      auto *e = (Compositor_FrameTiming *)((char *)t + (size_t)stride * i);
+      e->m_nSize = stride;
+      if (!GetFrameTiming(e, i)) return i;
+    }
     return n;
   }
   float GetFrameTimeRemaining() override {
