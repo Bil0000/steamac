@@ -81,6 +81,35 @@ static int probe_alive;
 - (void)dealloc { probe_alive = 0; [super dealloc]; }
 @end
 static NTSTATUS f_autoreleased(void *a) { ((struct unixcall_generic_obj_ret *)a)->ret = (obj_handle_t)[[[Probe alloc] init] autorelease]; return 0; }
+/* DXMT's out-errors: autoreleased NSError retained before the handle is returned (+1, owned by the caller) */
+static int err_alive;
+@interface ErrProbe : NSObject
+@end
+@implementation ErrProbe
+- (instancetype)init { if ((self = [super init])) err_alive = 1; return self; }
+- (void)dealloc { err_alive = 0; [super dealloc]; }
+@end
+static NTSTATUS f_newlibrary(void *a) {
+  struct unixcall_mtldevice_newlibrary *p = a;
+  p->ret_library = 0;
+  p->ret_error = (obj_handle_t)[[[[ErrProbe alloc] init] autorelease] retain];
+  return 0;
+}
+/* SM50Compile: walks the argument list the way airconv does; sums each root signature's bytecode */
+static uint64_t sm50_rs_sum[2]; static uint32_t sm50_rs_len[2];
+static NTSTATUS f_sm50compile(void *a) {
+  struct sm50_compile_params *p = a;
+  memset(sm50_rs_sum, 0, sizeof sm50_rs_sum); memset(sm50_rs_len, 0, sizeof sm50_rs_len);
+  for (struct SM50_SHADER_COMPILATION_ARGUMENT_DATA *g = p->args; g; g = g->next) {
+    if (g->type != SM50_SHADER_ROOT_SIGNATURE && g->type != SM50_SHADER_ROOT_SIGNATURE2) continue;
+    struct SM50_SHADER_ROOT_SIGNATURE_DATA *d = (void *)g;
+    int k = g->type == SM50_SHADER_ROOT_SIGNATURE2;
+    sm50_rs_len[k] = (uint32_t)d->bytecode_length;
+    for (size_t i = 0; i < d->bytecode_length; i++) sm50_rs_sum[k] = sm50_rs_sum[k] * 31 + ((const uint8_t *)d->bytecode)[i];
+  }
+  *p->bitcode = (sm50_bitcode_t)(uintptr_t)0x5150; p->ret = 0;
+  return 0;
+}
 static NTSTATUS f_pixelformat(void *a) { ((struct unixcall_generic_obj_uint64_ret *)a)->ret = 70; return 0; } /* RGBA8 */
 static NTSTATUS f_release(void *a) { [(id)*(obj_handle_t *)a release]; return 0; }
 static NTSTATUS f_newfunction(void *a) {
@@ -88,7 +117,7 @@ static NTSTATUS f_newfunction(void *a) {
   p->ret = strlen((const char *)(uintptr_t)p->arg) * 1000 + p->handle;
   return 0;
 }
-const void *wmtr_impl_funcs[WMTR_NCALLS] = {[1] = f_release, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
+const void *wmtr_impl_funcs[WMTR_NCALLS] = {[1] = f_release, [25] = f_newlibrary, [76] = f_sm50compile, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
                                     [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [5] = f_fault, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
@@ -469,6 +498,28 @@ int main(void) {
       remote(53, &ar);
       struct unixcall_generic_obj_uint64_ret pf3 = {0}; remote(39, &pf3);
       CHECK(ar.ret && probe_alive, "autoreleased result without a pool was freed with the request");
+    }
+    { /* D3D12 pipelines pass serialized root signatures through SM50Compile's argument list */
+      uint8_t rs1[300], rs2[77]; for (int i = 0; i < 300; i++) rs1[i] = (uint8_t)(i * 7 + 1); for (int i = 0; i < 77; i++) rs2[i] = (uint8_t)(i ^ 0x5a);
+      struct SM50_SHADER_ROOT_SIGNATURE_DATA r2 = {.next = NULL, .type = SM50_SHADER_ROOT_SIGNATURE2, .bytecode = rs2, .bytecode_length = 77};
+      struct SM50_SHADER_ROOT_SIGNATURE_DATA r1 = {.next = &r2, .type = SM50_SHADER_ROOT_SIGNATURE, .bytecode = rs1, .bytecode_length = 300};
+      struct SM50_SHADER_COMMON_DATA cm = {0}; cm.next = &r1; cm.type = SM50_SHADER_COMMON;
+      sm50_bitcode_t bc = 0; sm50_error_t er = 0;
+      struct sm50_compile_params cp = {.shader = 0, .args = &cm, .func_name = "main", .bitcode = &bc, .error = &er};
+      native(76, &cp); uint64_t n0 = sm50_rs_sum[0], n1 = sm50_rs_sum[1];
+      bc = 0; NTSTATUS st = remote(76, &cp);
+      CHECK(st == 0 && bc == (sm50_bitcode_t)(uintptr_t)0x5150 && sm50_rs_len[0] == 300 && sm50_rs_len[1] == 77 &&
+            sm50_rs_sum[0] == n0 && sm50_rs_sum[1] == n1, "root signature args: st=%x len %u/%u", st, sm50_rs_len[0], sm50_rs_len[1]);
+    }
+    { /* a +1 out-error lives exactly as long as the caller holds it: wmtr neither keeps nor drops it */
+      struct unixcall_mtldevice_newlibrary nl = {0};
+      remote(25, &nl);
+      struct unixcall_generic_obj_uint64_ret pf4 = {0}; remote(39, &pf4);
+      CHECK(nl.ret_error && err_alive, "out-error freed before its owner released it");
+      obj_handle_t eh = nl.ret_error;
+      remote(1, &eh);
+      remote(39, &pf4);
+      CHECK(!err_alive, "out-error still alive after its owner released it (kept by wmtr)");
     }
     { /* WMTR_FRAMES: a presenting command buffer adds one line when it completes */
       id<MTLCommandQueue> q = [MTLCreateSystemDefaultDevice() newCommandQueue];

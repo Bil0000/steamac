@@ -577,6 +577,8 @@ marshal_sm50_args(uint32_t field_off, const struct SM50_SHADER_COMPILATION_ARGUM
     case SM50_SHADER_GS_PASS_THROUGH: sz = sizeof(struct SM50_SHADER_GS_PASS_THROUGH_DATA); break;
     case SM50_SHADER_PSO_GEOMETRY_SHADER: sz = sizeof(struct SM50_SHADER_PSO_GEOMETRY_SHADER_DATA); break;
     case SM50_SHADER_PSO_TESSELLATOR: sz = sizeof(struct SM50_SHADER_PSO_TESSELLATOR_DATA); break;
+    /* D3D12: the serialized root signature (ROOT_SIGNATURE2: the vertex stage's, for tessellation) */
+    case SM50_SHADER_ROOT_SIGNATURE: case SM50_SHADER_ROOT_SIGNATURE2: sz = sizeof(struct SM50_SHADER_ROOT_SIGNATURE_DATA); break;
     default: LOG(0, "sm50 arg type %u not remotable\n", a->type); B.error = 1; return;
     }
     uint32_t o = b_grow(sz);
@@ -588,6 +590,9 @@ marshal_sm50_args(uint32_t field_off, const struct SM50_SHADER_COMPILATION_ARGUM
       const struct SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT_DATA *d = (const void *)a;
       b_in(o + OFF(struct SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT_DATA, elements), d->elements,
            (uint64_t)d->num_elements * sizeof(struct SM50_STREAM_OUTPUT_ELEMENT));
+    } else if (a->type == SM50_SHADER_ROOT_SIGNATURE || a->type == SM50_SHADER_ROOT_SIGNATURE2) {
+      const struct SM50_SHADER_ROOT_SIGNATURE_DATA *d = (const void *)a;
+      b_in(o + OFF(struct SM50_SHADER_ROOT_SIGNATURE_DATA, bytecode), d->bytecode, (uint64_t)d->bytecode_length);
     } else if (a->type == SM50_SHADER_IA_INPUT_LAYOUT) {
       const struct SM50_SHADER_IA_INPUT_LAYOUT_DATA *d = (const void *)a;
       b_in(o + OFF(struct SM50_SHADER_IA_INPUT_LAYOUT_DATA, elements), d->elements,
