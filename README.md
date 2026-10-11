@@ -1,77 +1,122 @@
-# steamac with genuine-EAC games (branch `fex-eac`)
+# steamac with genuine-EAC games and a DXMT graphics path
 
-**A fork of [steamac](https://github.com/fxgl/steamac) that runs x86-64 games with genuine Easy Anti-Cheat — verified with
-VRChat — on an Apple silicon Mac.**
+**English** · [Русский](README.ru.md) · [简体中文](README.zh.md)
 
-It does this by replacing the FEX inside Steam's own FEX compatibility tool (Steam app 3127680) with a patched FEX-2610
-build (patches 0001–0026; 0021 is withdrawn), plus launcher, stability and performance fixes that are **experimental** (see [Results](#results)).
-The EAC client is the stock one from the Proton EasyAntiCheat
-Runtime; nothing fakes, replays or short-circuits its result. Valve's SteamOS rootfs is unmodified — everything lives in
-the guest's home directory.
+**A fork of [steamac](https://github.com/fxgl/steamac) for Apple silicon Macs. It runs x86-64 Windows games with genuine
+Easy Anti-Cheat (verified: VRChat), with a choice of two graphics paths.**
 
-It is deliberately **one game on one machine** (VRChat on an M2 MacBook Air, 16 GB, macOS 27.0). Treat it as a starting
-point. Nothing here is submitted to steamac, libkrun, Mesa, FEX or Proton. Not affiliated with FX GAMES, Valve, Epic Games
-or VRChat.
+- **Vulkan (classic)**: Direct3D through DXVK on Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK on the Mac.
+  This is upstream steamac's path.
+- **DXMT (lean)**: Direct3D 11 through [DXMT](https://github.com/3Shain/dxmt). Its Metal calls run natively on the Mac
+  over a dedicated virtio-gpu channel, so there are fewer translation layers.
 
-## What it takes
+The EAC client is the stock one from the Proton EasyAntiCheat Runtime. Nothing fakes, replays or short-circuits its
+result. Not affiliated with FX GAMES, Valve, Epic Games, VRChat or the DXMT authors.
 
-| you need | why |
+Status: verified on one Mac and one anti-cheat title. The default is the Vulkan path; DXMT is a setting you turn on.
+Published VRChat frame rates exist only for the Vulkan path (about 26-30 fps in a light world at 1280x800); there are
+no published figures for DXMT yet.
+
+## Requirements
+
+| you need | notes |
 |---|---|
-| **the steamac app** (1.8.x) and a booted SteamOS disk | the guest is Valve's ARM64 SteamOS (Steam Frame image); create and boot the disk with the app ([upstream docs](docs/upstream/requirements-and-building.md)) |
-| **Proton Experimental** set as VRChat's compatibility tool | ARM64 Steam otherwise installs VRChat's Android build, which no FEX change can fix; Proton Experimental selects the Windows depot |
-| **Proton EasyAntiCheat Runtime** (Steam tool 1826330) | supplies the stock EAC launcher and client; must be installed explicitly |
-| **the patched FEX in Steam's FEX tool**, from `fex-eac/` | Valve's FEX-2607 fails EAC's `ptrace` injection and signal semantics ([docs/eac-how-it-works.md](docs/eac-how-it-works.md)) |
-| **the VRChat launch options**, including `WINE_CPU_TOPOLOGY` | load the EAC runtime and remove the pre-join stall ([fex-eac/README.md](fex-eac/README.md)) |
-| **macOS microphone permission** for the app | without it the guest's audio capture floods errors and the game can freeze ([docs/eac-troubleshooting.md](docs/eac-troubleshooting.md)) |
+| an Apple silicon Mac | verified on an M2 MacBook Air, 16 GB, macOS 27.0; other Macs are untested |
+| macOS 15 or newer | KosmicKrisp (the faster Vulkan driver) needs macOS 26. The DXMT path's host library is built for macOS 15.5 or newer |
+| free disk space | about 14 GB on the disk's volume while the SteamOS disk is created (about 9 GB afterwards), plus room for games (the home size is chosen at creation and can be enlarged later with Grow Disk) |
+| memory | automatic VM RAM is half of the Mac's RAM (4-16 GiB); verified with 16 GB |
+| a Steam account | games are installed and run inside SteamOS |
 
-## Quick start
+## Install and first launch
 
-1. Install steamac 1.8.x on an Apple silicon Mac and create and boot the SteamOS disk with the app, as described in
-   [the upstream documentation](docs/upstream/requirements-and-building.md).
-2. In Steam, install **VRChat** and set its compatibility tool to **Proton Experimental**; install the **Proton
-   EasyAntiCheat Runtime**.
-3. Enable SSH in the guest (Settings → Advanced), copy `fex-eac/` over, and run the setup:
+1. Download `FX-Steam-Launcher-<version>.dmg` from this fork's release page, drag **FX Steam Launcher.app** to Applications
+   and open it.
+2. On first start, choose **Create New Disk…**. The app downloads Valve's SteamOS image, verifies it and sets it up.
+   This takes a while, once.
+3. Sign in to Steam in the window. Keep a **16:10** window size (Settings > Display > Default window
+   size; the default, 1280×800, is 16:10). A 16:9 game in a 16:10 window is letterboxed.
+4. Grant the **microphone** permission when macOS asks. Without it, the guest's audio capture fails repeatedly and games
+   can stutter.
+5. In Steam, install VRChat, set its compatibility tool to **Proton Experimental**, and install **Proton EasyAntiCheat
+   Runtime**. See [SETUP.md](SETUP.md) for the full steps.
 
-   ```sh
-   sh build-fex.sh            # clone FEX-2610, apply patches/, build, stage
-   sh install-fex-tool.sh     # swap into the compat tool (Valve's files backed up)
-   sh install-fex-tool.sh status
-   ```
+## Choosing the graphics path
 
-4. Set VRChat's Steam launch options from [fex-eac/README.md](fex-eac/README.md), then start the game.
+Settings > Advanced > **Graphics path**: *DXMT (lean)* or *Vulkan (classic)*; it applies from the next start. Nothing
+to set per game: when Steam starts, every installed Proton gets the selected path, and Proton puts it into each game's
+prefix. Switching back to *Vulkan* restores Proton's own files exactly. DXMT covers Direct3D 11 (and 10); play Direct3D
+12 games on *Vulkan* (untested or limited under DXMT). EAC with DXMT on a real prefix is unverified until first launch;
+switch to *Vulkan* if EAC fails.
 
-## Results
+The **Metal Performance HUD** shows the frame rate on either path: Settings > Display, the View menu, or Ctrl+Cmd+P. It can
+be turned on and off while a game runs.
 
-Three sessions, 2026-10-08, M2 MacBook Air 16 GB, macOS 27.0, steamac 1.8.1/1.8.2.
+## Easy Anti-Cheat
 
-| measurement | result |
+EAC runs inside SteamOS under Valve's FEX emulator. This fork's patched FEX passes EAC's checks for VRChat. Today two
+manual steps are required for VRChat; both are planned to become automatic:
+
+1. Install the patched FEX: enable SSH (Settings > Advanced), then run `build-fex.sh` and `install-fex-tool.sh` in the
+   guest ([fex-eac/README.md](fex-eac/README.md)).
+2. Set VRChat's Steam launch options (`EAC_LAUNCHERDIR`, `PROTON_EAC_RUNTIME`, `WINE_CPU_TOPOLOGY`, ...), exactly as given
+   in [fex-eac/README.md](fex-eac/README.md) and [SETUP.md](SETUP.md).
+
+- **Expected:** EAC's launcher reports `Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'` and
+  the game logs `AntiCheat Session Begin: Success`.
+- **Not expected to work:** anti-cheat that refuses virtual machines, and titles whose anti-cheat uses its own
+  anti-debug checks beyond EAC's Linux module.
+- **After a Steam update:** if Steam updates its FEX tool, it replaces the patched build. Run
+  `sh install-fex-tool.sh` again.
+
+## Troubleshooting
+
+| symptom | what to do |
 |---|---|
-| EAC launcher | `Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'` in ~5 s, every session |
-| anti-cheat session | `[AntiCheatClient] … bound`, `AntiCheat Session Begin: Success`; no `null client` |
-| world entry | `Finished entering world`; no Photon time-out in the minutes after |
-| region lookup | 4–6 s (`Locating best region` → `Got best network region`); no pre-join stall |
-| join → world | 86 s first run (cold shader cache), 32 s second run (warm caches + FEX DiskCache) |
-| frame rate, light world | ~26–30 fps steady at 1280×800, GPU-bound (see [docs/eac-performance.md](docs/eac-performance.md)) |
+| the game window stays black on DXMT | check that Settings shows *DXMT* and restart the launcher after changing the path; fall back to *Vulkan* |
+| EAC fails on DXMT | switch to *Vulkan* and restart the launcher |
+| EAC does not finish, or fails after a Steam update | the patched FEX is missing or was replaced by Valve's; run `sh install-fex-tool.sh status` |
+| about a minute's stall before joining | check that `WINE_CPU_TOPOLOGY` is in the launch options |
+| stutter with audio crackle | grant the microphone permission (System Settings > Privacy & Security > Microphone) |
+| long first launch | shaders compile once per game and path; later launches are faster |
 
-The verified, recommended setup is the **release steamac app plus `fex-eac/` (patched FEX 0001–0026)**, which is built
-and tested (3 sessions). The app-side changes this fork builds into the launcher — libkrun 0018 (async capture start) and
-0019 (damage-only frame copy), KosmicKrisp 0041 (async pipelines) and 0042 (robustness fixes), and the launcher fixes
-(present, input, stall, render-scale) — are **experimental**: in live VRChat tests the fork-built app crashed the VM once with `MESA_KK_ASYNC_PIPELINES=1`, while the release steamac app with the same patched FEX works. KosmicKrisp 0047 addresses that crash in code, but no live run on record includes 0047 yet. Async pipelines stay off by default and are not recommended: an idle in-world run with `=1` was clearly worse than off. See [docs/fork.md](docs/fork.md) for the per-change status. Verified only on an M2 MacBook Air,
-16 GB, macOS 27.0; other Macs and macOS versions are untested. Anti-cheat that blocks VMs will not work, and a Steam
-update of the FEX tool overwrites it with Valve's build — re-run `sh install-fex-tool.sh`.
+More: [docs/eac-troubleshooting.md](docs/eac-troubleshooting.md).
+
+## Limits
+
+- One machine verified (M2, 16 GB, macOS 27.0); one EAC title verified (VRChat).
+- DXMT: Direct3D 11/10 only. Feature level is capped at 11_1 (no DXIL, no conservative rasterization).
+- Direct3D 12 through D3DMetal is **planned**, not included.
+- The DXMT setting applies to every game; on it the game's Metal layer covers the whole VM view (a windowed game or alt-tab
+  shows the game layer).
+- Games that need more memory than the VM gets (Settings > Advanced) will swap.
+- Asynchronous pipeline compilation exists in the build but is off and not recommended (measured worse).
+- The microphone has had little testing; a freeze after a microphone start is not fully ruled out. A rebuilt or re-signed
+  app asks again for microphone permission.
 
 ## Documentation
 
 | page | contents |
 |---|---|
+| [SETUP.md](SETUP.md) | the full setup guide: install, graphics path, Easy Anti-Cheat, troubleshooting |
 | [docs/fork.md](docs/fork.md) | what changed in this fork and its status |
-| [docs/eac-how-it-works.md](docs/eac-how-it-works.md) | the chain and why the FEX swap is needed |
-| [docs/eac-troubleshooting.md](docs/eac-troubleshooting.md) | symptoms, checks and fixes |
+| [docs/eac-how-it-works.md](docs/eac-how-it-works.md) | the EAC chain and why the FEX swap is needed |
 | [docs/eac-performance.md](docs/eac-performance.md) | measurements and limits |
-| [fex-eac/README.md](fex-eac/README.md) | FEX setup and launch options |
+| [fex-eac/README.md](fex-eac/README.md) | patched FEX setup and launch options |
 | [docs/upstream/README.md](docs/upstream/README.md) | upstream steamac's documentation (Apache-2.0, © FX GAMES FZ LLC) |
 
-## License
+## Licences and attributions
 
-This fork keeps steamac's Apache-2.0 license; see `LICENSE` and `NOTICE`. The scripts under `fex-eac/` are Apache-2.0, and
-`fex-eac/patches/` are patches to FEX-Emu under FEX's MIT license.
+| component | licence |
+|---|---|
+| steamac (this fork) | Apache-2.0, © FX GAMES FZ LLC and contributors (`LICENSE`, `NOTICE`) |
+| FEX-Emu patches (`fex-eac/patches/`) | MIT, as FEX-Emu |
+| DXMT, with this fork's patches (`host/dxmt/patches/`) | LGPL-2.1 |
+| wmtr (the DXMT remoting layer, `wmtr/`) | BSD-3-Clause |
+| libkrun and its patches | Apache-2.0 |
+| virglrenderer, Mesa / KosmicKrisp | MIT |
+| MoltenVK | Apache-2.0 |
+| DXVK (zlib), Proton / Wine (LGPL-2.1 and others) | per upstream; installed by Steam, not shipped |
+| Linux kernel derivatives | GPL-2.0-only; complete source for each release is attached to it |
+
+**D3DMetal is not bundled.** The app ships no game files and no EAC binaries. EAC comes from Valve's Proton EasyAntiCheat Runtime,
+installed by Steam.

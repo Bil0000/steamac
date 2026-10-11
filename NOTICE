@@ -54,6 +54,8 @@ fork are listed in docs/fork.md. New files added by this fork:
                            MIT (the license of FEX)
   docs/eac-*.md            fork documentation, Apache-2.0
   docs/fork.md             fork documentation, Apache-2.0
+  wmtr/                    the DXMT remoting layer, BSD-3-Clause
+  host/dxmt/patches/       patches to DXMT, LGPL-2.1 (the license of DXMT)
   docs/upstream/           upstream steamac's README text, reorganised into pages
                            (upstream text, Apache-2.0, © 2026 FX GAMES FZ LLC)
 

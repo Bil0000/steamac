@@ -1,10 +1,10 @@
 #!/bin/bash
 # renderer.sh dxmt|d3dmetal|wine [DXMT_DIR]: switch the D3D11 implementation of the extracted Sikarugir
-# Wine engine on /Volumes/LEANWORK (local test copy only). DXMT_DIR defaults to Sikarugir's DXMT build
+# Wine engine given by ENGINE (a local test copy only). DXMT_DIR defaults to Sikarugir's DXMT build
 # (layout: wine/x86_64-windows/*.dll, wine/x86_64-unix/winemetal.so).
 set -eu
-E=${ENGINE:-/Volumes/LEANWORK/wine/wswine.bundle/lib/wine}
-ORIG=${ENGINE_ORIG:-/Volumes/LEANWORK/wine/engine-orig}
+E=${ENGINE:?set ENGINE to the lib/wine directory of the Wine engine copy}
+ORIG=${ENGINE_ORIG:-$E/../engine-orig}
 T="$HOME/Library/Application Support/Sikarugir/Template/Template-1.0.15.app/Contents/Frameworks/renderer"
 files="x86_64-windows/d3d11.dll x86_64-windows/dxgi.dll x86_64-windows/d3d10core.dll x86_64-windows/winemetal.dll x86_64-windows/d3d12.dll x86_64-windows/nvapi64.dll x86_64-windows/nvngx.dll x86_64-windows/atidxx64.dll x86_64-unix/winemetal.so x86_64-unix/d3d11.so x86_64-unix/dxgi.so x86_64-unix/d3d12.so x86_64-unix/nvapi64.so x86_64-unix/nvngx.so x86_64-unix/atidxx64.so"
 if [ ! -d "$ORIG" ]; then

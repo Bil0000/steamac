@@ -4,7 +4,7 @@ A sample counts as busy unless its leaf frame is a blocking wait (mach_msg, psyn
 waits, kevent, sleep). Prints the N busiest threads (default 25) and the total, as busy samples and as
 % of one core (samples / thread samples * 100).
 Limit: a vCPU thread inside hv_vcpu_run counts as busy even while the guest idles in the hypervisor;
-use per-thread `ps -M` (vrc-p6.sh host-threads.log) for vCPU load."""
+use a periodic per-thread `ps -M` sample of the VM process for vCPU load."""
 import re, sys
 WAIT = re.compile(r'mach_msg2_trap|__psynch_|__ulock_wait|semaphore_\w*wait|__semwait_signal|kevent|__select|'
                   r'__workq_kernreturn|mach_wait_until|__sigsuspend|__wait4|\bpoll\b|__recvfrom|__recvmsg|__read_nocancel|^read\b|'
