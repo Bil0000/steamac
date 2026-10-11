@@ -33,6 +33,13 @@ enum GraphicsPathSelfTest {
                 check(wmtr == nil && lib == nil, "\(path.name): wmtr environment left set")
             }
         }
+        // Frame latency (Settings > Advanced): on maps to steamac.frame_latency=1, off adds no key;
+        // the host side of the guest script's contract (scripts/test/steam-frame-latency.sh).
+        check(Options.frameLatencyArg(true)?.key == "steamac.frame_latency" && Options.frameLatencyArg(true)?.value == "1",
+              "frame latency on must map to steamac.frame_latency=1")
+        check(Options.frameLatencyArg(false) == nil, "frame latency off must add no kernel key")
+        check(Options().frameLatency == false, "frame latency must default off")
+        log("selftest-graphics-path: frame latency \(Options.frameLatencyArg(true)?.key ?? "-")=\(Options.frameLatencyArg(true)?.value ?? "off")")
         log(failures == 0 ? "selftest-graphics-path: PASS" : "selftest-graphics-path: \(failures) FAILED")
         exit(failures == 0 ? 0 : 1)
     }
