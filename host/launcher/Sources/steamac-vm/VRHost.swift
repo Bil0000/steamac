@@ -1,0 +1,192 @@
+import Darwin
+import Foundation
+
+/// VR (experimental, Settings > Advanced, `--vr`): the VM process starts `steamac-vrhost`, a separate
+/// GPL-3.0-or-later executable in the app (Contents/MacOS; WiVRn-compatible headset server, compositor and
+/// encoder: host/vrhost, docs/vr.md). This process never links it; the coupling is the VR link of
+/// docs/vr-interfaces.md section 3: an AF_UNIX SOCK_DGRAM socketpair (the host's end passed as --link-fd)
+/// and a bootstrap name for the swapchain IOSurface ports (--mach-name). Our end is announced to the wmtr
+/// executor (libwmtr_host, loaded by libkrun in this process) through WMTR_VR_FD / WMTR_VR_MACH_NAME, so
+/// DXMT's WMTVRSubmit (call 146) reaches the host. The host ends when this process closes its end: libkrun
+/// `_exit()`s the process when the VM stops, which closes it, so the host goes down with the VM even
+/// without stop(). Off (the default): nothing is created and the variables are cleared.
+enum VRHost {
+    static let executable = "steamac-vrhost"
+    static let envKeys = ["WMTR_VR_FD", "WMTR_VR_MACH_NAME"]
+
+    struct Running {
+        let pid: pid_t
+        let fd: Int32          // our end of the link (kept open for the VM's lifetime)
+        let machName: String
+    }
+    nonisolated(unsafe) private(set) static var running: Running?
+
+    /// The bundled host executable; STEAMAC_VRHOST overrides it (development builds, self-test).
+    static var path: String? {
+        if let p = ProcessInfo.processInfo.environment["STEAMAC_VRHOST"], !p.isEmpty {
+            return FileManager.default.isExecutableFile(atPath: p) ? p : nil
+        }
+        guard let p = Bundle.main.path(forAuxiliaryExecutable: executable) else { return nil }
+        return FileManager.default.isExecutableFile(atPath: p) ? p : nil
+    }
+
+    /// English diagnostic for logs and command-line errors; nil if this boot can use VR.
+    static func unavailableReason(_ o: Options) -> String? {
+        if path == nil { return "not included in this build (\(executable))" }
+        if o.graphicsPath != .dxmt { return "needs the DXMT graphics path" }
+        return nil
+    }
+
+    static var logPath: String {
+        NSHomeDirectory() + "/Library/Logs/" + LauncherSettings.defaultDomain + "/steamac-vrhost.log"
+    }
+
+    /// Called once per boot before libkrun creates the wmtr context (VM.start). Never fatal: VR stays off
+    /// with a log line when the host cannot start.
+    static func apply(_ o: Options) {
+        for k in envKeys { unsetenv(k) }
+        guard o.vr else { return }
+        if let reason = unavailableReason(o) {
+            log("vr: off, \(reason)")
+            return
+        }
+        do {
+            let r = try start(extraArgs: [], logPath: logPath)
+            setenv("WMTR_VR_FD", String(r.fd), 1)
+            setenv("WMTR_VR_MACH_NAME", r.machName, 1)
+            log("vr: steamac-vrhost pid \(r.pid), link fd \(r.fd), mach name \(r.machName), log \(logPath)")
+        } catch {
+            log("vr: off, \(error)")
+        }
+    }
+
+    /// Creates the link, spawns the host with its end, and returns our end (FD_CLOEXEC: no other child
+    /// inherits it, so the host sees end-of-file exactly when this process lets go of it).
+    @discardableResult
+    static func start(extraArgs: [String], logPath: String?) throws -> Running {
+        guard let exe = path else { throw OptionError("\(executable) not found") }
+        var sv: [Int32] = [-1, -1]
+        guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &sv) == 0 else {
+            throw OptionError("socketpair: \(String(cString: strerror(errno)))")
+        }
+        _ = fcntl(sv[0], F_SETFD, FD_CLOEXEC)
+        let machName = "\(LauncherSettings.defaultDomain).vrhost.\(getpid())"
+
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addinherit_np(&actions, sv[1])
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        if let logPath {
+            try? FileManager.default.createDirectory(atPath: (logPath as NSString).deletingLastPathComponent,
+                                                     withIntermediateDirectories: true)
+            posix_spawn_file_actions_addopen(&actions, 1, logPath, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            posix_spawn_file_actions_adddup2(&actions, 1, 2)
+        } else {
+            posix_spawn_file_actions_addinherit_np(&actions, 1)
+            posix_spawn_file_actions_addinherit_np(&actions, 2)
+        }
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+        var defaults = sigset_t(), noMask = sigset_t()
+        sigfillset(&defaults); sigemptyset(&noMask)
+        posix_spawnattr_setsigdefault(&attr, &defaults)
+        posix_spawnattr_setsigmask(&attr, &noMask)
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+
+        let args = [exe, "--link-fd", String(sv[1]), "--mach-name", machName] + extraArgs
+        var cArgs = args.map { strdup($0) } + [nil]
+        defer { for p in cArgs { free(p) } }
+        var pid: pid_t = 0
+        let rc = posix_spawn(&pid, exe, &actions, &attr, &cArgs, environ)
+        close(sv[1])
+        guard rc == 0 else {
+            close(sv[0])
+            throw OptionError("posix_spawn \(exe): \(String(cString: strerror(rc)))")
+        }
+        let r = Running(pid: pid, fd: sv[0], machName: machName)
+        running = r
+        return r
+    }
+
+    /// Ends the host: closes our end (the host stops on end-of-file), then SIGTERM, then SIGKILL after
+    /// `timeout`. Returns how the child ended. Only for our own exit paths and the self-test; a VM stop
+    /// through libkrun's `_exit()` closes the end implicitly.
+    @discardableResult
+    static func stop(timeout: TimeInterval = 2) -> String {
+        guard let r = running else { return "not running" }
+        running = nil
+        for k in envKeys { unsetenv(k) }
+        close(r.fd)
+        if let how = wait(r.pid, for: timeout) { return "exited on link close (\(how))" }
+        kill(r.pid, SIGTERM)
+        if let how = wait(r.pid, for: timeout) { return "exited on SIGTERM (\(how))" }
+        kill(r.pid, SIGKILL)
+        var st: Int32 = 0
+        waitpid(r.pid, &st, 0)
+        return "killed"
+    }
+
+    private static func wait(_ pid: pid_t, for timeout: TimeInterval) -> String? {
+        let end = Date().addingTimeInterval(timeout)
+        repeat {
+            var st: Int32 = 0
+            if waitpid(pid, &st, WNOHANG) == pid {
+                return (st & 0x7f) == 0 ? "status \((st >> 8) & 0xff)" : "signal \(st & 0x7f)"
+            }
+            usleep(20_000)
+        } while Date() < end
+        return nil
+    }
+}
+
+/// `--selftest-vr`: the spawn/teardown path without a VM or headset. Off adds nothing; on spawns the host
+/// (bundled, or STEAMAC_VRHOST) with its link end, exports WMTR_VR_FD/WMTR_VR_MACH_NAME for libwmtr_host,
+/// receives the host's VRL_HELLO on our end (struct vrl_hello, host/vrhost/include/vrlink.h) with the
+/// child's pid, and checks that closing our end alone ends the host (what a VM stop does); a second run
+/// checks that the host's port is free again.
+enum VRSelfTest {
+    static func run(_ resolved: Options) -> Never {
+        var failures = 0
+        func check(_ ok: Bool, _ what: String) { if !ok { failures += 1; log("selftest-vr: FAIL \(what)") } }
+
+        var off = resolved
+        off.vr = false
+        setenv("WMTR_VR_FD", "99", 1)   // left over from a shell: must not survive VR off
+        VRHost.apply(off)
+        check(getenv("WMTR_VR_FD") == nil && getenv("WMTR_VR_MACH_NAME") == nil, "VR off: link environment left set")
+        check(VRHost.running == nil, "VR off: host started")
+        check(Options().vr == false, "VR must default off")
+
+        guard VRHost.path != nil else {
+            log("selftest-vr: FAIL \(VRHost.executable) not in this build (set STEAMAC_VRHOST for a development build)")
+            exit(1)
+        }
+        for round in 1...2 {
+            do {
+                // no Bonjour, fixed loopback-free port 0: the self-test must not show up on headsets
+                let r = try VRHost.start(extraArgs: ["--no-advertise", "--port", "0"], logPath: nil)
+                setenv("WMTR_VR_FD", String(r.fd), 1)
+                setenv("WMTR_VR_MACH_NAME", r.machName, 1)
+                check(fcntl(r.fd, F_GETFD) & FD_CLOEXEC != 0, "our link end is inheritable")
+                var buf = [UInt8](repeating: 0, count: 2048)
+                var pfd = pollfd(fd: r.fd, events: Int16(POLLIN), revents: 0)
+                let n = poll(&pfd, 1, 5000) == 1 ? recv(r.fd, &buf, buf.count, 0) : -1
+                // struct vrl_hello { struct vrl_header {u32 type, size}; u32 version; u32 pid; }
+                let words = buf.withUnsafeBytes { Array($0.bindMemory(to: UInt32.self).prefix(4)) }
+                check(n >= 16 && words[0] == 1 && words[3] == UInt32(r.pid),
+                      "round \(round): no VRL_HELLO from the host (got \(n) bytes, type \(words[0]), pid \(words[3]) vs \(r.pid))")
+                check(kill(r.pid, 0) == 0, "round \(round): host not running")
+                let how = VRHost.stop()
+                log("selftest-vr: round \(round): host pid \(r.pid), hello version \(words[2]), \(how)")
+                check(how.hasPrefix("exited on link close"), "round \(round): host did not end when the link closed (\(how))")
+                check(getenv("WMTR_VR_FD") == nil, "round \(round): link environment left set after stop")
+            } catch {
+                check(false, "round \(round): \(error)")
+            }
+        }
+        log(failures == 0 ? "selftest-vr: PASS" : "selftest-vr: \(failures) FAILED")
+        exit(failures == 0 ? 0 : 1)
+    }
+}

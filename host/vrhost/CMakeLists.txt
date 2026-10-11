@@ -56,8 +56,14 @@ target_link_libraries(vrhost-core PUBLIC wivrn-common
 target_compile_options(vrhost-core PRIVATE -Wall -Wextra -Wno-unused-parameter)
 set_source_files_properties(src/encoder/vt_encoder.mm src/pattern/test_pattern.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
 
+# --- game frames (M1 compositor + VR link) and the pipeline into the session ---
+include(compositor.cmake)
+target_sources(vrhost-compositor PRIVATE src/pipeline/vr_pipeline.mm)
+set_source_files_properties(src/pipeline/vr_pipeline.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+target_link_libraries(vrhost-compositor PUBLIC vrhost-core)
+
 add_executable(steamac-vrhost src/main.cpp)
-target_link_libraries(steamac-vrhost PRIVATE vrhost-core)
+target_link_libraries(steamac-vrhost PRIVATE vrhost-core vrhost-compositor)
 
 # --- tests (ctest) ---
 option(VRHOST_TESTS "Build the tests" ON)
@@ -73,4 +79,23 @@ target_sources(test_encoder PRIVATE tests/vt_decode.mm)
 target_sources(test_loopback PRIVATE tests/vt_decode.mm)
 set_source_files_properties(tests/vt_decode.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
 set_tests_properties(encoder loopback PROPERTIES TIMEOUT 60)
+
+# End-to-end game-frame test (wmtr exporter -> link -> compositor -> session -> test headset). The exporter
+# (wmtr/src/wmtr_vr.m) needs the WMTVRSubmitInfo layout from a StonkGuy/dxmt vr-export checkout.
+set(VRHOST_DXMT_DIR "" CACHE PATH "StonkGuy/dxmt vr-export checkout (enables the vr_e2e test)")
+if(VRHOST_DXMT_DIR)
+	enable_language(OBJC)
+	set(wmtr_dir ${CMAKE_CURRENT_SOURCE_DIR}/../../wmtr)
+	add_library(vrhost-test-exporter STATIC ${wmtr_dir}/src/wmtr_vr.m)
+	target_include_directories(vrhost-test-exporter PRIVATE include ${wmtr_dir}/include ${VRHOST_DXMT_DIR}/src/winemetal)
+	target_compile_options(vrhost-test-exporter PRIVATE -w)
+	add_executable(test_vr_e2e tests/test_vr_e2e.mm tests/fake_headset.cpp tests/vt_decode.mm)
+	target_include_directories(test_vr_e2e PRIVATE ${wmtr_dir}/include ${VRHOST_DXMT_DIR}/src/winemetal)
+	set_source_files_properties(tests/test_vr_e2e.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+	target_link_libraries(test_vr_e2e PRIVATE vrhost-core vrhost-compositor vrhost-test-exporter "-framework Metal")
+	add_test(NAME vr_e2e COMMAND test_vr_e2e)
+	set_tests_properties(vr_e2e PROPERTIES TIMEOUT 90)
+else()
+	message(STATUS "vr_e2e test off: set VRHOST_DXMT_DIR to a StonkGuy/dxmt vr-export checkout")
+endif()
 endif()

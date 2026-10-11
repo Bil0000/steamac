@@ -3,8 +3,10 @@
 //   --testpattern          serve a world-locked test pattern to a WiVRn client (Quest/Pico app, Steam Frame client)
 //   --selftest-encoder     headless VideoToolbox latency self-test (no network, no headset)
 //   --protocol             print the pinned WiVRn protocol hash and exit
+//   --link-fd N --mach-name NAME   game frames from steamac-vm (VR link, docs/vr-interfaces.md section 3)
 #include "encoder/vt_encoder.h"
 #include "pattern/test_pattern.h"
+#include "pipeline/vr_pipeline.h"
 #include "session/clock.h"
 #include "wivrn/annexb.h"
 #include "wivrn/wivrn_session.h"
@@ -31,6 +33,9 @@ static void usage()
 {
 	fprintf(stderr,
 	        "usage: steamac-vrhost [--testpattern] [--selftest-encoder] [--protocol]\n"
+	        "  --link-fd N         serve game frames from steamac-vm over this SOCK_DGRAM fd (with --mach-name)\n"
+	        "  --mach-name NAME    bootstrap name for the swapchain IOSurface ports\n"
+	        "  --link-socket PATH  manual runs: accept the link from wmtr_vr_connect at PATH\n"
 	        "  --port N            TCP/UDP port (default 9757)\n"
 	        "  --no-advertise      do not publish _wivrn._tcp via Bonjour\n"
 	        "  --tcp-only          send everything over TCP\n"
@@ -215,6 +220,51 @@ static int testpattern(WivrnConfig cfg)
 	return 0;
 }
 
+// Game frames: VR link -> compositor -> WiVRn session. Ends on SIGTERM/SIGINT or when steamac-vm closes the link.
+static int serve_link(WivrnConfig cfg, int link_fd, const std::string & link_socket, const std::string & mach_name)
+{
+	cfg.log = [](const std::string & s) {
+		printf("[vrhost] %s\n", s.c_str());
+		fflush(stdout);
+	};
+	if (link_fd < 0)
+	{
+		printf("steamac-vrhost: waiting for the VR link on %s\n", link_socket.c_str());
+		fflush(stdout);
+		while (link_fd < 0 and not g_quit)
+			link_fd = VrLinkServer::accept_one(link_socket, 1000);
+		if (link_fd < 0)
+			return 0;
+	}
+	WivrnSession session(cfg);
+	session.start(nullptr);
+	VrPipeline pipeline(session, link_fd, mach_name);
+	printf("steamac-vrhost: VR link fd %d, mach name %s, listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)\n",
+	       link_fd, mach_name.c_str(), session.port(), WivrnSession::protocol_version());
+	fflush(stdout);
+	ns last_report = now_ns();
+	while (not g_quit and not pipeline.peer_closed())
+	{
+		timespec ts{0, 50'000'000};
+		nanosleep(&ts, nullptr);
+		if (now_ns() - last_report > 5'000'000'000)
+		{
+			auto & s = session.stats();
+			auto & ps = pipeline.stats();
+			printf("link frames %" PRIu64 " submitted %" PRIu64 " (no headset %" PRIu64 ") sent %" PRIu64 " idr %" PRIu64
+			       " compositor GPU %.2f ms, app submit -> sent %.2f ms, encode %.2f ms, headset decode %.2f ms\n",
+			       ps.received.load(), ps.submitted.load(), ps.no_headset.load(), s.frames_sent.load(), s.idr_sent.load(),
+			       ps.last_compose_gpu_ns / 1e6, ps.last_latency_ns / 1e6, s.last_encode_ns / 1e6, s.last_feedback_decode_ns / 1e6);
+			fflush(stdout);
+			last_report = now_ns();
+		}
+	}
+	printf("steamac-vrhost: %s\n", g_quit ? "stopping" : "VR link closed by steamac-vm, stopping");
+	fflush(stdout);
+	session.stop();
+	return 0;
+}
+
 int main(int argc, char ** argv)
 {
 	signal(SIGPIPE, SIG_IGN); // wivrn_sockets uses MSG_NOSIGNAL, which macOS lacks
@@ -225,6 +275,7 @@ int main(int argc, char ** argv)
 	{
 		none,
 		pattern,
+		link,
 		selftest,
 		protocol
 	} mode = none;
@@ -233,6 +284,8 @@ int main(int argc, char ** argv)
 	int frames = 600;
 	float fps = 90;
 	auto codec = EncoderConfig::Codec::hevc;
+	int link_fd = -1;
+	std::string mach_name, link_socket;
 	for (int i = 1; i < argc; ++i)
 	{
 		std::string a = argv[i];
@@ -250,6 +303,18 @@ int main(int argc, char ** argv)
 			mode = selftest;
 		else if (a == "--protocol")
 			mode = protocol;
+		else if (a == "--link-fd")
+		{
+			mode = link;
+			link_fd = std::stoi(next());
+		}
+		else if (a == "--link-socket")
+		{
+			mode = link;
+			link_socket = next();
+		}
+		else if (a == "--mach-name")
+			mach_name = next();
 		else if (a == "--port")
 			cfg.port = std::stoi(next());
 		else if (a == "--no-advertise")
@@ -292,6 +357,15 @@ int main(int argc, char ** argv)
 				cfg.width = w;
 				cfg.height = h;
 				return testpattern(cfg);
+			case link:
+				if (mach_name.empty())
+				{
+					usage();
+					return 2;
+				}
+				cfg.width = w;
+				cfg.height = h;
+				return serve_link(cfg, link_fd, link_socket, mach_name);
 			case none:
 				usage();
 				return 2;

@@ -26,6 +26,7 @@ do {
 if options.selftestMetalCache { MetalCompilerCache.selfTest() }
 if options.selftestGameLayers { GameLayerSelfTest.run() }
 if options.selftestGraphicsPath { GraphicsPathSelfTest.run(options) }
+if options.selftestVR { VRSelfTest.run(options) }
 // Before CrashReporting's GPU tags, the window or either Vulkan driver can initialise Metal.
 MetalCompilerCache.prepare()
 

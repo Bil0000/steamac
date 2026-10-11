@@ -1063,6 +1063,13 @@ private struct AdvancedTab: View {
                            now: false, key: .frameLatency)
                 }
                 .disabled(settings.graphicsPath == .dxmt)
+                Toggle(isOn: $settings.vrEnabled) {
+                    Label2(title: "VR (experimental)",
+                           detail: String(localized: "DXMT path only: starts the bundled steamac-vrhost with the VM, which streams games' VR eye images to a standalone headset running the WiVRn v26.9 client on the same network. Games need an OpenVR runtime in the guest, which is not included yet. steamac-vrhost is GPL-3.0 software; see the licences in the app.")
+                               + (VRHost.path == nil ? " " + String(localized: "Not included in this build.") : ""),
+                           now: false, key: .vrEnabled)
+                }
+                .disabled(settings.graphicsPath != .dxmt || (VRHost.path == nil && !settings.vrEnabled))
             }
             Section {
                 HStack {

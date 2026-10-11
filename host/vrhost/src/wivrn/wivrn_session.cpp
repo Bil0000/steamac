@@ -697,9 +697,10 @@ void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferR
 	{
 		vi.pose[i] = to_xr(f.pose[i]);
 		vi.fov[i] = to_xr(f.fov[i]);
-		// Identity foveation: one 1:1 band covering the whole axis (stream_defoveator::defoveated_size = W x H).
-		vi.foveation[i].x = {width};
-		vi.foveation[i].y = {height};
+		// The compositor's foveation (WiVRn foveation_parameter), or identity: one 1:1 band covering the whole axis
+		// (stream_defoveator::defoveated_size = W x H).
+		vi.foveation[i].x = f.foveation[i].x.empty() ? std::vector<uint16_t>{width} : f.foveation[i].x;
+		vi.foveation[i].y = f.foveation[i].y.empty() ? std::vector<uint16_t>{height} : f.foveation[i].y;
 	}
 	vi.alpha = false;
 	shard.view_info = vi;

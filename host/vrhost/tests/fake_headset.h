@@ -3,9 +3,11 @@
 // disabled) over loopback, sends headset info / tracking / timesync answers / feedback, and reassembles and decodes the
 // video shards with VideoToolbox. The end-to-end check against the real WiVRn client is done separately (docs/vr.md).
 #pragma once
+#include <CoreVideo/CoreVideo.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,8 @@ struct FakeHeadsetOptions
 	uint16_t eye_width = 640, eye_height = 704;
 	int timeout_ms = 20000;
 	int64_t clock_offset_ns = 5'000'000'000; // headset clock = host clock + this
+	bool identity_foveation = true;          // view_info must carry identity foveation (game frames: foveated)
+	std::function<void(int eye, uint64_t frame_idx, CVPixelBufferRef)> on_decoded; // optional content check
 };
 
 struct FakeHeadsetResult
@@ -35,6 +39,7 @@ struct FakeHeadsetResult
 	int shards = 0, max_shard_bytes = 0;
 	bool view_info_ok = true;    // first shard carries view_info with identity foveation and plausible poses
 	double display_time_offset_ms = 0; // view_info.display_time - (host now + clock_offset), last frame
+	std::array<std::vector<uint16_t>, 2> foveation_x, foveation_y; // view_info foveation of the last decoded frame
 };
 
 FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions &);

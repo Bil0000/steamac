@@ -220,6 +220,11 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 
 				// view_info checks: identity foveation, both eye poses 64 mm apart, display time in headset clock
 				for (int e = 0; e < 2; ++e)
+				{
+					res.foveation_x[e] = vi.foveation[e].x;
+					res.foveation_y[e] = vi.foveation[e].y;
+				}
+				for (int e = 0; e < 2 and o.identity_foveation; ++e)
 					if (vi.foveation[e].x != std::vector<uint16_t>{o.eye_width} or vi.foveation[e].y != std::vector<uint16_t>{o.eye_height})
 						res.view_info_ok = false;
 				float dx = vi.pose[1].position.x - vi.pose[0].position.x, dz = vi.pose[1].position.z - vi.pose[0].position.z;
@@ -232,6 +237,8 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 				if (not img)
 					continue;
 				int64_t read = vrhost::TestPattern::read_frame_index(img);
+				if (o.on_decoded)
+					o.on_decoded(idx, frame_idx, img);
 				if (read != int64_t(frame_idx & 0xffff))
 					res.index_mismatch[idx]++;
 				res.decoded[idx]++;

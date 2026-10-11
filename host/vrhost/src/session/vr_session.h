@@ -86,6 +86,13 @@ struct EyeImage
 	IOSurfaceRef surface = nullptr;
 };
 
+// WiVRn foveation_parameter per eye (source-pixel counts per ratio, middle entry 1:1, see compositor/foveation_params.h).
+// Empty = identity (no foveation).
+struct Foveation
+{
+	std::vector<uint16_t> x, y;
+};
+
 struct Frame
 {
 	uint64_t frame_id = 0;
@@ -93,6 +100,7 @@ struct Frame
 	std::array<Pose, 2> pose;     // per-eye pose the app rendered with, in tracking (stage) space
 	std::array<Fov, 2> fov;
 	std::array<EyeImage, 2> eye;
+	std::array<Foveation, 2> foveation; // what the compositor applied; sent with the stream so the client undoes it
 };
 
 class SessionListener

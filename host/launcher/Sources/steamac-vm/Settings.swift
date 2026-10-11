@@ -33,14 +33,14 @@ final class LauncherSettings: ObservableObject {
         case soundEnabled, soundOutputUID, soundVolume, soundMute, soundLatency
         // Advanced
         case cpus, memMiB, sshEnabled, sshPort, network, lanRemotePlay, diskImage, steamosBranch, steamClient, vulkanDriver,
-             graphicsPath, frameLatency
+             graphicsPath, frameLatency, vrEnabled
 
         var nextStart: Bool {
             switch self {
             case .openFullscreen, .dpiSource, .fixedDPI, .fixedWidthMM, .fixedHeightMM, .refreshRate,
                  .windowWidth, .windowHeight, .windowSizePreset, .retinaResolution, .renderScale, .soundEnabled, .cpus, .memMiB, .sshEnabled,
                  .sshPort, .network, .lanRemotePlay,
-                 .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath, .frameLatency:
+                 .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath, .frameLatency, .vrEnabled:
                 return true
             default:
                 return false
@@ -398,6 +398,8 @@ final class LauncherSettings: ObservableObject {
     @Published var vulkanDriver = VulkanDriver.preferred { didSet { save(.vulkanDriver, vulkanDriver.rawValue) } }
     /// Graphics path of the next start (GraphicsPath).
     @Published var graphicsPath = GraphicsPath.preferred { didSet { save(.graphicsPath, graphicsPath.rawValue) } }
+    /// VR (experimental) of the next start: steamac-vrhost with the VM (VRHost; DXMT path only).
+    @Published var vrEnabled = false { didSet { save(.vrEnabled, vrEnabled) } }
     /// Frame latency mode of the next start (Vulkan path; kernel cmdline `steamac.frame_latency=1`).
     /// Off by default: the guest's DXVK config is left unchanged.
     @Published var frameLatency = false { didSet { save(.frameLatency, frameLatency) } }
@@ -485,6 +487,7 @@ final class LauncherSettings: ObservableObject {
         if let v = d.string(forKey: Key.vulkanDriver.rawValue).flatMap(VulkanDriver.init(rawValue:)) { vulkanDriver = v }
         if let v = d.string(forKey: Key.graphicsPath.rawValue).flatMap(GraphicsPath.init(rawValue:)) { graphicsPath = v }
         bool(.frameLatency, &frameLatency)
+        bool(.vrEnabled, &vrEnabled)
         reloadGames()
     }
 
@@ -561,6 +564,7 @@ final class LauncherSettings: ObservableObject {
         case .vulkanDriver: guard let v = VulkanDriver(rawValue: text) else { return false }; vulkanDriver = v
         case .graphicsPath: guard let v = GraphicsPath(rawValue: text) else { return false }; graphicsPath = v
         case .frameLatency: guard let b else { return false }; frameLatency = b
+        case .vrEnabled: guard let b else { return false }; vrEnabled = b
         }
         return true
     }
@@ -595,6 +599,7 @@ final class LauncherSettings: ObservableObject {
         vulkanDriver = fresh.vulkanDriver
         graphicsPath = fresh.graphicsPath
         frameLatency = fresh.frameLatency
+        vrEnabled = fresh.vrEnabled
         loading = false
         reloadGames()
         log("settings: reset to defaults")
@@ -629,6 +634,7 @@ final class LauncherSettings: ObservableObject {
             .network: network, .lanRemotePlay: lanRemotePlay,
             .diskImage: diskImage, .steamClient: steamClient.rawValue, .followMacTime: followMacTime,
             .vulkanDriver: vulkanDriver.rawValue, .graphicsPath: graphicsPath.rawValue, .frameLatency: frameLatency,
+            .vrEnabled: vrEnabled,
         ]
         var s: [Key: String] = [:]
         for (k, v) in values where k.nextStart && overrides[k] == nil { s[k] = "\(v)" }

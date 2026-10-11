@@ -1820,6 +1820,22 @@
         }
       }
     },
+    "DXMT path only: starts the bundled steamac-vrhost with the VM, which streams games' VR eye images to a standalone headset running the WiVRn v26.9 client on the same network. Games need an OpenVR runtime in the guest, which is not included yet. steamac-vrhost is GPL-3.0 software; see the licences in the app." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Только для пути DXMT: вместе с ВМ запускается встроенный steamac-vrhost, который передаёт изображения для глаз из VR-игр на автономную гарнитуру с клиентом WiVRn v26.9 в той же сети. Играм нужна среда OpenVR в гостевой системе, которая пока не входит в состав. steamac-vrhost распространяется по лицензии GPL-3.0; лицензии см. в приложении."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅限 DXMT 路径：随虚拟机启动内置的 steamac-vrhost，将游戏的 VR 双眼画面串流到同一网络中运行 WiVRn v26.9 客户端的一体机头显。游戏需要客户机中的 OpenVR 运行时，目前尚未包含。steamac-vrhost 为 GPL-3.0 软件；许可证见应用内。"
+          }
+        }
+      }
+    },
     "Edit" : {
       "comment" : "Standard text editing menu",
       "localizations" : {
@@ -3384,6 +3400,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此处不可用：%@；将使用 Vulkan。"
+          }
+        }
+      }
+    },
+    "Not included in this build." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не входит в эту сборку."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此版本未包含。"
           }
         }
       }
@@ -6396,6 +6428,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "音量"
+          }
+        }
+      }
+    },
+    "VR (experimental)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "VR (экспериментально)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "VR（实验性）"
           }
         }
       }

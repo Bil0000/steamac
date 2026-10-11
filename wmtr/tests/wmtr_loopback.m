@@ -5,6 +5,7 @@
  * The implementations are small fakes with the real param layouts, plus real Metal for newBuffer. */
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,6 +252,40 @@ static void test_vr(id<MTLDevice> dev) {
   printf("vr: submits=%llu sent=%llu dropped=%llu released=%llu swapchains=%llu\n", st.submits, st.sent, st.dropped, st.released, st.swapchains);
 }
 
+/* WMTR_VR_FD (steamac-vm's attach path): the first context claims a dup of the launcher's socketpair end, a
+ * second one gets none while the first lives, and destroying the owner leaves the launcher's end (and so the
+ * host's session) open for the next context. */
+static void *pages(uint64_t n);
+static struct wmtr_host *idle_host(void) {
+  struct wmtr_ring *R = pages(1 << 20);
+  R->magic = WMTR_RING_MAGIC; R->version = WMTR_VERSION;
+  return wmtr_host_create(R, &host_ops, NULL);
+}
+static void test_vr_fd(void) {
+  char name[64]; snprintf(name, sizeof name, "com.steamac.vrhost.fdtest.%d", (int)getpid());
+  mach_port_t port;
+  mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port);
+  mach_port_insert_right(mach_task_self(), port, port, MACH_MSG_TYPE_MAKE_SEND);
+  CHECK(bootstrap_register2(bootstrap_port, name, port, 0) == KERN_SUCCESS, "bootstrap_register2");
+  int sv[2]; socketpair(AF_UNIX, SOCK_DGRAM, 0, sv);
+  char fd[16]; snprintf(fd, sizeof fd, "%d", sv[0]);
+  setenv("WMTR_VR_FD", fd, 1); setenv("WMTR_VR_MACH_NAME", name, 1);
+  union { struct vrl_header h; struct vrl_hello hello; uint8_t raw[1024]; } u;
+  struct wmtr_host *a = idle_host();
+  CHECK(vr_recv(sv[1], &u, sizeof u, 2000) > 0 && u.h.type == VRL_HELLO, "WMTR_VR_FD: first context sent no VRL_HELLO");
+  struct wmtr_host *b = idle_host();
+  CHECK(vr_recv(sv[1], &u, sizeof u, 300) <= 0, "WMTR_VR_FD: second context attached too");
+  wmtr_host_destroy(b);
+  wmtr_host_destroy(a);
+  CHECK(fcntl(sv[0], F_GETFD) != -1, "WMTR_VR_FD: launcher's end closed");
+  struct wmtr_host *c = idle_host();
+  CHECK(vr_recv(sv[1], &u, sizeof u, 2000) > 0 && u.h.type == VRL_HELLO, "WMTR_VR_FD: link not reusable after the owner ended");
+  wmtr_host_destroy(c);
+  unsetenv("WMTR_VR_FD"); unsetenv("WMTR_VR_MACH_NAME");
+  close(sv[0]); close(sv[1]);
+  printf("vr fd attach: ok\n");
+}
+
 static char frames_path[64];
 int main(void) {
   @autoreleasepool {
@@ -374,6 +409,7 @@ int main(void) {
       free(own);
     }
     test_vr(dev);
+    test_vr_fd();
     struct wmtr_host_stats st; wmtr_host_get_stats(H, &st);
     printf("requests=%llu sync=%llu bytes=%llu\n", st.requests, st.sync_requests, st.bytes);
     { /* an autoreleased result outside any client pool must outlive the request (DXMT reads it next) */
