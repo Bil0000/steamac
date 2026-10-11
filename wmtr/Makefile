@@ -100,6 +100,8 @@ PAYLOAD ?= ../work/out/dxmt
 dxmt-payload:
 	install -d $(PAYLOAD)/x86_64-windows $(PAYLOAD)/x86_64-unix
 	for f in d3d11 dxgi d3d10core winemetal; do install -m 644 $(DXMT_PE)/$$f.dll $(PAYLOAD)/x86_64-windows/$$f.dll; done
+	@# optional: DXMT's D3D12 (steam-gfx-path routes it over vkd3d-proton only when the payload has it)
+	if [ -f $(DXMT_PE)/d3d12.dll ]; then install -m 644 $(DXMT_PE)/d3d12.dll $(PAYLOAD)/x86_64-windows/d3d12.dll; fi
 	install -m 644 $(OUT)/x86_64-linux/winemetal.so $(PAYLOAD)/x86_64-unix/winemetal.so
 
 # the launcher bundle picks the host library up from libkrun's prefix (host/launcher/bundle.sh)

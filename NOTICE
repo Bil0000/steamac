@@ -64,7 +64,10 @@ fork are listed in docs/fork.md. New files added by this fork:
   docs/eac-*.md            fork documentation, Apache-2.0
   docs/fork.md             fork documentation, Apache-2.0
   wmtr/                    the DXMT remoting layer, BSD-3-Clause (LICENSES/BSD-3-Clause.txt)
-  host/dxmt/patches/       patches to DXMT, LGPL-2.1-or-later (the license of DXMT)
+  host/dxmt/patches/       patches to DXMT, LGPL-2.1-or-later (the license of DXMT), generated from
+                           github.com/StonkGuy/dxmt branch steamac; adopted commits keep their authors
+                           (David Grinberg, osy, Holly Hamilton, SteveTanSaMa, hanzpo, Mybono,
+                           NerRobDog, 时雨, Jakey-Jakey), credits in that branch's STEAMAC-README.md
   docs/upstream/           upstream steamac's README text, reorganised into pages
                            (upstream text, Apache-2.0, © 2026 FX GAMES FZ LLC)
 
