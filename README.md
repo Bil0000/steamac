@@ -3,7 +3,7 @@
 **English** · [Русский](README.ru.md) · [简体中文](README.zh.md)
 
 **A fork of [steamac](https://github.com/fxgl/steamac) for Apple silicon Macs. It runs x86-64 Windows games with genuine
-Easy Anti-Cheat (verified: VRChat), with a choice of two graphics paths.**
+Easy Anti-Cheat (verified in game: VRChat; Mini Royale also passes EAC), with a choice of two graphics paths.**
 
 - **Vulkan (classic)**: Direct3D through DXVK on Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK on the Mac.
   This is upstream steamac's path.
@@ -71,7 +71,9 @@ be turned on and off while a game runs.
 
 ## Easy Anti-Cheat
 
-EAC runs inside SteamOS under Valve's FEX emulator. This fork's patched FEX passes EAC's checks for VRChat. Today two
+EAC runs inside SteamOS under Valve's FEX emulator. This fork's patched FEX passes EAC's checks for VRChat, and for
+Mini Royale (EAC `301`; that game was not played past its account prompt). Results differ from game to game: each title
+ships its own EAC build and checks, so an untested game may or may not work. Today two
 manual steps are required for VRChat; both are planned to become automatic:
 
 1. Install the patched FEX: enable SSH (Settings > Advanced), then run `build-fex.sh` and `install-fex-tool.sh` in the
@@ -101,7 +103,8 @@ More: [docs/eac-troubleshooting.md](docs/eac-troubleshooting.md).
 
 ## Limits
 
-- One machine verified (M2, 16 GB, macOS 27.0); one EAC title verified (VRChat).
+- One machine verified (M2, 16 GB, macOS 27.0). VRChat is verified in game; Mini Royale's EAC launcher reaches `301`
+  (not played further). Other titles are untested and results differ game by game.
 - DXMT: Direct3D 11/10 only. Feature level is capped at 11_1 (no DXIL, no conservative rasterization).
 - Direct3D 12 through D3DMetal is **planned**, not included.
 - The DXMT setting applies to every game; on it the game's Metal layer covers the whole VM view (a windowed game or alt-tab

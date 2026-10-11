@@ -1,7 +1,7 @@
 # Fork notes
 
 A fork of [steamac](https://github.com/fxgl/steamac) (base: 1.9; the live results below were measured on 1.8.1/1.8.2) that adds support for genuine-Easy-Anti-Cheat x86 games,
-verified with VRChat, plus launcher and stability fixes. Nothing here is sent to libkrun, Mesa, FEX or Proton by this fork;
+verified in game with VRChat (Mini Royale's EAC also reaches `301`; results differ game by game), plus launcher and stability fixes. Nothing here is sent to libkrun, Mesa, FEX or Proton by this fork;
 steamac changes are discussed with its maintainer directly. Bug reports are welcome here (see the README). Not affiliated with FX GAMES, Valve, Epic or VRChat.
 
 ## Changes
