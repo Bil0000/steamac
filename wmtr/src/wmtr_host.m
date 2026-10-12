@@ -763,8 +763,42 @@ executor(void *arg) {
   return NULL;
 }
 
-/* WMTR_VR_FD: set while one context owns the launcher's VR link */
-static _Atomic int vr_fd_claimed;
+/* WMTR_VR_FD: one link per process while contexts are alive. Proton's steam.exe may ask the runtime for the
+ * headset before the game creates its device: the contexts share the link instead of the first one claiming
+ * it. The last context closes the duplicated fd so the launcher can stop the host; a later context reattaches. */
+static struct wmtr_vr *shared_vr;
+static unsigned shared_vr_users;
+static pthread_mutex_t shared_vr_lock = PTHREAD_MUTEX_INITIALIZER;
+
+struct wmtr_vr *
+wmtr_host_vr(struct wmtr_host *h) {
+  return atomic_load(&h->vr);
+}
+
+static struct wmtr_vr *
+vr_shared_link(const char *vf, const char *vm) {
+  pthread_mutex_lock(&shared_vr_lock);
+  if (!shared_vr) {
+    int fd = dup(atoi(vf)); /* a dup: closing it would not end the host's session */
+    shared_vr = fd >= 0 ? wmtr_vr_create(fd, vm) : NULL;
+    if (!shared_vr && fd >= 0) close(fd);
+    LOG(shared_vr ? 1 : 0, "VR link %s (fd %s, %s)\n", shared_vr ? "attached" : "failed", vf, vm);
+  }
+  struct wmtr_vr *vr = shared_vr;
+  if (vr) shared_vr_users++;
+  pthread_mutex_unlock(&shared_vr_lock);
+  return vr;
+}
+
+static void
+vr_shared_release(struct wmtr_vr *vr) {
+  pthread_mutex_lock(&shared_vr_lock);
+  if (vr && vr == shared_vr && shared_vr_users && !--shared_vr_users) {
+    shared_vr = NULL;
+    wmtr_vr_destroy(vr);
+  }
+  pthread_mutex_unlock(&shared_vr_lock);
+}
 
 struct wmtr_host *
 wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
@@ -794,17 +828,9 @@ wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx) {
   pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INTERACTIVE, 0);
   const char *vs = getenv("WMTR_VR_SOCKET"), *vf = getenv("WMTR_VR_FD"), *vm = getenv("WMTR_VR_MACH_NAME");
   if (vf && *vf && vm && *vm) {
-    /* steamac-vm (same process) holds the socketpair end and spawned steamac-vrhost with the other one. One
-     * context at a time owns the link (a dup, so closing it does not end the host's session); others get
-     * STATUS_NOT_SUPPORTED for call 146 like plain DXMT. */
-    int expected = 0;
-    if (atomic_compare_exchange_strong(&vr_fd_claimed, &expected, 1)) {
-      int fd = dup(atoi(vf));
-      struct wmtr_vr *vr = fd >= 0 ? wmtr_vr_create(fd, vm) : NULL;
-      LOG(vr ? 1 : 0, "VR link %s (fd %s, %s)\n", vr ? "attached" : "failed", vf, vm);
-      if (vr) { atomic_store(&h->vr, vr); h->owns_vr = 2; }
-      else atomic_store(&vr_fd_claimed, 0);
-    }
+    /* steamac-vm (same process) holds the socketpair end and spawned steamac-vrhost with the other one */
+    struct wmtr_vr *vr = vr_shared_link(vf, vm);
+    if (vr) { atomic_store(&h->vr, vr); h->owns_vr = 2; } /* shared link ref held until destroy */
   } else if (vs && *vs && vm && *vm) {
     struct wmtr_vr *vr = wmtr_vr_connect(vs, vm);
     LOG(vr ? 1 : 0, "VR link %s (%s, %s)\n", vr ? "connected" : "failed", vs, vm);
@@ -854,8 +880,9 @@ wmtr_host_destroy(struct wmtr_host *h) {
   free(h->views); h->views = NULL; h->cap_views = 0;
   pthread_mutex_unlock(&h->view_lock);
   if (h->owns_vr) {
-    wmtr_vr_destroy(atomic_exchange(&h->vr, NULL));
-    if (h->owns_vr == 2) atomic_store(&vr_fd_claimed, 0);
+    struct wmtr_vr *vr = atomic_exchange(&h->vr, NULL);
+    if (h->owns_vr == 2) vr_shared_release(vr);
+    else wmtr_vr_destroy(vr);
     h->owns_vr = 0;
   }
 }

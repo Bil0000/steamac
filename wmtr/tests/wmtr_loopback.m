@@ -333,9 +333,9 @@ static void test_vr(id<MTLDevice> dev) {
   printf("vr: submits=%llu sent=%llu dropped=%llu released=%llu swapchains=%llu\n", st.submits, st.sent, st.dropped, st.released, st.swapchains);
 }
 
-/* WMTR_VR_FD (steamac-vm's attach path): the first context claims a dup of the launcher's socketpair end, a
- * second one gets none while the first lives, and destroying the owner leaves the launcher's end (and so the
- * host's session) open for the next context. */
+/* WMTR_VR_FD (steamac-vm's attach path): one link per process (a dup of the launcher's socketpair end, one
+ * VRL_HELLO) shared by every context: a second context (the game after Proton's steam.exe did VR_Init) uses the
+ * same link instead of being refused; the last context closes its dup, leaving the launcher's end open. */
 static void *pages(uint64_t n);
 static struct wmtr_host *idle_host(void) {
   struct wmtr_ring *R = pages(1 << 20);
@@ -355,12 +355,22 @@ static void test_vr_fd(void) {
   struct wmtr_host *a = idle_host();
   CHECK(vr_recv(sv[1], &u, sizeof u, 2000) > 0 && u.h.type == VRL_HELLO, "WMTR_VR_FD: first context sent no VRL_HELLO");
   struct wmtr_host *b = idle_host();
-  CHECK(vr_recv(sv[1], &u, sizeof u, 300) <= 0, "WMTR_VR_FD: second context attached too");
-  wmtr_host_destroy(b);
+  CHECK(vr_recv(sv[1], &u, sizeof u, 300) <= 0, "WMTR_VR_FD: second context opened a second link");
+  /* the second context answers VR queries from the shared link (the refused one had no link: hello failed) */
+  union { struct svr_hello_req q; struct svr_hello_rep r; } hb = {.q = {{SVR_HELLO, sizeof hb.q}, SVR_VERSION, 1, "test"}};
+  CHECK(wmtr_host_vr(b) && wmtr_host_vr(b) == wmtr_host_vr(a), "WMTR_VR_FD: second context has no VR link");
+  CHECK(wmtr_vr_query(wmtr_host_vr(b), &hb, sizeof hb) == 0 && hb.r.h.op == SVR_HELLO, "WMTR_VR_FD: second context's hello");
   wmtr_host_destroy(a);
+  memset(&hb, 0, sizeof hb);
+  hb.q = (struct svr_hello_req){{SVR_HELLO, sizeof hb.q}, SVR_VERSION, 1, "test"};
+  CHECK(wmtr_vr_query(wmtr_host_vr(b), &hb, sizeof hb) == 0 && hb.r.h.op == SVR_HELLO,
+        "WMTR_VR_FD: link closed while second context was still alive");
+  wmtr_host_destroy(b);
   CHECK(fcntl(sv[0], F_GETFD) != -1, "WMTR_VR_FD: launcher's end closed");
   struct wmtr_host *c = idle_host();
-  CHECK(vr_recv(sv[1], &u, sizeof u, 2000) > 0 && u.h.type == VRL_HELLO, "WMTR_VR_FD: link not reusable after the owner ended");
+  CHECK(vr_recv(sv[1], &u, sizeof u, 2000) > 0 && u.h.type == VRL_HELLO,
+        "WMTR_VR_FD: new context did not reattach after the last old context ended");
+  CHECK(wmtr_host_vr(c) != NULL, "WMTR_VR_FD: link gone after its first contexts ended");
   wmtr_host_destroy(c);
   unsetenv("WMTR_VR_FD"); unsetenv("WMTR_VR_MACH_NAME");
   close(sv[0]); close(sv[1]);

@@ -41,8 +41,10 @@ void wmtr_vr_get_stats(struct wmtr_vr *vr, struct wmtr_vr_stats *out);
 
 /* attach an exporter to an executor (call 146); NULL detaches. Without one, call 146 fails with
  * STATUS_NOT_SUPPORTED. wmtr_host_create attaches one itself when WMTR_VR_MACH_NAME is set together with
- * WMTR_VR_FD (a socketpair end open in this process, as steamac-vm passes it; dup'ed, one context at a time)
+ * WMTR_VR_FD (a socketpair end open in this process, as steamac-vm passes it; shared by live contexts)
  * or WMTR_VR_SOCKET (a listener path, tests and manual runs). */
 void wmtr_host_set_vr(struct wmtr_host *h, struct wmtr_vr *vr);
+/* the context's VR link (WMTR_VR_FD: the process-wide shared one), or NULL */
+struct wmtr_vr *wmtr_host_vr(struct wmtr_host *h);
 
 #endif
