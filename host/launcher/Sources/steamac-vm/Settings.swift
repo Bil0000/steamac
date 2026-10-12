@@ -33,14 +33,17 @@ final class LauncherSettings: ObservableObject {
         case soundEnabled, soundOutputUID, soundVolume, soundMute, soundLatency
         // Advanced
         case cpus, memMiB, sshEnabled, sshPort, network, lanRemotePlay, diskImage, steamosBranch, steamClient, vulkanDriver,
-             graphicsPath, frameLatency, vrEnabled
+             graphicsPath, frameLatency
+        // VR
+        case vrEnabled, vrBitrateMbps, vrEyeSize
 
         var nextStart: Bool {
             switch self {
             case .openFullscreen, .dpiSource, .fixedDPI, .fixedWidthMM, .fixedHeightMM, .refreshRate,
                  .windowWidth, .windowHeight, .windowSizePreset, .retinaResolution, .renderScale, .soundEnabled, .cpus, .memMiB, .sshEnabled,
                  .sshPort, .network, .lanRemotePlay,
-                 .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath, .frameLatency, .vrEnabled:
+                 .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath, .frameLatency, .vrEnabled,
+                 .vrBitrateMbps, .vrEyeSize:
                 return true
             default:
                 return false
@@ -400,6 +403,19 @@ final class LauncherSettings: ObservableObject {
     @Published var graphicsPath = GraphicsPath.preferred { didSet { save(.graphicsPath, graphicsPath.rawValue) } }
     /// VR (experimental) of the next start: steamac-vrhost with the VM (VRHost; DXMT path only).
     @Published var vrEnabled = false { didSet { save(.vrEnabled, vrEnabled) } }
+    /// Total stream bitrate of the next start, Mbit/s (steamac-vrhost --bitrate; both eyes).
+    @Published var vrBitrateMbps = LauncherSettings.vrDefaultBitrateMbps { didSet { save(.vrBitrateMbps, vrBitrateMbps) } }
+    /// Encoded size per eye of the next start, "WxH"; "" = what the headset asks for (steamac-vrhost --size).
+    @Published var vrEyeSize = "" { didSet { save(.vrEyeSize, vrEyeSize) } }
+    static let vrDefaultBitrateMbps = 50
+    static let vrBitrateRange = 5...200
+    /// Per-eye sizes offered in Settings > VR (the headset's own size is the default).
+    static let vrEyeSizes = ["1248x1344", "1440x1584", "1632x1792", "1832x1920"]
+    /// "WxH" with even sides in 256...4096, as steamac-vrhost --size takes it.
+    static func vrEyeSizeValid(_ s: String) -> Bool {
+        let p = s.split(separator: "x", omittingEmptySubsequences: false).map { Int($0) }
+        return p.count == 2 && p.allSatisfy { $0 != nil && (256...4096).contains($0!) && $0! % 2 == 0 }
+    }
     /// Frame latency mode of the next start (Vulkan path; kernel cmdline `steamac.frame_latency=1`).
     /// Off by default: the guest's DXVK config is left unchanged.
     @Published var frameLatency = false { didSet { save(.frameLatency, frameLatency) } }
@@ -488,6 +504,10 @@ final class LauncherSettings: ObservableObject {
         if let v = d.string(forKey: Key.graphicsPath.rawValue).flatMap(GraphicsPath.init(rawValue:)) { graphicsPath = v }
         bool(.frameLatency, &frameLatency)
         bool(.vrEnabled, &vrEnabled)
+        int(.vrBitrateMbps, &vrBitrateMbps)
+        vrBitrateMbps = min(LauncherSettings.vrBitrateRange.upperBound, max(LauncherSettings.vrBitrateRange.lowerBound, vrBitrateMbps))
+        string(.vrEyeSize, &vrEyeSize)
+        if !vrEyeSize.isEmpty && !LauncherSettings.vrEyeSizeValid(vrEyeSize) { vrEyeSize = "" }
         reloadGames()
     }
 
@@ -565,6 +585,10 @@ final class LauncherSettings: ObservableObject {
         case .graphicsPath: guard let v = GraphicsPath(rawValue: text) else { return false }; graphicsPath = v
         case .frameLatency: guard let b else { return false }; frameLatency = b
         case .vrEnabled: guard let b else { return false }; vrEnabled = b
+        case .vrBitrateMbps: guard let i, LauncherSettings.vrBitrateRange.contains(i) else { return false }; vrBitrateMbps = i
+        case .vrEyeSize:
+            guard text == "headset" || LauncherSettings.vrEyeSizeValid(text) else { return false }
+            vrEyeSize = text == "headset" ? "" : text
         }
         return true
     }
@@ -599,7 +623,7 @@ final class LauncherSettings: ObservableObject {
         vulkanDriver = fresh.vulkanDriver
         graphicsPath = fresh.graphicsPath
         frameLatency = fresh.frameLatency
-        vrEnabled = fresh.vrEnabled
+        vrEnabled = fresh.vrEnabled; vrBitrateMbps = fresh.vrBitrateMbps; vrEyeSize = fresh.vrEyeSize
         loading = false
         reloadGames()
         log("settings: reset to defaults")
@@ -634,7 +658,7 @@ final class LauncherSettings: ObservableObject {
             .network: network, .lanRemotePlay: lanRemotePlay,
             .diskImage: diskImage, .steamClient: steamClient.rawValue, .followMacTime: followMacTime,
             .vulkanDriver: vulkanDriver.rawValue, .graphicsPath: graphicsPath.rawValue, .frameLatency: frameLatency,
-            .vrEnabled: vrEnabled,
+            .vrEnabled: vrEnabled, .vrBitrateMbps: vrBitrateMbps, .vrEyeSize: vrEyeSize,
         ]
         var s: [Key: String] = [:]
         for (k, v) in values where k.nextStart && overrides[k] == nil { s[k] = "\(v)" }

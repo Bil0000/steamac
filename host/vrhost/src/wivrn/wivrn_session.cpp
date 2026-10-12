@@ -278,7 +278,9 @@ struct WivrnSession::impl
 
 	// encryption / pairing
 	std::unique_ptr<KnownKeys> keys;
+	mutable std::mutex crypto_mutex; // cfg.encryption + pin: WivrnSession::set_pairing() changes them at run time
 	std::string pin;
+	std::string advertised_name;
 
 	void log(const std::string & s)
 	{
@@ -388,8 +390,15 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 	using cs = th::crypto_handshake::crypto_state;
 	using Enc = WivrnConfig::Encryption;
 	std::string headset_public_key = KnownKeys::clean_key(hs.public_key);
-	bool is_public_key_known = cfg.encryption != Enc::disabled and keys->contains(headset_public_key);
-	switch (cfg.encryption)
+	Enc encryption;
+	std::string pin;
+	{
+		std::lock_guard lock(crypto_mutex); // one snapshot per connection (set_pairing may change them)
+		encryption = cfg.encryption;
+		pin = this->pin;
+	}
+	bool is_public_key_known = encryption != Enc::disabled and keys->contains(headset_public_key);
+	switch (encryption)
 	{
 		case Enc::disabled:
 			ctl.send(th::crypto_handshake{.state = cs::encryption_disabled});
@@ -463,15 +472,15 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 		throw std::runtime_error(std::string("headset info: ") + e.what());
 	}
 
-	if (cfg.encryption == Enc::pairing and not is_public_key_known)
+	if (encryption == Enc::pairing and not is_public_key_known)
 	{
 		keys->add({.public_key = headset_public_key, .name = hs.name});
 		stats.paired++;
 		log("headset '" + hs.name + "' paired (" + keys->file().string() + ")");
 	}
-	else if (cfg.encryption != Enc::disabled)
+	else if (encryption != Enc::disabled)
 		keys->touch(headset_public_key);
-	log(cfg.encryption == Enc::disabled ? "encryption disabled" : "encryption on (AES-128-CTR)");
+	log(encryption == Enc::disabled ? "encryption disabled" : "encryption on (AES-128-CTR)");
 }
 
 void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
@@ -908,6 +917,7 @@ void WivrnSession::start(SessionListener * l)
 		snprintf(proto, sizeof proto, "%016" PRIx64, wivrn::protocol_version);
 		char host[256] = {};
 		gethostname(host, sizeof host - 1);
+		p->advertised_name = host;
 		p->publisher = std::make_unique<DnssdPublisher>(host, "_wivrn._tcp", p->bound_port,
 		                                                std::map<std::string, std::string>{
 		                                                        {"protocol", proto},
@@ -941,7 +951,44 @@ std::optional<HeadsetInfo> WivrnSession::headset() const
 
 std::string WivrnSession::pin() const
 {
+	std::lock_guard lock(p->crypto_mutex);
 	return p->pin;
+}
+
+WivrnConfig::Encryption WivrnSession::encryption() const
+{
+	std::lock_guard lock(p->crypto_mutex);
+	return p->cfg.encryption;
+}
+
+// WiVRn's wivrn_server::set_encryption_state(pairing) / enable_pairing: a fresh random PIN each time pairing is
+// turned on; off = paired headsets only. Encryption-disabled mode is left alone (no pairing in that mode).
+bool WivrnSession::set_pairing(bool on)
+{
+	std::lock_guard lock(p->crypto_mutex);
+	if (p->cfg.encryption == WivrnConfig::Encryption::disabled)
+		return false;
+	if (on and p->cfg.encryption != WivrnConfig::Encryption::pairing)
+		p->pin = p->cfg.pin.empty() ? KnownKeys::random_pin() : p->cfg.pin;
+	else if (not on)
+		p->pin.clear();
+	p->cfg.encryption = on ? WivrnConfig::Encryption::pairing : WivrnConfig::Encryption::enabled;
+	return true;
+}
+
+std::string WivrnSession::advertised_name() const
+{
+	return p->advertised_name;
+}
+
+uint32_t WivrnSession::bitrate_bps() const
+{
+	return p->cfg.bitrate_bps;
+}
+
+std::string WivrnSession::known_keys_file() const
+{
+	return p->keys->file();
 }
 
 int WivrnSession::port() const

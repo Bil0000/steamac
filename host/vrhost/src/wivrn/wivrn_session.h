@@ -68,7 +68,13 @@ public:
 	void set_microphone(bool on) override;
 
 	int port() const;
-	std::string pin() const; // the pairing PIN ("" unless encryption == pairing) // bound port (useful with port = 0 in tests)
+	std::string pin() const; // the pairing PIN ("" unless encryption == pairing)
+	WivrnConfig::Encryption encryption() const;
+	// Pairing on (new PIN) / off at run time, for the control socket; false in encryption-disabled mode.
+	bool set_pairing(bool on);
+	std::string advertised_name() const; // Bonjour service name ("" when not advertised)
+	uint32_t bitrate_bps() const;        // configured total bitrate
+	std::string known_keys_file() const; // paired-headset store this session uses
 	const WivrnStats & stats() const;
 	static uint64_t protocol_version();
 
