@@ -8,6 +8,8 @@
 #   off       Proton's files (the updated ones) and the user's vrpath are back byte for byte, the state dir is gone
 #   novrpath  with no vrpath before, "off" removes ours instead of leaving it
 #   missing   steamac.vr=1 without the payload leaves everything stock
+#   oldgfx    steamac.vr=1 with a DXMT payload that has no VR link (winemetal.so without wmtr_vr_call, or no DXMT
+#             payload) leaves everything stock and says why
 #   other     steamac.vr=0 / no key / another Proton: untouched
 # usage: scripts/test/steam-vr-path.sh
 set -u
@@ -22,10 +24,13 @@ for p in "$P" "$P2"; do
 done
 X=$T/vr; blob "$X/x86_64-windows/vrclient_x64.dll" m; blob "$X/x86_64-unix/vrclient_x64.so" n
 blob "$X/runtime/bin/linux64/vrclient.so" r
+# the DXMT payload: winemetal.so with the VR link, and one from before it
+G=$T/dxmt; blob "$G/x86_64-unix/winemetal.so" g; printf 'wmtr_vr_call\0' >> "$G/x86_64-unix/winemetal.so"
+GOLD=$T/dxmt-old; blob "$GOLD/x86_64-unix/winemetal.so" g
 CFG=$T/cfg; mkdir -p "$CFG/openvr"; echo '{"runtime":["/home/u/SteamVR"],"version":1}' > "$CFG/openvr/openvrpaths.vrpath"
 snap() { (cd "$T" && find steam cfg -type f | LC_ALL=C sort | while read -r f; do echo "$f $(cksum < "$f")"; done); }
 run() { echo "$1" > "$T/cmdline"
-  STEAMAC_CMDLINE=$T/cmdline STEAMAC_STEAM_ROOT=$ST STEAMAC_VR_DIR=${2:-$X} STEAMAC_VR_STATE=$T/state \
+  STEAMAC_CMDLINE=$T/cmdline STEAMAC_STEAM_ROOT=$ST STEAMAC_VR_DIR=${2:-$X} STEAMAC_DXMT_DIR=${3:-$G} STEAMAC_VR_STATE=$T/state \
     XDG_CONFIG_HOME=$CFG HOME=$T bash "$S" 2>>"$T/log"; }
 W=$P/files/lib/wine
 # what Proton's setup_openvr_paths() makes of the vrpath: runtime[0] -> PROTON_VR_RUNTIME
@@ -36,6 +41,10 @@ run "quiet steamac.vr=0"; [ "$(snap)" = "$stock" ] || fail other "steamac.vr=0 c
 run "quiet"; [ "$(snap)" = "$stock" ] || fail other "no key changed files"
 [ -e "$T/state" ] && fail other "state dir created while off"
 run "steamac.vr=1" "$T/none"; [ "$(snap)" = "$stock" ] || fail missing "missing payload changed files"
+run "steamac.vr=1" "$X" "$GOLD"; [ "$(snap)" = "$stock" ] || fail oldgfx "DXMT payload without the VR link changed files"
+grep -q "no VR link" "$T/log" || fail oldgfx "no reason logged"
+run "steamac.vr=1" "$X" "$T/none"; [ "$(snap)" = "$stock" ] || fail oldgfx "missing DXMT payload changed files"
+[ -e "$T/state" ] && fail oldgfx "state dir created without a VR-capable DXMT"
 
 run "quiet steamac.vr=1 splash"
 cmp -s "$W/x86_64-windows/vrclient_x64.dll" "$X/x86_64-windows/vrclient_x64.dll" || fail on "vrclient_x64.dll not installed"

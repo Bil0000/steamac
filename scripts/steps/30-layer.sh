@@ -52,6 +52,9 @@ fi
 # Optional: without it the VR setting leaves Proton stock.
 VR=/work/out/vr
 if [[ -f $VR/runtime/bin/linux64/vrclient.so && -f $VR/x86_64-windows/vrclient_x64.dll && -f $VR/x86_64-unix/vrclient_x64.so ]]; then
+    # steam-vr-path keeps VR off without the VR link in the DXMT payload: do not ship that combination
+    grep -aq wmtr_vr_call "$ST/usr/lib/steamac/dxmt/x86_64-unix/winemetal.so" 2>/dev/null \
+        || { echo "[layer] VR payload present but the DXMT payload has no VR link (winemetal.so without wmtr_vr_call)" >&2; exit 1; }
     for f in x86_64-windows/vrclient_x64.dll x86_64-unix/vrclient_x64.so runtime/bin/linux64/vrclient.so; do
         install -D -m 0644 "$VR/$f" "$ST/usr/lib/steamac/vr/$f"
     done

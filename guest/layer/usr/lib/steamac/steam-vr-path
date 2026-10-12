@@ -11,13 +11,17 @@
 #        byte for byte; nothing this script added stays.
 # The files ship in the steamac layer ($PAYLOAD, read-only):
 #   x86_64-windows/vrclient_x64.dll  x86_64-unix/vrclient_x64.so  runtime/bin/linux64/vrclient.so
+# VR needs the DXMT payload that carries the VR link (steam-gfx-path's $DXMT: winemetal.so with wmtr_vr_call, built
+# from wmtr/ with the VR eye-texture export). With an older DXMT payload the game would get the patched vrclient but
+# no host link, so VR stays off and Proton stays stock.
 # Idempotent; runs as an ExecStartPre of steam.service (Steam is not running then).
-# Test overrides: STEAMAC_CMDLINE, STEAMAC_STEAM_ROOT, STEAMAC_VR_DIR, STEAMAC_VR_STATE, XDG_CONFIG_HOME.
+# Test overrides: STEAMAC_CMDLINE, STEAMAC_STEAM_ROOT, STEAMAC_VR_DIR, STEAMAC_DXMT_DIR, STEAMAC_VR_STATE, XDG_CONFIG_HOME.
 set -uo pipefail
 
 CMDLINE=${STEAMAC_CMDLINE:-/proc/cmdline}
 STEAM=${STEAMAC_STEAM_ROOT:-$HOME/.local/share/Steam}
 PAYLOAD=${STEAMAC_VR_DIR:-/usr/lib/steamac/vr}
+DXMT=${STEAMAC_DXMT_DIR:-/usr/lib/steamac/dxmt}
 STATE=${STEAMAC_VR_STATE:-${XDG_DATA_HOME:-$HOME/.local/share}/steamac/vr-path}
 VRPATH=${XDG_CONFIG_HOME:-$HOME/.config}/openvr/openvrpaths.vrpath
 PROTON="$STEAM/steamapps/common/Proton - Experimental"
@@ -31,6 +35,9 @@ if [[ $mode == on ]]; then
     for f in $FILES runtime/bin/linux64/vrclient.so; do
         [[ -f $PAYLOAD/$f ]] || { log "no $f in $PAYLOAD; VR stays off"; mode=off; break; }
     done
+fi
+if [[ $mode == on ]] && ! grep -aq wmtr_vr_call "$DXMT/x86_64-unix/winemetal.so" 2>/dev/null; then
+    log "the DXMT payload in $DXMT has no VR link (wmtr_vr_call); VR stays off"; mode=off
 fi
 
 vrpath_json() { # runtime dir, state dir: Proton reads runtime[0]; config/log are where the runtime may write
