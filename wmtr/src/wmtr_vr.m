@@ -63,7 +63,11 @@ struct wmtr_vr {
   struct vrl_poses poses;
   struct vrl_input input;
   _Atomic uint64_t queries, haptics;
+  _Atomic int have_state; /* a VRL_STATE arrived on this link */
+  int64_t created_ns;
 };
+
+#define VR_FIRST_STATE_WAIT_NS 250000000ll
 
 static int64_t
 now_ns(void) {
@@ -187,7 +191,12 @@ drain_releases(struct wmtr_vr *vr) {
         if (vr->sc[e].id == u.r.swapchain && u.r.image < VR_IMAGES) atomic_store(&vr->sc[e].busy[u.r.image], 0);
       atomic_fetch_add(&vr->released, 1);
       break;
-    case VRL_STATE: if (n == sizeof u.s) vr->state = u.s; break;
+    case VRL_STATE:
+      if (n == sizeof u.s) {
+        vr->state = u.s;
+        atomic_store(&vr->have_state, 1);
+      }
+      break;
     case VRL_TIMING: if (n == sizeof u.t) vr->timing = u.t; break;
     case VRL_POSES: if (n == sizeof u.p) vr->poses = u.p; break;
     case VRL_INPUT: if (n == sizeof u.i) vr->input = u.i; break;
@@ -294,6 +303,14 @@ query_locked(struct wmtr_vr *vr, void *buf, uint32_t size) {
 int
 wmtr_vr_query(struct wmtr_vr *vr, void *buf, uint32_t size) {
   if (!vr) return query_locked(NULL, buf, size);
+  /* The host answers VRL_HELLO with its state (headset connected, eye size). A runtime that starts with the link
+   * (VR_Init right after the process attached: Proton's steam.exe, a relaunched game) would read "no headset,
+   * 0x0" in between: its hello waits for that first state, only while the link is new. */
+  if (size >= sizeof(struct svr_hdr) && ((struct svr_hdr *)buf)->op == SVR_HELLO)
+    while (!atomic_load(&vr->have_state) && now_ns() - vr->created_ns < VR_FIRST_STATE_WAIT_NS) {
+      drain_releases(vr);
+      if (!atomic_load(&vr->have_state)) usleep(1000);
+    }
   pthread_mutex_lock(&vr->lock);
   int r = query_locked(vr, buf, size);
   pthread_mutex_unlock(&vr->lock);
@@ -397,6 +414,7 @@ wmtr_vr_create(int link_fd, const char *mach_name) {
   int space = VRL_SOCKET_BUFFER;
   setsockopt(link_fd, SOL_SOCKET, SO_RCVBUF, &space, sizeof space);
   struct vrl_hello hello = {{VRL_HELLO, sizeof hello}, VRL_VERSION, (uint32_t)getpid()};
+  vr->created_ns = now_ns();
   send_packet(vr, &hello, sizeof hello);
   pthread_create(&vr->reader, NULL, reader_main, vr);
   return vr;

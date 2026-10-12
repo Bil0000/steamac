@@ -371,6 +371,18 @@ static void test_vr_fd(void) {
   CHECK(vr_recv(sv[1], &u, sizeof u, 2000) > 0 && u.h.type == VRL_HELLO,
         "WMTR_VR_FD: new context did not reattach after the last old context ended");
   CHECK(wmtr_host_vr(c) != NULL, "WMTR_VR_FD: link gone after its first contexts ended");
+  /* the host's answer to VRL_HELLO (its state) is on its way when a relaunched game's runtime says hello: the
+   * hello must carry the headset, not "no headset, 0x0" */
+  int host_fd = sv[1];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_MSEC), dispatch_get_global_queue(0, 0), ^{
+    struct vrl_state st = {{VRL_STATE, sizeof st}, 1, 1832, 1920, 72.0f, 0.065f, {{-0.9f, 0.8f, 0.85f, -0.85f}, {-0.8f, 0.9f, 0.85f, -0.85f}},
+                           VRL_PROFILE_INDEX, 0, "Quest 3"};
+    send(host_fd, &st, sizeof st, 0);
+  });
+  memset(&hb, 0, sizeof hb);
+  hb.q = (struct svr_hello_req){{SVR_HELLO, sizeof hb.q}, SVR_VERSION, 1, "test"};
+  CHECK(wmtr_vr_query(wmtr_host_vr(c), &hb, sizeof hb) == 0 && hb.r.connected && hb.r.eye_width == 1832 && hb.r.eye_height == 1920,
+        "WMTR_VR_FD: hello right after reattach: connected %u, %ux%u", hb.r.connected, hb.r.eye_width, hb.r.eye_height);
   wmtr_host_destroy(c);
   unsetenv("WMTR_VR_FD"); unsetenv("WMTR_VR_MACH_NAME");
   close(sv[0]); close(sv[1]);
