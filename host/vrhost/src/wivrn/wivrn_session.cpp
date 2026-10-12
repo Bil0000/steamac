@@ -617,14 +617,15 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	if (h.microphone)
 		ad.microphone = th::audio_stream_description::device{uint8_t(h.microphone->channels), h.microphone->rate};
 	if (ad.speaker or ad.microphone)
-	{
 		control->send(std::move(ad));
-		control->send(th::feature_control{th::feature_control::microphone, h.microphone and mic_wanted.load()});
-	}
 
 	{
+		// with info, under the lock set_microphone takes: a switch while this runs is either read here or sent by
+		// set_microphone, never lost in between
 		std::lock_guard lock(cnx_mutex);
 		info = h;
+		if (ad.speaker or ad.microphone)
+			control->send(th::feature_control{th::feature_control::microphone, h.microphone and mic_wanted.load()});
 	}
 	char buf[160];
 	snprintf(buf, sizeof buf, "headset '%s': stream %ux%u per eye, %.0f Hz, %s", h.name.c_str(), h.eye_width,
@@ -1137,10 +1138,17 @@ void WivrnSession::haptics(Device d, float duration_s, float frequency, float am
 	        .amplitude = clean(amplitude, 1.f),
 	};
 	p->stats.haptics++;
-	if (p->stream)
-		p->stream->send(std::move(h));
-	else if (p->control)
-		p->control->send(std::move(h));
+	try
+	{
+		if (p->stream)
+			p->stream->send(std::move(h));
+		else if (p->control)
+			p->control->send(std::move(h));
+	}
+	catch (...)
+	{
+		// called from the link / audio threads: a headset that just left is the receive loop's to handle
+	}
 }
 
 void WivrnSession::request_idr()
@@ -1156,10 +1164,17 @@ void WivrnSession::send_audio(std::span<const int16_t> pcm)
 	if (not p->control)
 		return;
 	// Like WiVRn's speaker_process: one packet per quantum on the control channel, stamped with the send time.
-	p->control->send(wivrn::audio_data{
-	        .timestamp = p->clock.to_headset(now_ns()),
-	        .payload = std::span(reinterpret_cast<uint8_t *>(const_cast<int16_t *>(pcm.data())), pcm.size_bytes()),
-	});
+	try
+	{
+		p->control->send(wivrn::audio_data{
+		        .timestamp = p->clock.to_headset(now_ns()),
+		        .payload = std::span(reinterpret_cast<uint8_t *>(const_cast<int16_t *>(pcm.data())), pcm.size_bytes()),
+		});
+	}
+	catch (...)
+	{
+		return; // the audio thread's send: a headset that just left is the receive loop's to handle
+	}
 	p->stats.audio_packets++;
 }
 
@@ -1169,6 +1184,13 @@ void WivrnSession::set_microphone(bool on)
 		return;
 	std::lock_guard lock(p->cnx_mutex);
 	if (p->control and p->info and p->info->microphone)
-		p->control->send(th::feature_control{th::feature_control::microphone, on});
+		try
+		{
+			p->control->send(th::feature_control{th::feature_control::microphone, on});
+		}
+		catch (...)
+		{
+			// as send_audio: the receive loop handles the disconnect
+		}
 }
 } // namespace vrhost
