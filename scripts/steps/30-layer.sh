@@ -129,6 +129,10 @@ find "$ST" -type f ! -perm -u+x -exec chmod 0644 {} +
 
 epoch=${SOURCE_DATE_EPOCH:-1767225600}
 rm -f "$OUT.tmp"
-mkfs.erofs -zlz4hc -T "$epoch" -U 5fea1f2a-0c6b-4d5e-9a1e-0000000000a1 --all-root -L steamac-layer "$OUT.tmp" "$ST" >/dev/null
+# 4 KiB blocks: the guest kernel mounts only blocksize == PAGE_SIZE (4 KiB); mkfs.erofs on macOS defaults to 16 KiB
+mkfs.erofs -b 4096 -zlz4hc -T "$epoch" -U 5fea1f2a-0c6b-4d5e-9a1e-0000000000a1 --all-root -L steamac-layer "$OUT.tmp" "$ST" >/dev/null
+if command -v dump.erofs >/dev/null; then
+    dump.erofs "$OUT.tmp" | grep -Eq 'blocksize: +4096$' || { echo "[layer] $OUT.tmp: block size is not 4096" >&2; exit 1; }
+fi
 mv "$OUT.tmp" "$OUT"
 echo "[layer] $OUT: $(stat -c %s "$OUT") bytes; $(cat "$ST/usr/lib/steamac/layer-release")"
