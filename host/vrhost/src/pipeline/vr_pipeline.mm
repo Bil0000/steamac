@@ -71,7 +71,7 @@ VrPipeline::VrPipeline(VrSession & session, int link_fd, const std::string & mac
 {
 	server = std::make_unique<VrLinkServer>(
 	        link_fd, mach_name, [this](const LinkFrame & f) { on_frame(f); },
-	        [this](const void * m, size_t n) { on_message(m, n); });
+	        [this](const void * m, size_t n) { on_message(m, n); }, [this] { on_frame_error(); });
 	clock = std::thread([this] { frame_clock(); });
 }
 
@@ -135,7 +135,13 @@ void VrPipeline::on_connected(const HeadsetInfo & h)
 
 void VrPipeline::on_disconnected()
 {
+	{
+		std::lock_guard l(input_mutex);
+		memset(input, 0, sizeof input);
+		input_time = now_ns();
+	}
 	send_state(false);
+	send_input();
 }
 
 void VrPipeline::on_refresh_rate(float hz)
@@ -144,13 +150,25 @@ void VrPipeline::on_refresh_rate(float hz)
 	send_state(true);
 }
 
+void VrPipeline::send_input()
+{
+	vrl_input m{};
+	m.h = {VRL_INPUT, sizeof m};
+	m.profile = VRL_PROFILE_TOUCH;
+	{
+		std::lock_guard l(input_mutex);
+		m.time = input_time;
+		memcpy(m.value, input, sizeof m.value);
+	}
+	server->send(&m, sizeof m);
+}
+
 void VrPipeline::on_input(std::span<const InputValue> values)
 {
 	vrl_input m{};
 	{
 		std::lock_guard l(input_mutex);
 		bool changed = false;
-		int64_t t = 0;
 		for (auto & v: values)
 		{
 			int hand, index;
@@ -158,12 +176,12 @@ void VrPipeline::on_input(std::span<const InputValue> values)
 				continue;
 			changed |= input[hand][index] != v.value;
 			input[hand][index] = v.value;
-			t = std::max<int64_t>(t, v.last_change);
+			input_time = std::max<int64_t>(input_time, v.last_change);
 		}
 		if (not changed)
 			return;
 		m.h = {VRL_INPUT, sizeof m};
-		m.time = t;
+		m.time = input_time;
 		m.profile = VRL_PROFILE_TOUCH;
 		memcpy(m.value, input, sizeof m.value);
 	}
@@ -173,6 +191,12 @@ void VrPipeline::on_input(std::span<const InputValue> values)
 void VrPipeline::on_message(const void * msg, size_t n)
 {
 	auto h = static_cast<const vrl_header *>(msg);
+	if (h->type == VRL_HELLO and n == sizeof(vrl_hello))
+	{
+		send_state(session.connected());
+		send_input();
+		return;
+	}
 	if (h->type == VRL_HAPTICS and n == sizeof(vrl_haptics))
 	{
 		auto hp = static_cast<const vrl_haptics *>(msg);
@@ -214,6 +238,14 @@ void VrPipeline::frame_clock()
 bool VrPipeline::peer_closed() const
 {
 	return server->peer_closed();
+}
+
+void VrPipeline::on_frame_error()
+{
+	std::lock_guard lock(m);
+	bridge.reset();
+	sink.reset();
+	w = h = 0;
 }
 
 void VrPipeline::on_frame(const LinkFrame & f)

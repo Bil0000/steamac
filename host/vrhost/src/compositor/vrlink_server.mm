@@ -46,6 +46,7 @@ struct VrLinkServer::impl
 	mach_port_t port = MACH_PORT_NULL;
 	Sink sink;
 	MessageHandler other;
+	SinkError on_sink_error;
 	std::thread thread;
 	std::atomic<bool> quit{false}, closed{false};
 	std::atomic<uint64_t> frames{0};
@@ -121,8 +122,13 @@ struct VrLinkServer::impl
 			switch (u.h.type)
 			{
 				case VRL_HELLO:
-					if (u.hello.version != VRL_VERSION)
+					if (n != sizeof u.hello or u.hello.version != VRL_VERSION)
+					{
 						fprintf(stderr, "vrhost: vrlink version %u, expected %u\n", u.hello.version, VRL_VERSION);
+						break;
+					}
+					if (other)
+						other(&u, size_t(n));
 					break;
 				case VRL_SWAPCHAIN: {
 					auto sc = std::make_unique<Swapchain>();
@@ -160,8 +166,23 @@ struct VrLinkServer::impl
 					}
 					if (ok)
 					{
-						sink(f);
-						frames++;
+						try
+						{
+							sink(f);
+							frames++;
+						}
+						catch (const std::exception & e)
+						{
+							fprintf(stderr, "vrhost: frame %llu dropped: %s\n", (unsigned long long)f.frame_id, e.what());
+							if (on_sink_error)
+								on_sink_error();
+						}
+						catch (...)
+						{
+							fprintf(stderr, "vrhost: frame %llu dropped: unknown error\n", (unsigned long long)f.frame_id);
+							if (on_sink_error)
+								on_sink_error();
+						}
 					}
 					for (int e = 0; e < 2; e++)
 						send_release(u.sub.eye[e].swapchain, u.sub.eye[e].image, u.sub.frame_id);
@@ -176,12 +197,13 @@ struct VrLinkServer::impl
 	}
 };
 
-VrLinkServer::VrLinkServer(int link_fd, const std::string & mach_name, Sink sink, MessageHandler other) :
+VrLinkServer::VrLinkServer(int link_fd, const std::string & mach_name, Sink sink, MessageHandler other, SinkError on_sink_error) :
         p(std::make_unique<impl>())
 {
 	p->fd = link_fd;
 	p->sink = std::move(sink);
 	p->other = std::move(other);
+	p->on_sink_error = std::move(on_sink_error);
 	int on = 1;
 	setsockopt(link_fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
 	int space = VRL_SOCKET_BUFFER;

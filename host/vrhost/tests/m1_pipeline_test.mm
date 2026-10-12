@@ -302,10 +302,53 @@ static void run_case(const char * label, uint32_t src_w, uint32_t src_h, uint32_
 	wmtr_vr_destroy(vr);
 }
 
+// A transient encoder error must not kill the link thread or strand its two images.
+static void test_sink_failure()
+{
+	char name[96];
+	snprintf(name, sizeof name, "com.steamac.vrhost.m1test.%d.error", int(getpid()));
+	int sv[2];
+	CHECK(socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0, "socketpair");
+	std::atomic<int> calls{0}, resets{0};
+	VrLinkServer server(sv[1], name, [&](const LinkFrame &) {
+		if (++calls == 1)
+			throw std::runtime_error("test encoder failure");
+	}, {}, [&] { resets++; });
+	wmtr_vr * vr = wmtr_vr_create(sv[0], name);
+	CHECK(vr, "wmtr_vr_create");
+	Producer prod(64, 64);
+	WMTVRSubmitInfo info{};
+	for (int e = 0; e < 2; e++)
+		info.eye[e] = WMTVREye{(obj_handle_t)(__bridge void *)prod.tex[e], 0, 0, 0, 0, 0, 0};
+	info.wait_event = (obj_handle_t)(__bridge void *)prod.ev;
+	for (int i = 1; i <= 3; i++)
+	{
+		prod.render(i, false);
+		info.frame_id = i;
+		info.wait_value = prod.ev_value;
+		CHECK(wmtr_vr_submit(vr, &info) == 0, "submit after sink error %d", i);
+		usleep(20000);
+	}
+	wmtr_vr_stats st{};
+	for (int i = 0; i < 200; i++)
+	{
+		wmtr_vr_get_stats(vr, &st);
+		if (calls >= 2 and st.released >= 2 * st.sent - 2)
+			break;
+		usleep(5000);
+	}
+	CHECK(calls >= 2, "link thread survived transient sink error, calls %d", calls.load());
+	CHECK(resets == 1, "sink reset once after encoder failure, got %d", resets.load());
+	CHECK(st.sent >= 2 and st.released + 2 >= 2 * st.sent, "released %llu of %llu sent frames after error",
+	      st.released, st.sent);
+	wmtr_vr_destroy(vr);
+}
+
 int main(int argc, char ** argv)
 {
 	@autoreleasepool
 	{
+		test_sink_failure();
 		int frames = argc > 1 ? atoi(argv[1]) : 300;
 		// identity (no foveation): exact colour conversion
 		run_case("identity", 512, 512, 512, 512, 10, 90, true);

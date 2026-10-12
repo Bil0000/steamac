@@ -28,9 +28,10 @@ public:
 	// Registers `mach_name` (bootstrap) and serves `link_fd` (AF_UNIX SOCK_DGRAM socketpair end, owned). The sink runs on the
 	// server thread; images are released when it returns.
 	using Sink = std::function<void(const LinkFrame &)>;
+	using SinkError = std::function<void()>;
 	// Other vm -> host packets (VRL_HAPTICS, ...): the whole datagram (struct vrl_header first), on the server thread.
 	using MessageHandler = std::function<void(const void *, size_t)>;
-	VrLinkServer(int link_fd, const std::string & mach_name, Sink sink, MessageHandler other = {});
+	VrLinkServer(int link_fd, const std::string & mach_name, Sink sink, MessageHandler other = {}, SinkError on_sink_error = {});
 	~VrLinkServer();
 	VrLinkServer(const VrLinkServer &) = delete;
 	VrLinkServer & operator=(const VrLinkServer &) = delete;
