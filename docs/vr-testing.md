@@ -122,6 +122,19 @@ makes it connect once to `wivrn://:PIN@host:port` taken from `WIVRN_TEST_URI`.
 * Run the host with `steamac-vrhost --testpattern --test-tone --pair --pin 123456`, then
   `run-in-container.sh <mac-ipv6> 9757 123456 <seconds>`. IPv6 (`2001:...::1001`) is reachable both ways; IPv4 ICMP between
   the two machines is filtered, so use IPv6.
+  The container, from the directory holding `run-in-container.sh` and `build-client/` (radv on the host GPU, the
+  host Wayland socket for Monado's compositor, host networking):
+
+  ```sh
+  podman run --rm --network host --device /dev/dri --security-opt label=disable \
+    -e COMPOSITOR=WAYLAND -e WAYLAND_DISPLAY=wayland-0 -e XDG_RUNTIME_DIR=/tmp/xdg \
+    -e VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json \
+    -v /run/user/$(id -u)/wayland-0:/tmp/xdg/wayland-0 -v "$PWD":/work -w /work \
+    localhost/vr-realclient bash /work/run-in-container.sh <mac-ipv6> <port> <pin> <seconds>
+  ```
+
+  Checked 2026-10-12 against the demo bundle's `steamac-vrhost --testpattern --pair --pin <pin> --port 9761
+  --no-advertise`: about 60 frames/s, encode about 9 ms, headset decode about 1.6 ms, tracking flowing.
 
 ### Results against vrhost (protocol `fc26e619b7ab80f8`, ctest 10/10)
 
