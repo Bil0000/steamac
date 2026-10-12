@@ -73,13 +73,15 @@ be turned on and off while a game runs.
 
 EAC runs inside SteamOS under Valve's FEX emulator. This fork's patched FEX passes EAC's checks for VRChat, and for
 Mini Royale (EAC `301`; that game was not played past its account prompt). Results differ from game to game: each title
-ships its own EAC build and checks, so an untested game may or may not work. Today two
-manual steps are required for VRChat; both are planned to become automatic:
+ships its own EAC build and checks, so an untested game may or may not work. Today one
+manual step is required for VRChat; it is planned to become automatic:
 
 1. Install the patched FEX: enable SSH (Settings > Advanced), then run `build-fex.sh` and `install-fex-tool.sh` in the
    guest ([fex-eac/README.md](fex-eac/README.md)).
-2. Set VRChat's Steam launch options (`EAC_LAUNCHERDIR`, `PROTON_EAC_RUNTIME`, `WINE_CPU_TOPOLOGY`, ...), exactly as given
-   in [fex-eac/README.md](fex-eac/README.md) and [SETUP.md](SETUP.md).
+
+No Steam launch options are needed: the guest gives Proton the EAC runtime variables and VRChat's CPU topology itself
+([fex-eac/README.md](fex-eac/README.md#3-launch-options-none-needed)). Remove the options an earlier version of this
+guide had you paste; a launch option you do set still wins.
 
 - **Expected:** EAC's launcher reports `Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'` and
   the game logs `AntiCheat Session Begin: Success`.
@@ -95,7 +97,7 @@ manual steps are required for VRChat; both are planned to become automatic:
 | the DXMT setting seems to have no effect | the setting applies at the next VM start: restart the VM after changing it. If the app lacks the DXMT host library, Settings says so and the app uses Vulkan (boot log: `gpu: graphics path Vulkan`) |
 | EAC fails on DXMT | switch to *Vulkan* and restart the launcher |
 | EAC does not finish, or fails after a Steam update | the patched FEX is missing or was replaced by Valve's; run `sh install-fex-tool.sh status` |
-| about a minute's stall before joining | check that `WINE_CPU_TOPOLOGY` is in the launch options |
+| about a minute's stall before joining | VRChat's launch options must not set `WINE_CPU_TOPOLOGY` to fewer than 16 CPUs: clear them, the guest sets it |
 | stutter with audio crackle | grant the microphone permission (System Settings > Privacy & Security > Microphone) |
 | long first launch | shaders compile once per game and path; later launches are faster |
 
@@ -122,7 +124,7 @@ More: [docs/eac-troubleshooting.md](docs/eac-troubleshooting.md).
 | [docs/fork.md](docs/fork.md) | what changed in this fork and its status |
 | [docs/eac-how-it-works.md](docs/eac-how-it-works.md) | the EAC chain and why the FEX swap is needed |
 | [docs/eac-performance.md](docs/eac-performance.md) | measurements and limits |
-| [fex-eac/README.md](fex-eac/README.md) | patched FEX setup and launch options |
+| [fex-eac/README.md](fex-eac/README.md) | patched FEX setup and the game environment defaults |
 | [docs/upstream/README.md](docs/upstream/README.md) | upstream steamac's documentation (Apache-2.0, © FX GAMES FZ LLC) |
 
 ## Licences and attributions

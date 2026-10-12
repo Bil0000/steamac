@@ -63,13 +63,15 @@ DXMT 覆盖 Direct3D 11（及 10）；Direct3D 12 游戏请用 *Vulkan*（在 DX
 
 ## Easy Anti-Cheat
 
-EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 FEX 可通过 VRChat 的 EAC 检查，Mini Royale 也能通过（EAC `301`；未越过其账号登录提示继续游玩）。结果因游戏而异：每款游戏都有自己的 EAC 版本和检查，未测试的游戏可能可以运行，也可能不行。目前 VRChat 需要两个手动
-步骤，均计划自动化：
+EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 FEX 可通过 VRChat 的 EAC 检查，Mini Royale 也能通过（EAC `301`；未越过其账号登录提示继续游玩）。结果因游戏而异：每款游戏都有自己的 EAC 版本和检查，未测试的游戏可能可以运行，也可能不行。目前 VRChat 需要一个手动
+步骤，计划自动化：
 
 1. 安装打过补丁的 FEX：启用 SSH（设置 > 高级），然后在客户机中运行 `build-fex.sh` 和 `install-fex-tool.sh`
    （[fex-eac/README.md](fex-eac/README.md)）。
-2. 设置 VRChat 的 Steam 启动选项（`EAC_LAUNCHERDIR`、`PROTON_EAC_RUNTIME`、`WINE_CPU_TOPOLOGY` 等），完全照
-   [fex-eac/README.md](fex-eac/README.md) 与 [SETUP.md](SETUP.md) 所给。
+
+无需设置 Steam 启动选项：客户机会自行向 Proton 提供 EAC 运行时变量和 VRChat 的 CPU 拓扑
+（[fex-eac/README.md](fex-eac/README.md#3-launch-options-none-needed)）。请删除本指南旧版本要求粘贴的启动选项；
+您自己设置的启动选项仍然优先。
 
 - **预期结果：**EAC 启动器输出 `Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'`，游戏日志出现
   `AntiCheat Session Begin: Success`。
@@ -83,7 +85,7 @@ EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 
 | DXMT 设置似乎没有生效 | 设置在下次启动虚拟机时生效：更改后请重启虚拟机。若应用缺少 DXMT 主机库，设置中会提示，并改用 Vulkan（启动日志：`gpu: graphics path Vulkan`） |
 | DXMT 下 EAC 失败 | 切换到 *Vulkan* 并重启启动器 |
 | EAC 无法完成，或在 Steam 更新后失败 | 打过补丁的 FEX 缺失或被 Valve 的版本覆盖；运行 `sh install-fex-tool.sh status` |
-| 进入世界前停顿约一分钟 | 检查启动选项中是否有 `WINE_CPU_TOPOLOGY` |
+| 进入世界前停顿约一分钟 | VRChat 的启动选项不应把 `WINE_CPU_TOPOLOGY` 设为少于 16 个 CPU：请清空启动选项，客户机会自行设置 |
 | 卡顿并伴有爆音 | 授予麦克风权限（系统设置 > 隐私与安全性 > 麦克风） |
 | 首次启动很慢 | 着色器对每个游戏和每条路径只编译一次；之后的启动会更快 |
 
@@ -107,7 +109,7 @@ EAC 在 SteamOS 内由 Valve 的 FEX 模拟器运行。本分支打过补丁的 
 | [docs/fork.md](docs/fork.md) | 本分支的改动及其状态（英文） |
 | [docs/eac-how-it-works.md](docs/eac-how-it-works.md) | EAC 链路，以及为何要替换 FEX（英文） |
 | [docs/eac-performance.md](docs/eac-performance.md) | 测量与限制（英文） |
-| [fex-eac/README.md](fex-eac/README.md) | 打过补丁的 FEX 的安装与启动选项 |
+| [fex-eac/README.md](fex-eac/README.md) | 打过补丁的 FEX 的安装与游戏环境变量默认值 |
 | [docs/upstream/README.zh.md](docs/upstream/README.zh.md) | 上游 steamac 的文档（Apache-2.0，© FX GAMES FZ LLC） |
 
 ## 许可与归属

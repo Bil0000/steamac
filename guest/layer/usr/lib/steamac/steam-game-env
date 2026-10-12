@@ -1,0 +1,81 @@
+#!/bin/bash
+# steamac: environment defaults for Proton games, so that the documented setup needs no Steam launch options.
+#
+# Proton reads environment defaults from a user_settings.py next to its `proton` script and applies each one
+# only when the variable is not set already (a game's launch options win). This puts the steamac defaults
+# ($PAYLOAD: the Easy Anti-Cheat runtime variables for every game, and per-game values such as VRChat's
+# reported CPU count, computed when the game starts) into every installed Proton, in every Steam library.
+#   - a user_settings.py that is not this script's (no marker on its first line) is the user's: left alone
+#   - steamac.game_env=0 on the kernel command line removes this script's files again
+# Idempotent; ExecStartPre of steam.service and, with --watch, while the session runs (Steam installs and
+# updates Protons while it is running).
+# Usage: steam-game-env [--watch]
+# Test overrides: STEAMAC_CMDLINE, STEAMAC_STEAM_ROOT, STEAMAC_GAME_ENV_PAYLOAD.
+set -uo pipefail
+
+CMDLINE=${STEAMAC_CMDLINE:-/proc/cmdline}
+STEAM=${STEAMAC_STEAM_ROOT:-$HOME/.local/share/Steam}
+PAYLOAD=${STEAMAC_GAME_ENV_PAYLOAD:-/usr/lib/steamac/proton-user-settings.py}
+log() { echo "steam-game-env: $*" >&2; }
+
+on=1
+for w in $(cat "$CMDLINE" 2>/dev/null); do case $w in steamac.game_env=0) on=0 ;; esac; done
+[[ -f $PAYLOAD ]] || { log "no $PAYLOAD"; exit 0; }
+marker=$(head -n 1 "$PAYLOAD")
+
+# Steam library roots: the client's own and those in libraryfolders.vdf ("path" "<dir>").
+libraries() {
+    printf '%s\n' "$STEAM"
+    sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$STEAM/steamapps/libraryfolders.vdf" 2>/dev/null \
+        | sed 's/\\\\/\\/g'
+}
+# Proton installs whose script reads user_settings.py: Steam's and custom ones (compatibilitytools.d).
+protons() {
+    local lib d
+    {
+        while read -r lib; do
+            for d in "$lib"/steamapps/common/*/; do printf '%s\n' "${d%/}"; done
+        done < <(libraries | awk '!seen[$0]++')
+        for d in "$STEAM"/compatibilitytools.d/*/; do printf '%s\n' "${d%/}"; done
+    } | while read -r d; do
+        [[ -f $d/proton ]] && grep -q 'user_settings' "$d/proton" 2>/dev/null && printf '%s\n' "$d"
+    done
+}
+ours() { [[ -f $1 && $(head -n 1 "$1" 2>/dev/null) == "$marker" ]]; }
+
+reconcile() {
+    local p f
+    while read -r p; do
+        f=$p/user_settings.py
+        if [[ -e $f ]] && ! ours "$f"; then
+            log "$f is the user's own; leaving it"
+            continue
+        fi
+        if [[ $on == 0 ]]; then
+            [[ -e $f ]] && rm -f "$f" && log "removed from $p (steamac.game_env=0)"
+            continue
+        fi
+        cmp -s "$PAYLOAD" "$f" && continue
+        if cp -f "$PAYLOAD" "$f.steamac-tmp" && chmod 0644 "$f.steamac-tmp" && mv -f "$f.steamac-tmp" "$f"; then
+            log "game environment defaults in $p"
+        else
+            rm -f "$f.steamac-tmp"; log "cannot write $f"
+        fi
+    done < <(protons)
+}
+
+reconcile
+[[ ${1:-} == --watch && $on == 1 ]] || exit 0
+command -v inotifywait >/dev/null || { log "no inotifywait; --watch disabled"; exit 0; }
+# Steam rewrites a library's appmanifest_<id>.acf when an install or update finishes.
+while :; do
+    mapfile -t dirs < <({ libraries | awk '!seen[$0]++' | sed 's|$|/steamapps|'; printf '%s\n' "$STEAM/compatibilitytools.d"; } \
+        | while read -r d; do [[ -d $d ]] && printf '%s\n' "$d"; done)
+    if (( ${#dirs[@]} )); then
+        inotifywait -qq -t 600 -e close_write,moved_to,create "${dirs[@]}" 2>/dev/null
+    else
+        sleep 60
+    fi
+    sleep 2
+    reconcile
+done

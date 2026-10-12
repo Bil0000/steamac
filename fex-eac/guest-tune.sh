@@ -16,11 +16,6 @@ sudo cat "$CONF"
 
 cat <<'EOF'
 
-Launch options for VRChat (Steam > VRChat > Properties > Launch Options; $HOME is the guest home):
-  env EAC_LAUNCHERDIR=$HOME/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat PROTON_EAC_RUNTIME="$HOME/.local/share/Steam/steamapps/common/Proton EasyAntiCheat Runtime" WINEDEBUG=-all PROTON_USE_XALIA=0 WINE_CPU_TOPOLOGY=16:0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3 %command%
-
-The topology string tells the game it has 16 CPUs mapped onto the guest's 4 vCPUs: IL2CPP sizes its
-thread pool from that number, and without it the pre-join region lookup starves and stalls. Keep the
-16 but list the guest's actual vCPU ids (nproc, and the ids gamescope leaves for the game), not the
-0-3 repeated above.
+VRChat needs no Steam launch options: the guest layer sets the EAC runtime variables and WINE_CPU_TOPOLOGY
+(16 CPUs mapped onto the guest's own) itself. Remove launch options pasted from an earlier version of this guide.
 EOF

@@ -79,17 +79,37 @@ sh install-fex-tool.sh restore   # put Valve's build back
 
 Optionally run `sudo sh guest-tune.sh` to drop the gamescope MangoApp overlay layer.
 
-### 3. VRChat launch options
+### 3. Launch options: none needed
 
-Steam > VRChat > Properties > Launch Options:
+Leave the game's Steam launch options empty. The steamac guest layer gives Proton games the environment the earlier
+versions of this guide set by hand (`/usr/lib/steamac/steam-game-env`, before Steam starts and whenever Steam installs
+a Proton):
 
-```
-env EAC_LAUNCHERDIR=$HOME/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat PROTON_EAC_RUNTIME="$HOME/.local/share/Steam/steamapps/common/Proton EasyAntiCheat Runtime" WINEDEBUG=-all PROTON_USE_XALIA=0 WINE_CPU_TOPOLOGY=16:0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3 %command%
-```
+| variable | for | value |
+|---|---|---|
+| `PROTON_EAC_RUNTIME` | every Proton game, once **Proton EasyAntiCheat Runtime** is installed (any Steam library) | the runtime's directory |
+| `EAC_LAUNCHERDIR` | with the above | `drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat` in the game's own prefix |
+| `WINE_CPU_TOPOLOGY` | VRChat | 16 CPUs mapped onto the CPUs the game may run on, e.g. `16:0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3` on 4 vCPUs; unset on a guest with 16 or more |
+| `PROTON_USE_XALIA=0` | VRChat | skips Proton's Xalia helper |
 
-`WINE_CPU_TOPOLOGY` reports 16 CPUs mapped onto the guest's 4 vCPUs; without it IL2CPP's thread pool sizes itself small and
-the pre-join region lookup starves. Keep the count at 16 but list the guest's actual vCPU ids (see `nproc`) in place of the
-repeated `0,1,2,3` above.
+`WINE_CPU_TOPOLOGY` is a stock Proton setting: without it IL2CPP's thread pool sizes itself from the guest's 4 vCPUs and
+the pre-join region lookup starves (about a minute's stall; 4-6 s with 16 reported). It is a general mechanism measured
+on VRChat only, so it is applied per game (the `APP_DEFAULTS` table in `proton-user-settings.py`), not to every title.
+
+The mechanism is Proton's own: its `proton` script imports `user_settings.py` from its directory and applies each entry
+only when the variable is not already set. So:
+
+* a variable set in a game's launch options wins, e.g. `WINE_CPU_TOPOLOGY=8:0,1,2,3,0,1,2,3 %command%`;
+* a `user_settings.py` of your own in a Proton directory is left alone (that Proton then gets none of the above);
+* `steamac.game_env=0` on the guest kernel command line removes the files again.
+
+Nothing else is set. In particular keep `WINEDEBUG` channels, `PROTON_LOG=1` and FEX debug settings out of the launch
+options of an EAC game (the game dies at start with them), and do not set `PROTON_NO_FSYNC`. Proton's default is
+already `WINEDEBUG=-all`. `FEX_NEEDSSECCOMP=1` (above) stays a per-game launch option: it disables FEX's inline
+system calls for the whole game, and VRChat does not need it.
+
+If you used an earlier version of this guide, remove the `env EAC_LAUNCHERDIR=... %command%` line from VRChat's launch
+options: its fixed `0,1,2,3` list and paths would override the computed values.
 
 ### 4. After a Steam update
 

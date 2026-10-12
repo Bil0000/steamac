@@ -37,7 +37,7 @@ EAC launcher also reaches `301` (not played further). Results differ game by gam
 ## First launch
 
 1. Open the app by double-clicking it. The app itself needs no command-line options or environment variables; the
-   graphics path is a setting (below). VRChat still needs its Easy Anti-Cheat launch options (see Easy Anti-Cheat).
+   graphics path is a setting (below). Games need no Steam launch options either (see Easy Anti-Cheat).
 2. On the first start, choose **Create New Disk...**. Accept Valve's SteamOS licence agreement and the Steam Subscriber
    Agreement (the download does not start without this), choose the home size and location, and set a password for the
    `steamos` user. The app downloads Valve's signed image, verifies it and sets it up. This happens once. Only the
@@ -63,8 +63,8 @@ Switching between Steam client builds downloads up to about 1 GB; progress shows
    its Android build by default, which cannot run here; Proton Experimental selects the Windows build. This is the only
    compatibility tool you pick; the graphics path does not change it.
 3. Install **Proton EasyAntiCheat Runtime** (Steam tool 1826330) from Steam. It supplies the stock EAC launcher and client.
-4. Install the patched FEX and set VRChat's launch options, as described under Easy Anti-Cheat below. Both are still
-   required today.
+4. Install the patched FEX, as described under Easy Anti-Cheat below. It is still required today. Leave VRChat's
+   launch options empty.
 
 ## Choosing the graphics path
 
@@ -121,16 +121,12 @@ on an external APFS, Mac OS Extended or exFAT volume (FAT32 is rejected). exFAT 
 
   A Steam update of the FEX tool overwrites the patched build with Valve's; run `sh install-fex-tool.sh` again.
   Providing this step automatically is planned. It is not yet.
-- **VRChat launch options (required today).** In Steam, VRChat > Properties > Launch Options:
-
-  ```
-  env EAC_LAUNCHERDIR=$HOME/.local/share/Steam/steamapps/compatdata/438100/pfx/drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat PROTON_EAC_RUNTIME="$HOME/.local/share/Steam/steamapps/common/Proton EasyAntiCheat Runtime" WINEDEBUG=-all PROTON_USE_XALIA=0 WINE_CPU_TOPOLOGY=16:0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3 %command%
-  ```
-
-  `EAC_LAUNCHERDIR` and `PROTON_EAC_RUNTIME` load the EAC runtime. `WINE_CPU_TOPOLOGY` reports 16 CPUs mapped onto the
-  guest's 4 vCPUs and removes a stall of about a minute before joining (4-6 s region lookup with it). Keep the count at
-  16 and list the guest's actual vCPU ids (see `nproc`) in place of the repeated `0,1,2,3`. Setting these options
-  automatically is planned. It is not yet.
+- **No launch options.** The guest sets what VRChat needed as Steam launch options before: the EAC runtime variables
+  (`PROTON_EAC_RUNTIME`, `EAC_LAUNCHERDIR`) for every Proton game once **Proton EasyAntiCheat Runtime** is installed,
+  and for VRChat `WINE_CPU_TOPOLOGY` (16 CPUs reported, mapped onto the guest's own; it removes a stall of about a
+  minute before joining, 4-6 s region lookup with it) and `PROTON_USE_XALIA=0`. They are Proton's own environment
+  defaults (`user_settings.py`), so a variable you set in a game's launch options wins. If you pasted the launch
+  options of an earlier version of this guide, remove them. Details: [fex-eac/README.md](fex-eac/README.md).
 - **A successful start:** the EAC launcher log (`anticheatlauncher.log`) ends with
   `Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'` (about 5 s), and VRChat's log shows
   `AntiCheat Session Begin: Success` and `Finished entering world`, with no `null client`.
@@ -149,7 +145,7 @@ on an external APFS, Mac OS Extended or exFAT volume (FAT32 is rejected). exFAT 
 | the Android build of VRChat starts | set VRChat's compatibility tool to Proton Experimental |
 | EAC runtime errors at start | install **Proton EasyAntiCheat Runtime** from Steam |
 | EAC launcher does not finish, or worked before a Steam update | the patched FEX is missing or was replaced by Valve's; run `sh install-fex-tool.sh status`, then `sh install-fex-tool.sh` |
-| ~60 s stall before joining | check that `WINE_CPU_TOPOLOGY` is in the launch options |
+| ~60 s stall before joining | VRChat's launch options must not set `WINE_CPU_TOPOLOGY` to fewer than 16 CPUs: clear them, the guest sets it |
 | stutter in new areas | expected: new shader pipelines compile before a frame can finish (50-100 ms typical, much longer in rare cases). The Vulkan path does not keep its pipeline cache between runs. The first join is slower than later ones (86 s then 32 s in one measured VRChat run) |
 | window has no picture for several seconds after boot | the progress pill shows "Waiting for SteamOS to draw..." with the reason; it disappears at the first non-black frame |
 | "Loading…" card while in a game | the guest has sent no GPU commands for 2 s; this is normal while shaders compile |
@@ -170,7 +166,7 @@ on an external APFS, Mac OS Extended or exFAT volume (FAT32 is rejected). exFAT 
 - EAC with DXMT on a real prefix is unverified until first launch; switch to Vulkan if EAC fails.
 - On the DXMT path the game's Metal layer covers the whole VM view (a windowed game or alt-tab shows the game layer), and a 16:9 game in a 16:10 window is letterboxed; pick a 16:10 resolution.
 - Asynchronous pipeline compilation exists in the build but is off and not recommended (measured worse).
-- The patched FEX and VRChat's launch options are installed by hand today.
+- The patched FEX is installed by hand today.
 - Direct3D 12 on the Vulkan path: feature level 12_0 on KosmicKrisp, 11_0 on MoltenVK.
 - The microphone is advertised to SteamOS but has had little testing.
 - A rebuilt or re-signed app asks again for microphone permission and keychain access.

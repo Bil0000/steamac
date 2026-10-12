@@ -1,0 +1,15 @@
+# steamac: keeps the game environment defaults (see /usr/lib/steamac/steam-game-env) in every Proton while
+# Steam runs: a Proton installed or updated after Steam's start gets them when its install finishes.
+# Pulled in by gamescope-session.target and plasma-session.target through .wants symlinks in the layer.
+[Unit]
+Description=FX Steam Launcher game environment defaults for Proton
+PartOf=gamescope-session.target plasma-session.target
+After=steam.service
+
+[Service]
+Type=simple
+Slice=session.slice
+ExecStart=/usr/lib/steamac/steam-game-env --watch
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=3
