@@ -171,7 +171,7 @@ int main()
 		wmtr_vr * vr = wmtr_vr_create(sv[0], name);
 		REQUIRE(vr);
 
-		std::mutex m;
+		std::mutex m, vr_mutex;
 		std::map<uint64_t, int64_t> submit_ns;
 		std::vector<double> latency_ms;
 		std::atomic<bool> stop{false};
@@ -182,6 +182,7 @@ int main()
 			uint64_t last_frame = 0;
 			while (not stop)
 			{
+				std::lock_guard vr_lock(vr_mutex);
 				// what the guest runtime's WaitGetPoses does (guest/vr, M2): SVR_FRAME through the exporter's query, which
 				// answers from the host's newest VRL_TIMING / VRL_POSES / VRL_STATE
 				svr_frame_rep r{};
@@ -234,6 +235,7 @@ int main()
 		// guest protocol through the link while a headset is connected (once): state, input mapping, haptics
 		bool guest_checked = false;
 		auto check_guest = [&] {
+			std::lock_guard vr_lock(vr_mutex);
 			svr_hello_rep hello{};
 			reinterpret_cast<svr_hello_req &>(hello) = {{SVR_HELLO, sizeof(svr_hello_req)}, SVR_VERSION, uint32_t(getpid()), "vr_e2e"};
 			CHECK(wmtr_vr_query(vr, &hello, sizeof hello) == 0);
@@ -254,6 +256,23 @@ int main()
 				std::this_thread::sleep_for(std::chrono::milliseconds(2));
 			}
 			CHECK(input_seen); // WiVRn input -> VRL_INPUT -> the guest's snapshot
+			// A new game context has no cached state; HELLO must replay both snapshots.
+			int next_fd = dup(sv[0]);
+			REQUIRE(next_fd >= 0);
+			wmtr_vr_destroy(vr);
+			vr = wmtr_vr_create(next_fd, name);
+			REQUIRE(vr);
+			bool replayed = false;
+			for (int i = 0; i < 100 and not replayed; ++i)
+			{
+				svr_frame_rep fr{};
+				reinterpret_cast<svr_frame_req &>(fr) = {{SVR_FRAME, sizeof(svr_frame_req)}, 0};
+				replayed = wmtr_vr_query(vr, &fr, sizeof fr) == 0 and fr.connected and
+				           fr.input[1][SVR_IN_TRIGGER_VALUE] == 0.75f;
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			}
+			CHECK(replayed);
+
 			union
 			{
 				svr_haptic_req req;
@@ -311,6 +330,13 @@ int main()
 
 		for (int i = 0; i < 100 and session.connected(); ++i)
 			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		{
+			std::lock_guard vr_lock(vr_mutex);
+			svr_frame_rep fr{};
+			reinterpret_cast<svr_frame_req &>(fr) = {{SVR_FRAME, sizeof(svr_frame_req)}, 0};
+			CHECK(wmtr_vr_query(vr, &fr, sizeof fr) == 0);
+			CHECK(not fr.connected and fr.input[1][SVR_IN_TRIGGER_VALUE] == 0);
+		}
 		{
 			std::lock_guard l(m);
 			bad_colour = checked = wrong_index = unreadable = 0;

@@ -75,8 +75,10 @@ public:
 
 private:
 	void on_frame(const LinkFrame &);
+	void on_frame_error();
 	void on_message(const void *, size_t);
 	void send_state(bool connected);
+	void send_input();
 	void frame_clock();
 	VrSession & session;
 	std::mutex m;
@@ -88,6 +90,7 @@ private:
 	PipelineLatency lat;
 	std::mutex input_mutex;
 	float input[2][21] = {}; // VRL_INPUT_COUNT
+	int64_t input_time = 0;
 	std::atomic<bool> quit{false};
 	std::atomic<uint64_t> timings{0}, haptics{0};
 	std::atomic<float> refresh{0};
