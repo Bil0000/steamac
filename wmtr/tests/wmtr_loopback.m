@@ -117,7 +117,12 @@ static NTSTATUS f_newfunction(void *a) {
   p->ret = strlen((const char *)(uintptr_t)p->arg) * 1000 + p->handle;
   return 0;
 }
-const void *wmtr_impl_funcs[WMTR_NCALLS] = {[1] = f_release, [25] = f_newlibrary, [76] = f_sm50compile, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
+static NTSTATUS f_signal(void *p) { /* encodeSignalEvent, as DXMT's unix side */
+  struct unixcall_generic_obj_obj_uint64_noret *a = p;
+  [(id<MTLCommandBuffer>)a->handle encodeSignalEvent:(id<MTLSharedEvent>)a->arg0 value:a->arg1];
+  return 0;
+}
+const void *wmtr_impl_funcs[WMTR_NCALLS] = {[1] = f_release, [17] = f_signal, [25] = f_newlibrary, [76] = f_sm50compile, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
                                     [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [5] = f_fault, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
@@ -297,6 +302,40 @@ static void test_vr(id<MTLDevice> dev) {
       CHECK(sf && vr_fmt[u.s.eye[e].swapchain] == MTLPixelFormatRGBA8Unorm_sRGB, "eye %d: no surface", e);
       if (sf) CHECK(surface_matches(sf, e, e ? 0 : 16, e ? 0 : 8, e ? TW : 256, e ? TH : 128), "eye %d pixels differ", e);
     }
+  }
+  /* stage split of submit->copied: that frame waited >= 200 ms for the guest's event and no signal was encoded
+   * through the executor, so the wait counts as rendering; the stages add up to ready - submit */
+  struct wmtr_vr_stats sg; wmtr_vr_get_stats(vr, &sg);
+  uint64_t sum = 0; for (int i = 0; i < WMTR_VR_STAGES; i++) sum += sg.stage_ns[i];
+  CHECK(sg.stage_frames == 1 && sg.stage_ns[WMTR_VR_STAGE_ENCODE] == 0 && sg.stage_ns[WMTR_VR_STAGE_RENDER] >= 150000000ull &&
+        ok && sum == (uint64_t)(u.s.ready_time - u.s.app_submit_time),
+        "stages of frame 7: %llu frames, encode %llu render %llu sum %llu", sg.stage_frames, sg.stage_ns[0], sg.stage_ns[1], sum);
+  /* a frame whose rendering is still being encoded when the submit arrives (the normal live order): the signal
+   * goes through the executor (call 17) 60 ms after the submit, the GPU reaches it 60 ms later */
+  if (ok) {
+    struct vrl_release r7 = {{VRL_RELEASE, sizeof r7}, u.s.eye[0].swapchain, u.s.eye[0].image, u.s.frame_id, 0};
+    send(sv[1], &r7, sizeof r7, 0);
+    r7.swapchain = u.s.eye[1].swapchain; r7.image = u.s.eye[1].image; send(sv[1], &r7, sizeof r7, 0);
+    id<MTLSharedEvent> gate = [dev newSharedEvent];
+    id<MTLCommandQueue> gq = [dev newCommandQueue];
+    id<MTLCommandBuffer> gcb = [gq commandBuffer];
+    [gcb encodeWaitForEvent:gate value:1];
+    sub.info.frame_id = 30; sub.info.wait_value = 2;
+    remote(146, &sub); remote(39, &sync);
+    usleep(60000);
+    struct unixcall_generic_obj_obj_uint64_noret se = {(obj_handle_t)gcb, (obj_handle_t)ev, 2};
+    remote(17, &se); remote(39, &sync);
+    [gcb commit];
+    usleep(60000);
+    gate.signaledValue = 1;
+    int ok30 = vr_next(sv[1], VRL_SUBMIT, &u, sizeof u);
+    struct wmtr_vr_stats s2; wmtr_vr_get_stats(vr, &s2);
+    uint64_t enc = s2.stage_ns[WMTR_VR_STAGE_ENCODE] - sg.stage_ns[WMTR_VR_STAGE_ENCODE], ren = s2.stage_ns[WMTR_VR_STAGE_RENDER] - sg.stage_ns[WMTR_VR_STAGE_RENDER];
+    uint64_t sum2 = 0; for (int i = 0; i < WMTR_VR_STAGES; i++) sum2 += s2.stage_ns[i];
+    CHECK(ok30 && u.s.frame_id == 30 && s2.stage_frames == 2 && enc >= 55000000ull && enc < 120000000ull && ren >= 55000000ull &&
+          sum2 - sum == (uint64_t)(u.s.ready_time - u.s.app_submit_time),
+          "stages of frame 30: sent %d, encode %llu render %llu", ok30, enc, ren);
+    [gq release]; [gate release];
   }
   /* back-pressure: 3 images per eye, one still held by the host -> of 3 more frames, 2 go out and 1 drops */
   struct vrl_submit held = u.s;
