@@ -8,7 +8,10 @@ Add an opt-in virtio-gpu context type (capset 30, "wmtr") whose guest
 process forwards DXMT's winemetal unix calls through a shared-memory
 ring to a host executor that runs them against Metal. The executor is a
 separate library (libwmtr_host.dylib, STEAMAC_WMTR_LIB or the default
-name) loaded with dlopen; this patch only carries the transport:
+name) loaded with dlopen and used only if its wmtr_host_abi_version() is
+the one this patch implements (1: create, kick, progress and destroy,
+and two callbacks, blob_ptr and wake); this patch only carries the
+transport:
 
 - blobs (blob_id = ring/buffer number below 1024, checked before
   narrowing to u32; each id created once, as blobs live as long as the
@@ -44,15 +47,16 @@ blobs and commands are rejected; on a shared ring (slots 0 and 62,
 events and slot 70) later fences wait for an earlier pending one and
 complete with it, in order; reused blob ids, ids at or above 1024 (1 <<
 32, u64::MAX) and blobs over max_blob are rejected and leave the
-existing blob in place. virtio::gpu: num_capsets stays 5 without
-STEAMAC_WMTR.
+existing blob in place; a library without wmtr_host_abi_version, with
+another version or with part of the API is refused. virtio::gpu:
+num_capsets stays 5 without STEAMAC_WMTR.
 ---
  src/devices/src/virtio/gpu/device.rs   |  23 +-
  src/rutabaga_gfx/src/lib.rs            |   9 +
  src/rutabaga_gfx/src/rutabaga_core.rs  |  18 +-
  src/rutabaga_gfx/src/rutabaga_utils.rs |   3 +
- src/rutabaga_gfx/src/wmtr.rs           | 652 +++++++++++++++++++++++++
- 5 files changed, 702 insertions(+), 3 deletions(-)
+ src/rutabaga_gfx/src/wmtr.rs           | 690 +++++++++++++++++++++++++
+ 5 files changed, 740 insertions(+), 3 deletions(-)
  create mode 100644 src/rutabaga_gfx/src/wmtr.rs
 
 diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
@@ -198,10 +202,10 @@ index 085912c..3ccfd93 100644
  /// Rutabaga handle types (memory and sync in same namespace)
 diff --git a/src/rutabaga_gfx/src/wmtr.rs b/src/rutabaga_gfx/src/wmtr.rs
 new file mode 100644
-index 0000000..9c10b28
+index 0000000..6c20c1b
 --- /dev/null
 +++ b/src/rutabaga_gfx/src/wmtr.rs
-@@ -0,0 +1,652 @@
+@@ -0,0 +1,690 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
 +//! wmtr: a virtio-gpu context type that carries DXMT's winemetal unix calls from a guest process
@@ -249,21 +253,25 @@ index 0000000..9c10b28
 +/// Largest blob, advertised to the guest as max_blob in the capset.
 +const MAX_BLOB_SIZE: u64 = 4 << 30;
 +
++/// Version of the interface between this context and the host library: the exported functions
++/// below and the layout of `WmtrHostOps`. The library reports its own from
++/// `wmtr_host_abi_version()`; any other value (or a library without it) is refused. Bump it on
++/// every change to either.
++const WMTR_HOST_ABI_VERSION: u32 = 1;
++
++/// Callbacks the context gives the executor (`struct wmtr_host_ops` in wmtr_host.h, ABI 1).
 +#[repr(C)]
 +struct WmtrHostOps {
++    /// Host address and size of blob `blob` of this context, or null if it does not exist.
 +    blob_ptr: extern "C" fn(*mut c_void, u32, *mut u64) -> *mut c_void,
++    /// A reply or event is published: re-check pending fences.
 +    wake: extern "C" fn(*mut c_void, u32),
-+    create_view: Option<extern "C" fn(*mut c_void, u64, *mut c_void, *mut u64) -> u64>,
-+    release_view: Option<extern "C" fn(*mut c_void, u64)>,
-+    map_path: Option<extern "C" fn(*mut c_void, *const i8, *mut i8, u64) -> *const i8>,
 +}
 +
++type HostAbiVersion = unsafe extern "C" fn() -> u32;
 +type HostCreate = unsafe extern "C" fn(*mut c_void, *const WmtrHostOps, *mut c_void) -> *mut c_void;
 +type HostVoid = unsafe extern "C" fn(*mut c_void);
 +type HostProgress = unsafe extern "C" fn(*mut c_void, u32) -> u64;
-+type ViewCreate = extern "C" fn(*mut c_void, u64, *mut c_void, *mut u64) -> u64;
-+type ViewRelease = extern "C" fn(*mut c_void, u64);
-+type MapPath = extern "C" fn(*mut c_void, *const i8, *mut i8, u64) -> *const i8;
 +
 +#[derive(Clone, Copy)]
 +struct HostLib {
@@ -271,57 +279,64 @@ index 0000000..9c10b28
 +    kick: HostVoid,
 +    destroy: HostVoid,
 +    progress: HostProgress,
-+    create_view: Option<ViewCreate>,
-+    release_view: Option<ViewRelease>,
-+    map_path: Option<MapPath>,
 +}
 +
 +unsafe impl Send for HostLib {}
 +unsafe impl Sync for HostLib {}
 +
++/// Binds the host API from `sym` (dlsym on the library `name`): every function must exist and
++/// the library's ABI version must be WMTR_HOST_ABI_VERSION.
++///
++/// # Safety
++/// Non-null results of `sym` must be the library's functions with the signatures above.
++unsafe fn bind_host_lib(name: &str, sym: impl Fn(&str) -> *mut c_void) -> Option<HostLib> {
++    let v = sym("wmtr_host_abi_version");
++    if v.is_null() {
++        error!("wmtr: {name} has no wmtr_host_abi_version (expected {WMTR_HOST_ABI_VERSION})");
++        return None;
++    }
++    let version = std::mem::transmute::<*mut c_void, HostAbiVersion>(v)();
++    if version != WMTR_HOST_ABI_VERSION {
++        error!("wmtr: {name} has host ABI {version}, expected {WMTR_HOST_ABI_VERSION}");
++        return None;
++    }
++    let (c, k, d, p) = (
++        sym("wmtr_host_create"),
++        sym("wmtr_host_kick"),
++        sym("wmtr_host_destroy"),
++        sym("wmtr_host_progress"),
++    );
++    if c.is_null() || k.is_null() || d.is_null() || p.is_null() {
++        error!("wmtr: {name} lacks the host API");
++        return None;
++    }
++    Some(HostLib {
++        create: std::mem::transmute::<*mut c_void, HostCreate>(c),
++        kick: std::mem::transmute::<*mut c_void, HostVoid>(k),
++        destroy: std::mem::transmute::<*mut c_void, HostVoid>(d),
++        progress: std::mem::transmute::<*mut c_void, HostProgress>(p),
++    })
++}
++
 +fn load_host_lib() -> Option<HostLib> {
 +    let name = std::env::var("STEAMAC_WMTR_LIB").unwrap_or_else(|_| "libwmtr_host.dylib".into());
 +    let cname = CString::new(name.clone()).ok()?;
-+    // SAFETY: dlopen/dlsym on a library we built; symbols are checked for null before use.
++    // SAFETY: dlopen/dlsym on the executor library; bind_host_lib checks every symbol and the
++    // ABI version before any other call.
 +    unsafe {
 +        let h = libc::dlopen(cname.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
 +        if h.is_null() {
 +            error!("wmtr: cannot load {name}");
 +            return None;
 +        }
-+        let sym = |s: &str| -> *mut c_void {
++        let lib = bind_host_lib(&name, |s| {
 +            let c = CString::new(s).unwrap();
 +            libc::dlsym(h, c.as_ptr())
-+        };
-+        let (c, k, d, p) = (
-+            sym("wmtr_host_create"),
-+            sym("wmtr_host_kick"),
-+            sym("wmtr_host_destroy"),
-+            sym("wmtr_host_progress"),
-+        );
-+        if c.is_null() || k.is_null() || d.is_null() || p.is_null() {
-+            error!("wmtr: {name} lacks the host API");
-+            return None;
++        });
++        if lib.is_none() {
++            libc::dlclose(h);
 +        }
-+        let opt = |s: &str| {
-+            let p = sym(s);
-+            if p.is_null() {
-+                None
-+            } else {
-+                Some(p)
-+            }
-+        };
-+        Some(HostLib {
-+            create: std::mem::transmute::<*mut c_void, HostCreate>(c),
-+            kick: std::mem::transmute::<*mut c_void, HostVoid>(k),
-+            destroy: std::mem::transmute::<*mut c_void, HostVoid>(d),
-+            progress: std::mem::transmute::<*mut c_void, HostProgress>(p),
-+            create_view: opt("wmtr_present_create_view")
-+                .map(|p| std::mem::transmute::<*mut c_void, ViewCreate>(p)),
-+            release_view: opt("wmtr_present_release_view")
-+                .map(|p| std::mem::transmute::<*mut c_void, ViewRelease>(p)),
-+            map_path: opt("wmtr_map_path").map(|p| std::mem::transmute::<*mut c_void, MapPath>(p)),
-+        })
++        lib
 +    }
 +}
 +
@@ -625,9 +640,6 @@ index 0000000..9c10b28
 +        let ops = Box::new(WmtrHostOps {
 +            blob_ptr: cb_blob_ptr,
 +            wake: cb_wake,
-+            create_view: self.lib.create_view,
-+            release_view: self.lib.release_view,
-+            map_path: self.lib.map_path,
 +        });
 +        WmtrContext {
 +            shared: Arc::new(Shared {
@@ -709,9 +721,6 @@ index 0000000..9c10b28
 +            kick,
 +            destroy,
 +            progress,
-+            create_view: None,
-+            release_view: None,
-+            map_path: None,
 +        };
 +        (Wmtr { lib, fence_handler: handler.clone() }, handler)
 +    }
@@ -795,6 +804,39 @@ index 0000000..9c10b28
 +        assert!(ctx.submit_cmd(&mut cmd(9, 0, 0), &[]).is_err());
 +        // KICK without an executor is ignored
 +        ctx.submit_cmd(&mut cmd(WMTR_VGPU_KICK, 0, 0), &[]).unwrap();
++    }
++
++    unsafe extern "C" fn abi_current() -> u32 {
++        WMTR_HOST_ABI_VERSION
++    }
++    unsafe extern "C" fn abi_next() -> u32 {
++        WMTR_HOST_ABI_VERSION + 1
++    }
++
++    /// The library is used only if it reports this ABI version and exports the whole API.
++    #[test]
++    fn host_lib_abi_version_checked() {
++        let table = |abi: Option<HostAbiVersion>, with_progress: bool| {
++            move |s: &str| -> *mut c_void {
++                match s {
++                    "wmtr_host_abi_version" => abi.map_or(std::ptr::null_mut(), |f| f as *mut c_void),
++                    "wmtr_host_create" => create as *mut c_void,
++                    "wmtr_host_kick" => kick as *mut c_void,
++                    "wmtr_host_destroy" => destroy as *mut c_void,
++                    "wmtr_host_progress" if with_progress => progress as *mut c_void,
++                    _ => std::ptr::null_mut(),
++                }
++            }
++        };
++        // SAFETY: the table holds this module's stand-in functions with the right signatures.
++        unsafe {
++            assert!(bind_host_lib("test", table(Some(abi_current), true)).is_some());
++            assert!(bind_host_lib("test", table(None, true)).is_none(), "unversioned library");
++            assert!(bind_host_lib("test", table(Some(abi_next), true)).is_none(), "other ABI");
++            assert!(bind_host_lib("test", table(Some(abi_current), false)).is_none(), "partial API");
++        }
++        // the ops struct carries exactly the two callbacks of ABI 1
++        assert_eq!(std::mem::size_of::<WmtrHostOps>(), 2 * std::mem::size_of::<usize>());
 +    }
 +
 +    /// Each blob id is created once and only below MAX_BLOBS: a reused id or one that truncates to
