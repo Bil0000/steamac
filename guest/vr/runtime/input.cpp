@@ -464,8 +464,20 @@ class Input : public StubIVRInput {
     memset(d, 0, sizeof(*d));
     const Action *act = action(a);
     if (!act) return VRInputError_None;
-    if (act->type != "pose") return VRInputError_WrongType;
     int want = source(restrict_to);
+    if (act->type == "skeleton") {
+      // SteamVR answers a pose read of a skeleton action with the pose of the hand it animates (the Unity
+      // plugin reads its skeleton actions this way every frame)
+      int hand = skeleton_hand(a);
+      if (hand < 0 || (want != 0 && want != 1 + hand)) return VRInputError_None;
+      Runtime &rt = Runtime::get();
+      bool conn = rt.device_connected(hand ? kRight : kLeft);
+      d->bActive = conn;
+      d->activeOrigin = hand_handle_[hand];
+      d->pose = to_openvr(rt.pose_at(hand ? SVR_DEV_RIGHT_GRIP : SVR_DEV_LEFT_GRIP, t), conn);
+      return VRInputError_None;
+    }
+    if (act->type != "pose") return VRInputError_WrongType;
     for (auto &p : manifest_.poses) {
       if (p.output != slots_[a - 1].path) continue;
       if (want != 0 && want != 1 + p.hand) continue;
