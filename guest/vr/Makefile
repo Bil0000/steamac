@@ -22,7 +22,7 @@ RUNTIME_SRC = runtime/clientcore.cpp runtime/system.cpp runtime/compositor.cpp r
               runtime/json.cpp runtime/log.cpp runtime/overlay.cpp runtime/skeleton.cpp
 HDRS = $(wildcard include/*.h runtime/*.h)
 
-all: $(OUT)/runtime/bin/linux64/vrclient.so $(OUT)/vr-fakehost $(OUT)/vr-testapp $(OUT)/unit_tests
+all: $(OUT)/runtime/bin/linux64/vrclient.so $(OUT)/vr-fakehost $(OUT)/vr-testapp $(OUT)/unit_tests $(OUT)/transport_test
 
 # Proton loads <runtime>/bin/linux64/vrclient.so (PROTON_VR_RUNTIME=<runtime>)
 $(OUT)/runtime/bin/linux64/vrclient.so: $(RUNTIME_SRC) $(HDRS)
@@ -44,8 +44,16 @@ $(OUT)/unit_tests: $(UNIT_SRC) $(HDRS)
 	mkdir -p $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $(UNIT_SRC) -lm
 
+# Transport::open_wmtr without DXMT loaded: loads winemetal.so beside Wine's ntdll.so (fakes in transport/)
+$(OUT)/transport_test: tests/transport_test.cpp tests/fake_winemetal.c runtime/transport.cpp runtime/log.cpp $(HDRS)
+	mkdir -p $(OUT)/transport/x86_64-unix
+	echo 'int fake_ntdll;' | $(CC) -x c -shared -fPIC -o $(OUT)/transport/x86_64-unix/ntdll.so -
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -o $(OUT)/transport/x86_64-unix/winemetal.so tests/fake_winemetal.c
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ tests/transport_test.cpp runtime/transport.cpp runtime/log.cpp -ldl -lpthread
+
 check: all
 	$(OUT)/unit_tests
+	$(OUT)/transport_test $(OUT)/transport/x86_64-unix
 	tests/check_legacy.sh $(OUT)
 	tests/run_e2e.sh $(OUT)
 

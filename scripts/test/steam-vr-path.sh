@@ -40,8 +40,9 @@ run "steamac.vr=1" "$T/none"; [ "$(snap)" = "$stock" ] || fail missing "missing 
 run "quiet steamac.vr=1 splash"
 cmp -s "$W/x86_64-windows/vrclient_x64.dll" "$X/x86_64-windows/vrclient_x64.dll" || fail on "vrclient_x64.dll not installed"
 cmp -s "$W/x86_64-unix/vrclient_x64.so" "$X/x86_64-unix/vrclient_x64.so" || fail on "vrclient_x64.so not installed"
-[ "$(proton_vr_runtime)" = "$X/runtime" ] || fail on "PROTON_VR_RUNTIME would be '$(proton_vr_runtime)'"
-[ -f "$X/runtime/bin/linux64/vrclient.so" ] || fail on "runtime layout"
+# the runtime must be under $HOME (the Steam Linux Runtime container does not see the guest's /usr)
+[ "$(proton_vr_runtime)" = "$T/state/runtime" ] || fail on "PROTON_VR_RUNTIME would be '$(proton_vr_runtime)'"
+cmp -s "$T/state/runtime/bin/linux64/vrclient.so" "$X/runtime/bin/linux64/vrclient.so" || fail on "runtime not copied"
 s1=$(snap); echo "$s1" | grep -q "Proton-custom" && [ "$(echo "$s1" | grep Proton-custom)" = "$(echo "$stock" | grep Proton-custom)" ] \
   || fail other "another Proton was touched"
 grep -q "i386-windows/vrclient.dll $(cd "$T" && cksum < "$P/files/lib/wine/i386-windows/vrclient.dll")" <<<"$s1" || fail on "i386 touched"
@@ -58,7 +59,8 @@ cmp -s "$W/x86_64-windows/vrclient_x64.dll" "$X/x86_64-windows/vrclient_x64.dll"
 X2=$T/vr2; cp -a "$X" "$X2"; blob "$X2/x86_64-windows/vrclient_x64.dll" q
 run "steamac.vr=1" "$X2"
 cmp -s "$W/x86_64-windows/vrclient_x64.dll" "$X2/x86_64-windows/vrclient_x64.dll" || fail payload "new payload not installed"
-[ "$(proton_vr_runtime)" = "$X2/runtime" ] || fail payload "vrpath not moved to the new payload"
+blob "$X2/runtime/bin/linux64/vrclient.so" z; run "steamac.vr=1" "$X2"
+cmp -s "$T/state/runtime/bin/linux64/vrclient.so" "$X2/runtime/bin/linux64/vrclient.so" || fail payload "runtime not refreshed"
 
 run "steamac.vr=0" "$X2"
 expect=$( (echo "$upd" | grep -v openvrpaths; echo "$stock" | grep openvrpaths) | LC_ALL=C sort)
@@ -66,7 +68,7 @@ expect=$( (echo "$upd" | grep -v openvrpaths; echo "$stock" | grep openvrpaths) 
 [ -e "$T/state" ] && fail off "state dir left"
 
 rm -f "$CFG/openvr/openvrpaths.vrpath"; base=$(snap)
-run "steamac.vr=1"; [ "$(proton_vr_runtime)" = "$X/runtime" ] || fail novrpath "vrpath not written"
+run "steamac.vr=1"; [ "$(proton_vr_runtime)" = "$T/state/runtime" ] || fail novrpath "vrpath not written"
 run "steamac.vr=0"; [ "$(snap)" = "$base" ] || fail novrpath "our vrpath left behind"
 
 if [ $fails -eq 0 ]; then echo "PASS steam-vr-path"; else cat "$T/log"; exit 1; fi

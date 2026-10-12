@@ -82,6 +82,17 @@ int find_winemetal(struct dl_phdr_info *info, size_t, void *out) {
   }
   return 0;
 }
+
+// Wine's own unixlib directory (where Proton keeps winemetal.so): the one holding the loaded ntdll.so
+int find_unixlib_dir(struct dl_phdr_info *info, size_t, void *out) {
+  const char *n = info->dlpi_name;
+  size_t len = n ? strlen(n) : 0;
+  if (len >= 9 && !strcmp(n + len - 9, "/ntdll.so")) {
+    *(std::string *)out = std::string(n, len - 8);
+    return 1;
+  }
+  return 0;
+}
 }  // namespace
 
 std::unique_ptr<Transport> Transport::open_socket(const char *path) {
@@ -101,9 +112,19 @@ std::unique_ptr<Transport> Transport::open_socket(const char *path) {
 std::unique_ptr<Transport> Transport::open_wmtr() {
   std::string path;
   dl_iterate_phdr(find_winemetal, &path);
-  if (path.empty()) return nullptr;  // DXMT not loaded in this process: no wmtr context to share
-  void *h = dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
-  if (!h) return nullptr;
+  void *h = path.empty() ? nullptr : dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+  if (!h) {
+    // DXMT not loaded in this process (Proton's steam.exe runs VR_Init for the registry before any game
+    // renders): load Wine's winemetal.so ourselves for its own wmtr context. Only reached on VR init.
+    path.clear();
+    dl_iterate_phdr(find_unixlib_dir, &path);
+    if (path.empty() || path.back() != '/') return nullptr;
+    path += "winemetal.so";
+    if (!(h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL))) {
+      SVR_ERR("cannot load %s: %s", path.c_str(), dlerror());
+      return nullptr;
+    }
+  }
   auto fn = (wmtr_vr_call_fn)dlsym(h, "wmtr_vr_call");
   auto table = (const void *const *)dlsym(h, "__wine_unix_call_funcs");
   if (!fn || !table) {

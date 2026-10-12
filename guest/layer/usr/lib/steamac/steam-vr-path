@@ -3,7 +3,9 @@
 #   on   Proton Experimental's vrclient_x64 (PE dll and its unixlib) becomes the patched build that submits DXMT
 #        textures (guest/proton-vrclient), and ~/.config/openvr/openvrpaths.vrpath names our OpenVR runtime
 #        (guest/vr) as the first runtime: Proton's own setup_openvr_paths() turns that entry into PROTON_VR_RUNTIME
-#        for every game it starts. The replaced files and the previous openvrpaths.vrpath are kept in $STATE with
+#        for every game it starts. The runtime is copied to $STATE/runtime under $HOME: the game's unixlib dlopens
+#        it inside the Steam Linux Runtime container, where the guest's /usr is not visible (a $PAYLOAD path there
+#        fails with "unable to load .../vrclient.so"). The replaced files and the previous openvrpaths.vrpath are kept in $STATE with
 #        checksums; a Proton update (new version file) is followed on the next run.
 #   off  (or no steamac.vr=1) Proton's own files and the previous openvrpaths.vrpath (or its absence) come back
 #        byte for byte; nothing this script added stays.
@@ -55,15 +57,22 @@ apply() {
     sum "$PROTON/version" > "$B/version"
     (( changed )) && log "patched vrclient_x64 in $PROTON"
 
+    # the runtime, where the container sees it (home is shared, the guest's /usr is not)
+    local R=$STATE/runtime/bin/linux64
+    if ! cmp -s "$PAYLOAD/runtime/bin/linux64/vrclient.so" "$R/vrclient.so"; then
+        mkdir -p "$R" && cp -f "$PAYLOAD/runtime/bin/linux64/vrclient.so" "$R/vrclient.so.steamac-tmp" \
+            && mv -f "$R/vrclient.so.steamac-tmp" "$R/vrclient.so" || return 1
+    fi
+
     # openvrpaths.vrpath: keep the user's (or its absence) once, then point runtime[0] at our runtime
-    local want; want=$(vrpath_json "$PAYLOAD/runtime" "$STATE")
+    local want; want=$(vrpath_json "$STATE/runtime" "$STATE")
     mkdir -p "$STATE/config" "$STATE/log" "$(dirname "$VRPATH")" || return 1
     if [[ ! -e $STATE/vrpath.kept ]]; then
         if [[ -f $VRPATH ]] && [[ $(cat "$VRPATH") != "$want" ]]; then cp -f "$VRPATH" "$STATE/vrpath.orig" || return 1
         else rm -f "$STATE/vrpath.orig"; fi
         touch "$STATE/vrpath.kept"
     fi
-    [[ -f $VRPATH && $(cat "$VRPATH") == "$want" ]] || { printf '%s\n' "$want" > "$VRPATH" && log "PROTON_VR_RUNTIME=$PAYLOAD/runtime"; }
+    [[ -f $VRPATH && $(cat "$VRPATH") == "$want" ]] || { printf '%s\n' "$want" > "$VRPATH" && log "PROTON_VR_RUNTIME=$STATE/runtime"; }
     return 0
 }
 
@@ -78,7 +87,7 @@ restore() {
     done
     if [[ -e $STATE/vrpath.kept ]]; then
         if [[ -f $STATE/vrpath.orig ]]; then cp -f "$STATE/vrpath.orig" "$VRPATH"
-        elif [[ -f $VRPATH && $(cat "$VRPATH") == "$(vrpath_json "$PAYLOAD/runtime" "$STATE")" ]]; then rm -f "$VRPATH"; fi
+        elif [[ -f $VRPATH && $(cat "$VRPATH") == "$(vrpath_json "$STATE/runtime" "$STATE")" ]]; then rm -f "$VRPATH"; fi
     fi
     rm -rf "$STATE"
     log "Proton's vrclient_x64 and openvrpaths.vrpath back"
