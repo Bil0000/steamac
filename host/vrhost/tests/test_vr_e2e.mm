@@ -25,6 +25,7 @@
 #include <csignal>
 #include <filesystem>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <sys/socket.h>
@@ -46,15 +47,25 @@ using namespace vrhost;
 static const char * kProducer = R"(
 #include <metal_stdlib>
 using namespace metal;
-kernel void eye(texture2d<float, access::write> t [[texture(0)]], constant uint2 &arg [[buffer(0)]],
+// arg: eye, frame, x offset of the eye in the texture (double-wide), eye width
+kernel void eye(texture2d<float, access::write> t [[texture(0)]], constant uint4 &arg [[buffer(0)]],
                 uint2 g [[thread_position_in_grid]]) {
-	if (g.x >= t.get_width() || g.y >= t.get_height()) return;
+	if (g.x >= arg.w || g.y >= t.get_height()) return;
 	uint eye = arg.x, frame = arg.y;
 	float4 c = eye ? float4(0.05, 0.5, 0.08, 1) : float4(0.5, 0.05, 0.08, 1);
 	if (g.y < 16 && g.x < 256) c = ((frame >> (g.x / 16)) & 1u) ? float4(1) : float4(0, 0, 0, 1);
-	t.write(c, g);
+	t.write(c, uint2(g.x + arg.z, g.y));
 }
 )";
+
+// How the game lays out its two eyes (OpenVR Submit): one texture per eye; one double-wide texture with
+// VRTextureBounds_t halves (Unity single-pass, many native titles); one two-slice array (single-pass instanced).
+enum class Layout
+{
+	separate,
+	wide,
+	array,
+};
 
 struct Producer
 {
@@ -64,42 +75,74 @@ struct Producer
 	// A ring of eye textures, like an OpenVR runtime's copy: the exporter's blit (its own queue, after the event)
 	// must not race the next frame's rendering into the same texture (docs/vr-interfaces.md section 3.1).
 	static constexpr int ring = 3;
-	id<MTLTexture> tex[ring][2];
+	Layout layout;
+	uint32_t w, h;
+	id<MTLTexture> tex[ring][2];    // what each eye submits (the same texture twice for wide and array)
+	id<MTLTexture> target[ring][2]; // what each eye renders into (a slice view for array)
 	id<MTLSharedEvent> ev = [dev newSharedEvent];
 	uint64_t ev_value = 0;
-	Producer(uint32_t w, uint32_t h)
+	Producer(uint32_t w, uint32_t h, Layout layout) : layout(layout), w(w), h(h)
 	{
 		NSError * err = nil;
 		id<MTLLibrary> lib = [dev newLibraryWithSource:@(kProducer) options:nil error:&err];
 		pso = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"eye"] error:&err];
 		MTLTextureDescriptor * d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
-		                                                                              width:w
+		                                                                              width:layout == Layout::wide ? 2 * w : w
 		                                                                             height:h
 		                                                                          mipmapped:NO];
-		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget;
+		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget |
+		          MTLTextureUsagePixelFormatView;
 		d.storageMode = MTLStorageModePrivate;
-		for (auto & slot: tex)
-			for (auto & t: slot)
-				t = [dev newTextureWithDescriptor:d];
+		if (layout == Layout::array)
+			d.textureType = MTLTextureType2DArray, d.arrayLength = 2;
+		for (int i = 0; i < ring; i++)
+		{
+			if (layout == Layout::separate)
+			{
+				for (int e = 0; e < 2; e++)
+					tex[i][e] = target[i][e] = [dev newTextureWithDescriptor:d];
+				continue;
+			}
+			id<MTLTexture> t = [dev newTextureWithDescriptor:d];
+			for (int e = 0; e < 2; e++)
+			{
+				tex[i][e] = t;
+				target[i][e] = layout == Layout::array ? [t newTextureViewWithPixelFormat:d.pixelFormat
+				                                                              textureType:MTLTextureType2D
+				                                                                   levels:NSMakeRange(0, 1)
+				                                                                   slices:NSMakeRange(e, 1)]
+				                                       : t;
+			}
+		}
 	}
-	// renders into ring slot frame % ring and returns it
+	// renders into ring slot frame % ring and returns its eye textures
 	id<MTLTexture> const * render(uint32_t frame)
 	{
-		auto & t = tex[frame % ring];
+		auto & t = target[frame % ring];
 		id<MTLCommandBuffer> cb = [q commandBuffer];
 		id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
 		[ce setComputePipelineState:pso];
 		for (uint32_t e = 0; e < 2; e++)
 		{
-			uint32_t arg[2] = {e, frame};
+			uint32_t arg[4] = {e, frame, layout == Layout::wide ? e * w : 0, w};
 			[ce setTexture:t[e] atIndex:0];
 			[ce setBytes:arg length:sizeof arg atIndex:0];
-			[ce dispatchThreads:MTLSizeMake(t[e].width, t[e].height, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+			[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
 		}
 		[ce endEncoding];
 		[cb encodeSignalEvent:ev value:++ev_value];
 		[cb commit];
-		return t;
+		return tex[frame % ring];
+	}
+	// the exporter's view of eye e (what the guest runtime derives from the bounds / array index)
+	WMTVREye eye(id<MTLTexture> t, uint32_t e) const
+	{
+		WMTVREye r{(obj_handle_t)(__bridge void *)t, 0, 0, 0, 0, 0, 0};
+		if (layout == Layout::wide)
+			r.x = e * w, r.w = w, r.h = h;
+		if (layout == Layout::array)
+			r.slice = e;
+		return r;
 	}
 };
 
@@ -182,6 +225,11 @@ int main()
 			REQUIRE(sscanf(e, "%ux%u", &out_w, &out_h) == 2);
 		if (const char * e = getenv("VR_E2E_FRAMES"))
 			frames = atoi(e);
+		// VR_E2E_LAYOUT=wide|array: the eyes come from one double-wide texture (rects) or one two-slice array
+		Layout layout = Layout::separate;
+		if (const char * e = getenv("VR_E2E_LAYOUT"))
+			layout = !strcmp(e, "wide") ? Layout::wide : !strcmp(e, "array") ? Layout::array : Layout::separate;
+		printf("eye layout: %s\n", layout == Layout::wide ? "double-wide" : layout == Layout::array ? "array" : "separate");
 		// the real configuration: encryption with PIN pairing (keys in a scratch file, not the user's)
 		char dir[] = "/tmp/vr_e2e.XXXXXX";
 		REQUIRE(mkdtemp(dir));
@@ -205,11 +253,16 @@ int main()
 		std::mutex m, vr_mutex;
 		std::atomic<int> vr_waiters{0}; // LinkTurn
 		std::map<uint64_t, int64_t> submit_ns;
+		// the head orientation each frame was rendered with (pacer id & 0xffff, as the picture carries it), and the
+		// picture id of each decoded left-eye frame by wire index: view_info must carry the render pose, so that the
+		// headset's reprojection keeps the scene world-locked
+		std::map<uint64_t, std::array<float, 4>> render_orientation;
+		std::map<uint64_t, uint64_t> picture_of_wire;
 		std::vector<double> latency_ms;
 		std::atomic<bool> stop{false};
 		std::atomic<int> frames_from_pacer{0};
 		std::thread producer([&] {
-			Producer prod(src_w, src_h);
+			Producer prod(src_w, src_h, layout);
 			WMTVRSubmitInfo info{};
 			uint64_t last_frame = 0;
 			while (not stop)
@@ -247,7 +300,7 @@ int main()
 				}
 				auto eye_tex = prod.render(uint32_t(frame));
 				for (int e = 0; e < 2; e++)
-					info.eye[e] = WMTVREye{(obj_handle_t)(__bridge void *)eye_tex[e], 0, 0, 0, 0, 0, 0};
+					info.eye[e] = prod.eye(eye_tex[e], uint32_t(e));
 				info.frame_id = frame;
 				info.display_time = uint64_t(r.predicted_display);
 				for (int e = 0; e < 2; e++)
@@ -263,6 +316,8 @@ int main()
 				{
 					std::lock_guard l(m);
 					submit_ns[frame] = now_ns();
+					render_orientation[frame & 0xffff] = {head.orientation[0], head.orientation[1], head.orientation[2],
+					                                      head.orientation[3]};
 				}
 				wmtr_vr_submit(vr, &info);
 			}
@@ -332,6 +387,8 @@ int main()
 				unreadable++;
 			else
 			{
+				if (eye == 0)
+					picture_of_wire[frame] = uint64_t(read);
 				int64_t ahead = (read - int64_t(frame & 0xffff)) & 0xffff;
 				if ((ahead < lead[eye] or ahead > lead[eye] + 100) and wrong_index++ < 3)
 					fprintf(stderr, "eye %d frame %llu: carries frame %lld (lead was %lld)\n", eye, (unsigned long long)frame,
@@ -359,6 +416,29 @@ int main()
 		CHECK(unreadable * 20 <= checked);
 		CHECK(r.view_info_ok); // identity foveation, eye poses 64 mm apart, display time in headset clock
 		CHECK(bad_colour == 0 and checked >= 120);
+		{
+			// render pose == view_info pose, frame by frame, while the head turns
+			std::lock_guard l(m);
+			int compared = 0, wrong_pose = 0;
+			float min_y = 1, max_y = -1;
+			for (auto & [wire, q]: r.view_orientation)
+			{
+				auto pic = picture_of_wire.find(wire);
+				if (pic == picture_of_wire.end() or not render_orientation.count(pic->second))
+					continue;
+				auto & rq = render_orientation[pic->second];
+				compared++;
+				min_y = std::min(min_y, rq[1]), max_y = std::max(max_y, rq[1]);
+				if (std::abs(q[0] - rq[0]) + std::abs(q[1] - rq[1]) + std::abs(q[2] - rq[2]) + std::abs(q[3] - rq[3]) > 1e-5f and
+				    wrong_pose++ < 3)
+					fprintf(stderr, "wire frame %llu: view_info orientation y %.4f, rendered with y %.4f\n",
+					        (unsigned long long)wire, q[1], rq[1]);
+			}
+			printf("identity: view_info pose == render pose for %d of %d frames (head yaw quaternion y %.3f..%.3f)\n",
+			       compared - wrong_pose, compared, min_y, max_y);
+			CHECK(compared >= 30 and wrong_pose == 0);
+			CHECK(max_y - min_y > 0.01f); // the head moved during the run
+		}
 		auto stages = [&](const char * label) {
 			auto l = pipeline->take_latency();
 			printf("%s: ms p50/p99 submit->copied %.2f/%.2f copied->host %.3f/%.3f host->sent %.2f/%.2f compositor GPU %.2f\n",

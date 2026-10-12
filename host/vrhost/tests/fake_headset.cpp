@@ -383,7 +383,11 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 					res.view_info_ok = false;
 				res.display_time_offset_ms = (vi.display_time - hs_now()) / 1e6;
 				if (idx == 0)
+				{
 					res.display_times.emplace_back(frame_idx, vi.display_time);
+					auto & q = vi.pose[0].orientation;
+					res.view_orientation.push_back({frame_idx, {q.x, q.y, q.z, q.w}});
+				}
 
 				CVPixelBufferRef img = dec[idx].decode(au);
 				send_feedback(idx, frame_idx, img != nullptr);

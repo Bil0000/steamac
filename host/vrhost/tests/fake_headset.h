@@ -47,6 +47,7 @@ struct FakeHeadsetResult
 	std::string handshake_state;  // to_headset::crypto_handshake state name
 	bool encrypted = false;
 	std::vector<std::pair<uint64_t, int64_t>> display_times; // (frame index, view_info.display_time) stream 0
+	std::vector<std::pair<uint64_t, std::array<float, 4>>> view_orientation; // (frame index, view_info left eye) stream 0
 	bool got_stream_description = false;
 	bool got_tracking_control = false;
 	int timesync_queries = 0;
