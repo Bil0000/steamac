@@ -10,9 +10,11 @@ ring to a host executor that runs them against Metal. The executor is a
 separate library (libwmtr_host.dylib, STEAMAC_WMTR_LIB or the default
 name) loaded with dlopen; this patch only carries the transport:
 
-- blobs (blob_id = ring/buffer number, at most 1024) are POSIX shared
-  memory, mapped into the guest by the existing SHM blob path and into
-  the VMM for the executor;
+- blobs (blob_id = ring/buffer number below 1024, checked before
+  narrowing to u32; each id created once, as blobs live as long as the
+  context; size at most max_blob, 4 GiB) are POSIX shared memory, mapped
+  into the guest by the existing SHM blob path and into the VMM for the
+  executor;
 - EXECBUFFER carries 24-byte commands: RING (blob 0 is initialised:
   start the executor), KICK (wake it), WAIT (the next fence on this ring
   completes when the executor's reply slot reaches the sequence number;
@@ -40,15 +42,17 @@ without a WAIT complete at once on an otherwise idle ring; pending
 fences complete on context drop and the executor is destroyed; malformed
 blobs and commands are rejected; on a shared ring (slots 0 and 62,
 events and slot 70) later fences wait for an earlier pending one and
-complete with it, in order. virtio::gpu: num_capsets stays 5 without
+complete with it, in order; reused blob ids, ids at or above 1024 (1 <<
+32, u64::MAX) and blobs over max_blob are rejected and leave the
+existing blob in place. virtio::gpu: num_capsets stays 5 without
 STEAMAC_WMTR.
 ---
  src/devices/src/virtio/gpu/device.rs   |  23 +-
  src/rutabaga_gfx/src/lib.rs            |   9 +
  src/rutabaga_gfx/src/rutabaga_core.rs  |  18 +-
  src/rutabaga_gfx/src/rutabaga_utils.rs |   3 +
- src/rutabaga_gfx/src/wmtr.rs           | 614 +++++++++++++++++++++++++
- 5 files changed, 664 insertions(+), 3 deletions(-)
+ src/rutabaga_gfx/src/wmtr.rs           | 652 +++++++++++++++++++++++++
+ 5 files changed, 702 insertions(+), 3 deletions(-)
  create mode 100644 src/rutabaga_gfx/src/wmtr.rs
 
 diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
@@ -194,10 +198,10 @@ index 085912c..3ccfd93 100644
  /// Rutabaga handle types (memory and sync in same namespace)
 diff --git a/src/rutabaga_gfx/src/wmtr.rs b/src/rutabaga_gfx/src/wmtr.rs
 new file mode 100644
-index 0000000..813b518
+index 0000000..9c10b28
 --- /dev/null
 +++ b/src/rutabaga_gfx/src/wmtr.rs
-@@ -0,0 +1,614 @@
+@@ -0,0 +1,652 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
 +//! wmtr: a virtio-gpu context type that carries DXMT's winemetal unix calls from a guest process
@@ -240,6 +244,10 @@ index 0000000..813b518
 +const WMTR_VGPU_KICK: u32 = 2;
 +const WMTR_VGPU_WAIT: u32 = 3;
 +const CMD_SIZE: usize = 24;
++/// Blob ids are wmtr blob numbers 0..MAX_BLOBS (0 is the ring); each id is created once.
++const MAX_BLOBS: u64 = 1024;
++/// Largest blob, advertised to the guest as max_blob in the capset.
++const MAX_BLOB_SIZE: u64 = 4 << 30;
 +
 +#[repr(C)]
 +struct WmtrHostOps {
@@ -425,10 +433,17 @@ index 0000000..813b518
 +        resource_create_blob: ResourceCreateBlob,
 +        _handle_opt: Option<RutabagaHandle>,
 +    ) -> RutabagaResult<RutabagaResource> {
-+        let blob = resource_create_blob.blob_id as u32;
++        // Checked before narrowing: blob_id is a u64 and 1 << 32 must not alias the ring (blob 0).
++        let id = resource_create_blob.blob_id;
 +        let size = resource_create_blob.size;
-+        if size == 0 || blob as usize >= 1024 {
++        if id >= MAX_BLOBS || size == 0 || size > MAX_BLOB_SIZE {
 +            return Err(RutabagaError::SpecViolation("wmtr: bad blob"));
++        }
++        let blob = id as u32;
++        // Blobs live as long as the context (the executor may hold their addresses), so an id
++        // is never replaced: a second create would leak the first mapping and move the blob.
++        if self.shared.blobs.lock().unwrap().contains_key(&blob) {
++            return Err(RutabagaError::SpecViolation("wmtr: blob id in use"));
 +        }
 +        let name = CString::new(format!("/wmtr.{}.{}.{}", std::process::id(), resource_id, blob)).unwrap();
 +        // SAFETY: plain POSIX shm calls; every result is checked.
@@ -585,7 +600,7 @@ index 0000000..813b518
 +        let mut v = Vec::with_capacity(16);
 +        v.extend_from_slice(&1u32.to_le_bytes());
 +        v.extend_from_slice(&16384u32.to_le_bytes());
-+        v.extend_from_slice(&(4u64 << 30).to_le_bytes());
++        v.extend_from_slice(&MAX_BLOB_SIZE.to_le_bytes());
 +        v
 +    }
 +
@@ -601,6 +616,12 @@ index 0000000..813b518
 +        _context_name: Option<&str>,
 +        fence_handler: RutabagaFenceHandler,
 +    ) -> RutabagaResult<Box<dyn RutabagaContext>> {
++        Ok(Box::new(self.new_context(fence_handler)))
++    }
++}
++
++impl Wmtr {
++    fn new_context(&self, fence_handler: RutabagaFenceHandler) -> WmtrContext {
 +        let ops = Box::new(WmtrHostOps {
 +            blob_ptr: cb_blob_ptr,
 +            wake: cb_wake,
@@ -608,7 +629,7 @@ index 0000000..813b518
 +            release_view: self.lib.release_view,
 +            map_path: self.lib.map_path,
 +        });
-+        Ok(Box::new(WmtrContext {
++        WmtrContext {
 +            shared: Arc::new(Shared {
 +                lib: self.lib,
 +                blobs: Mutex::new(BTreeMap::new()),
@@ -619,7 +640,7 @@ index 0000000..813b518
 +            ops,
 +            pending: BTreeMap::new(),
 +            maps: Vec::new(),
-+        }))
++        }
 +    }
 +}
 +
@@ -768,11 +789,32 @@ index 0000000..813b518
 +        let mut ctx = comp.create_context(2, RUTABAGA_CAPSET_WMTR, None, handler).unwrap();
 +        assert!(ctx.context_create_blob(1, blob(0, 0), None).is_err());
 +        assert!(ctx.context_create_blob(1, blob(1024, 4096), None).is_err());
++        assert!(ctx.context_create_blob(1, blob(1, MAX_BLOB_SIZE + 1), None).is_err());
 +        // RING before blob 0 exists, then an unknown command
 +        assert!(ctx.submit_cmd(&mut cmd(WMTR_VGPU_RING, 0, 0), &[]).is_err());
 +        assert!(ctx.submit_cmd(&mut cmd(9, 0, 0), &[]).is_err());
 +        // KICK without an executor is ignored
 +        ctx.submit_cmd(&mut cmd(WMTR_VGPU_KICK, 0, 0), &[]).unwrap();
++    }
++
++    /// Each blob id is created once and only below MAX_BLOBS: a reused id or one that truncates to
++    /// a smaller u32 (1 << 32 would alias the ring) is rejected and leaves the existing blob alone.
++    #[test]
++    fn blob_ids_are_unique_and_in_range() {
++        // resource ids differ from the other tests' (shm names are per pid/resource/blob)
++        let (comp, handler) = component(Arc::new(Mutex::new(Vec::new())));
++        let mut ctx = comp.new_context(handler);
++        ctx.context_create_blob(11, blob(0, 65536), None).unwrap();
++        let ring = ctx.shared.blobs.lock().unwrap()[&0];
++        assert!(ctx.context_create_blob(12, blob(0, 65536), None).is_err());
++        assert!(ctx.context_create_blob(13, blob(1 << 32, 4096), None).is_err());
++        assert!(ctx.context_create_blob(14, blob(u64::MAX, 4096), None).is_err());
++        assert_eq!(ctx.shared.blobs.lock().unwrap()[&0], ring);
++        assert_eq!(ctx.maps.len(), 1);
++        // the last valid id works; the guest is told the size limit
++        ctx.context_create_blob(15, blob(MAX_BLOBS - 1, 4096), None).unwrap();
++        let caps = comp.get_capset(RUTABAGA_CAPSET_WMTR, 1);
++        assert_eq!(u64::from_le_bytes(caps[8..16].try_into().unwrap()), MAX_BLOB_SIZE);
 +    }
 +
 +    /// Slots 0 and 62 share ring 1. A ring is an in-order timeline, so a satisfied WAIT (and a
