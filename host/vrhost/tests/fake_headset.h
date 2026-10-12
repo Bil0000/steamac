@@ -56,6 +56,7 @@ struct FakeHeadsetResult
 	int idr_after_drop = 0;              // IDRs on stream 0 after the dropped frame
 	int decoded_after_drop = 0;          // stream 0 frames decoded after the drop
 	int shards = 0, max_shard_bytes = 0;
+	int control_shards = 0; // video shards that came over TCP while a UDP stream was up (WiVRn sends none)
 	bool view_info_ok = true;    // first shard carries view_info with identity foveation and plausible poses
 	double display_time_offset_ms = 0; // view_info.display_time - (host now + clock_offset), last frame
 	std::array<std::vector<uint16_t>, 2> foveation_x, foveation_y; // view_info foveation of the last decoded frame

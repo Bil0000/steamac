@@ -841,9 +841,12 @@ void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferR
 	std::unique_lock lock(cnx_mutex);
 	if (not control)
 		return; // disconnected while encoding
-	bool use_stream = stream and not cfg.tcp_only;
-	// IDR frames go on the reliable channel (WiVRn's `control` flag for SendData), P frames on UDP.
-	bool on_control = not use_stream or out.idr;
+	// All of a frame on one channel, as WiVRn's server does (its `control` SendData is only for the H.264 Vulkan
+	// parameter sets): the client drops shards older than its current frame, so an IDR on TCP that arrives after
+	// the next P frames on UDP was thrown away and the decoder fed P frames with no reference (live run with a
+	// d3d11bench --vr frame stream: "Drop shard for old frame 1 (current 4)", then avcodec_send_packet failed
+	// and the client closed the session). A lost IDR is re-requested by the feedback path (idr[]).
+	bool on_control = not stream or cfg.tcp_only;
 	ssize_t max_payload = on_control ? std::numeric_limits<uint32_t>::max() : th::video_stream_data_shard::max_payload_size;
 	auto begin = out.annexb.begin(), end = out.annexb.end();
 	while (begin != end)

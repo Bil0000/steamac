@@ -52,11 +52,14 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 		control_socket control(addr);
 
 		auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(o.timeout_ms);
+		bool from_control = false; // the last packet receive() returned came over TCP
 		auto receive = [&](stream_socket * stream) -> th::packets {
 			while (std::chrono::steady_clock::now() < deadline)
 			{
+				from_control = true;
 				if (auto p = control.receive_pending())
 					return std::move(*p);
+				from_control = false;
 				if (stream)
 					if (auto p = stream->receive_pending())
 						return std::move(*p);
@@ -69,7 +72,10 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 					try
 					{
 						if (auto p = control.receive())
+						{
+							from_control = true;
 							return std::move(*p);
+						}
 					}
 					catch (wivrn::socket_shutdown &)
 					{
@@ -299,6 +305,8 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 			else if (auto * s = std::get_if<th::video_stream_data_shard>(&pkt))
 			{
 				res.shards++;
+				if (from_control and stream)
+					res.control_shards++;
 				res.max_shard_bytes = std::max(res.max_shard_bytes, int(s->payload.size()));
 				uint8_t idx = s->stream_item_idx;
 				if (idx > 1)

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // End-to-end over loopback: WivrnSession + test pattern (as in `steamac-vrhost --testpattern`) against the fake
-// headset: handshake, stream description, tracking control, timesync, shards over UDP (IDR over TCP), decode, frame
+// headset: handshake, stream description, tracking control, timesync, all video shards over UDP (IDRs too, as WiVRn), decode, frame
 // identity, IDR after a lost frame, and the incompatible-version path; then the same with WiVRn's encryption on:
 // PIN pairing (SMP), reconnect of a paired headset, wrong PIN, pairing disabled; and audio both ways plus haptics
 // through the VR audio region (a simulated libkrun side on the other end of the shared memory).
@@ -212,6 +212,7 @@ int main()
 		CHECK(not r.encrypted);
 		CHECK(r.got_stream_description);
 		CHECK(r.got_tracking_control);
+		CHECK(r.control_shards == 0); // an IDR on TCP can arrive after the next P frames and be dropped as old
 		CHECK(r.timesync_queries > 0);
 		CHECK(r.decoded[0] >= 60 and r.decoded[1] >= 60);
 		CHECK(r.index_mismatch[0] == 0 and r.index_mismatch[1] == 0);
