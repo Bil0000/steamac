@@ -96,6 +96,9 @@ class Compositor : public StubIVRCompositor {
   void FadeToColor(float, float, float, float, float, bool) override {}
   HmdColor_t GetCurrentFadeColor(bool) override { return HmdColor_t{0, 0, 0, 0}; }
   void FadeGrid(float, bool) override {}
+  // the skybox shows while the application is not submitting (level loads); the host keeps the last frame
+  EVRCompositorError SetSkyboxOverride(const Texture_t *, uint32_t) override { return VRCompositorError_None; }
+  void ClearSkyboxOverride() override {}
   float GetCurrentGridAlpha() override { return 0; }
   void CompositorBringToFront() override {}
   void CompositorGoToBack() override {}

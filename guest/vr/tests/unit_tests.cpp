@@ -114,6 +114,107 @@ static void test_bindings() {
   CHECK(run(m, in, {"/actions/main", "/actions/other"}).v["/actions/other/in/B"].digital);
 }
 
+// A Unity SteamVR plugin title's files (tests/data/vrchat: the shape of VRChat's manifest and Touch bindings):
+// clicks placed on the analog travel with string thresholds, the same action on both hands, chords, action
+// sets restricted to one hand.
+static void test_title_bindings(const std::string &dir) {
+  struct Hit {
+    bool seen = false, digital = false;
+    float v[2] = {};
+  };
+  typedef std::map<std::string, Hit> Hits;  // "<action>@<hand>"
+  auto run_sets = [](const Manifest &m, const InputSnapshot &in, const std::vector<ActiveSet> &sets) {
+    Hits c;
+    evaluate(m, sets, in, 0, [&](const std::string &a, int hand, const ActionValue &v) {
+      Hit &h = c[a + (hand ? "@R" : "@L")];
+      h.seen = true, h.digital = h.digital || v.digital;
+      for (int i = 0; i < 2; i++)
+        if (fabsf(v.v[i]) > fabsf(h.v[i])) h.v[i] = v.v[i];
+    });
+    return c;
+  };
+  const std::string G = "/actions/global/in/", O = "/actions/one_hand/in/";
+  const std::vector<ActiveSet> global = {{"/actions/global", 3}};
+
+  Manifest m;
+  std::string err;
+  CHECK(m.load(dir + "/actions.json", "oculus_touch", &err) && err.empty());
+  CHECK(m.binding_controller == "oculus_touch" && m.actions.size() == 20);
+  CHECK(m.actions[0].name == "/actions/Global/in/Pose");  // names keep the manifest's case
+  CHECK(m.poses.size() == 2 && m.haptics.size() == 2 && m.skeletons.size() == 2 && m.chords.size() == 1);
+  CHECK(m.chords[0].inputs.size() == 4 && m.chords[0].output == G + "safe_mode");
+  for (auto &b : m.bindings) CHECK(b.output.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == std::string::npos);
+
+  InputSnapshot in;
+  Hits c = run_sets(m, in, global);
+  // bound and in an active set: reported (so the action is active) with a zero value, per hand
+  CHECK(c[G + "interact@L"].seen && c[G + "interact@R"].seen && !c[G + "interact@R"].digital);
+  CHECK(c[G + "safe_mode@L"].seen && !c[G + "safe_mode@L"].digital);
+  CHECK(!c.count(O + "use@R"));  // its set is not active
+  CHECK(run_sets(m, in, {}).empty());  // no active set: nothing
+
+  // Interact: button mode on the trigger, click at 0.7, release below 0.55 (thresholds are JSON strings)
+  in.v[1][SVR_IN_TRIGGER_VALUE] = 0.6f;
+  CHECK(!run_sets(m, in, global)[G + "interact@R"].digital);
+  in.v[1][SVR_IN_TRIGGER_VALUE] = 0.75f;
+  c = run_sets(m, in, global);
+  CHECK(c[G + "interact@R"].digital && !c[G + "interact@L"].digital);
+  CHECK(near(c[G + "trigger_axis@R"].v[0], 0.75f) && c[G + "trigger_axis@L"].v[0] == 0);
+  in.v[1][SVR_IN_TRIGGER_VALUE] = 0.6f;
+  CHECK(run_sets(m, in, global)[G + "interact@R"].digital);  // held by the hysteresis
+  in.v[1][SVR_IN_TRIGGER_VALUE] = 0.5f;
+  CHECK(!run_sets(m, in, global)[G + "interact@R"].digital);
+  // Grab on Touch: button mode on the grip value, 0.7
+  in.v[0][SVR_IN_SQUEEZE_VALUE] = 0.8f;
+  c = run_sets(m, in, global);
+  CHECK(c[G + "grab@L"].digital && !c[G + "grab@R"].digital && near(c[G + "grip_axis@L"].v[0], 0.8f));
+  // a click without thresholds keeps the switch (or full travel)
+  in.v[0][SVR_IN_TRIGGER_VALUE] = 0.8f;
+  CHECK(!run_sets(m, in, {{"/actions/menu", 3}})["/actions/menu/in/select@L"].digital);
+  in.v[0][SVR_IN_TRIGGER_CLICK] = 1;
+  CHECK(run_sets(m, in, {{"/actions/menu", 3}})["/actions/menu/in/select@L"].digital);
+  in.v[0][SVR_IN_TRIGGER_CLICK] = 0, in.v[0][SVR_IN_TRIGGER_VALUE] = 0;
+
+  // a set restricted to the right hand: only that hand's sources; the other set covers the left
+  in.v[0][SVR_IN_TRIGGER_VALUE] = 0.3f, in.v[1][SVR_IN_TRIGGER_VALUE] = 0.3f;
+  c = run_sets(m, in, {{"/actions/one_hand", 2}, {"/actions/global", 1}});
+  CHECK(c[O + "use@R"].digital && !c.count(O + "use@L"));  // 0.25 threshold
+  CHECK(c.count(G + "interact@L") && !c.count(G + "interact@R"));
+  CHECK(near(c[O + "aim_axis@R"].v[0], 0.3f));
+
+  // sticks, face buttons (left Y / right B share an action), touch sensors
+  in = InputSnapshot{};
+  in.v[0][SVR_IN_THUMBSTICK_X] = 0.5f, in.v[0][SVR_IN_THUMBSTICK_Y] = -0.5f, in.v[1][SVR_IN_THUMBSTICK_X] = -1;
+  in.v[1][SVR_IN_A_CLICK] = 1, in.v[0][SVR_IN_B_TOUCH] = 1, in.v[1][SVR_IN_THUMBSTICK_CLICK] = 1;
+  c = run_sets(m, in, global);
+  CHECK(near(c[G + "move@L"].v[0], 0.5f) && near(c[G + "move@L"].v[1], -0.5f) && near(c[G + "rotate@R"].v[0], -1));
+  CHECK(c[G + "jump@R"].digital && !c[G + "menu@L"].digital && !c[G + "menu@R"].digital);
+  CHECK(c[G + "gesture_activator_thumb@L"].digital && !c[G + "gesture_activator_thumb@R"].digital);
+  CHECK(c[G + "stick_click@R"].digital && !c[G + "stick_click@L"].digital);
+
+  // chord: both triggers and both upper face buttons
+  in = InputSnapshot{};
+  in.v[0][SVR_IN_TRIGGER_VALUE] = in.v[1][SVR_IN_TRIGGER_VALUE] = 1;
+  in.v[0][SVR_IN_B_CLICK] = 1;
+  CHECK(!run_sets(m, in, global)[G + "safe_mode@L"].digital);
+  in.v[1][SVR_IN_B_CLICK] = 1;
+  CHECK(run_sets(m, in, global)[G + "safe_mode@L"].digital);
+  CHECK(!run_sets(m, in, {{"/actions/global", 1}}).count(G + "safe_mode@L"));  // needs its set on both hands
+
+  // Index: the same manifest picks the knuckles file; Grab is the grab mode there
+  Manifest k;
+  CHECK(k.load(dir + "/actions.json", "knuckles", &err) && k.binding_controller == "knuckles");
+  in = InputSnapshot{};
+  in.v[1][SVR_IN_SQUEEZE_FORCE] = 0.8f, in.v[0][SVR_IN_THUMBSTICK_X] = 0.25f;
+  c = run_sets(k, in, global);
+  CHECK(c[G + "grab@R"].digital && !c[G + "grab@L"].digital && near(c[G + "move@L"].v[0], 0.25f));
+  // a controller type without a file of its own falls back to Touch; a listed file that is missing leaves the
+  // actions unbound but the manifest loaded
+  Manifest f;
+  CHECK(f.load(dir + "/actions.json", "some_new_controller", &err) && f.binding_controller == "oculus_touch");
+  CHECK(f.load(dir + "/actions.json", "vive_controller", &err) && f.actions.size() == 20 && f.bindings.empty() && !err.empty());
+}
+
 static void test_math() {
   svr_pose p{};
   p.orientation[3] = 1;
@@ -348,7 +449,8 @@ static void test_overlay() {
   CHECK(ov->CreateOverlay("test.a", "back", &h) == vr::VROverlayError_None && ov->DestroyOverlay(h) == vr::VROverlayError_None);
 }
 
-int main() {
+int main(int argc, char **argv) {
+  test_title_bindings(argc > 1 ? argv[1] : "tests/data/vrchat");
   test_skeleton();
   test_overlay();
   test_json();
