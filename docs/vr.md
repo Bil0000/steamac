@@ -1,10 +1,8 @@
 # VR (experimental)
 
-**Status: experimental.** A Mac-native VR host, `steamac-vrhost`, streams a test pattern to a standalone headset
-running the WiVRn client, and the integrated host can receive game frames over the VR link described in
-`docs/vr-interfaces.md`. The launcher has an experimental VR settings panel and can start the separate host with the VM
-when enabled. The guest OpenVR runtime is not included in the end-user launcher yet, so an in-game VR path is not yet
-available.
+**Status: experimental, M0–M3 implemented and M4 integration in progress.** The host, guest OpenVR runtime, input/pose
+path and Proton DXMT texture submit have offline fake-host coverage. No headset-backed VRChat session has been run;
+M4 guest/FEX and host-launcher integration remain open.
 
 ## Using the launcher
 
@@ -51,8 +49,9 @@ encoder must meet the headset's refresh-rate budget; reduce per-eye resolution o
   turns (rotation; the sphere is at infinity, so walking does not move it). The frame number is encoded in the top-left
   corner (16 blocks) for automated checks.
 
-The integrated host frame path is described in `docs/vr-interfaces.md` section 3.2. Not yet available to end users:
-OpenVR in the guest (M2/M3), which is required for games to submit VR eye images; foveation and audio remain separate work.
+Implemented since M0: PIN pairing/encryption, WiVRn's pacer, compositor foveation, audio transport, DXMT game-frame
+path (M1), guest OpenVR runtime/input (M2/M3), and Proton's DXMT texture-export patch (M4). The Proton bootstrap
+`IVRCompositor_028` adapter and M4 guest/FEX end-to-end run remain pending.
 
 ## Licence
 
@@ -132,13 +131,25 @@ What to check: the pattern appears; the red marker stays at the same place in th
 `steamac-vrhost` log prints frames, feedback and tracking counts every 5 s, the last encode time and the headset's
 decode time.
 
-## Next milestones
+## M4: headset-less VRChat path checklist
+
+Complete in order; the VM step is gated by the coordinator's memory guard and must not be attempted until cleared.
 
 * **Encode budget sweep** (pending, needs an idle Mac): the knob matrix above × resolution/refresh, H.264 vs HEVC,
   foveated stream sizes from M1.
-* **M1:** game eye textures from DXMT over the wmtr ring into `steamac-vm`, shared with `steamac-vrhost` as IOSurfaces,
-  converted by a Metal compositor pass (WiVRn's `foveation.comp` in MSL) into the encoder input.
-* **M2/M3:** OpenVR in the guest (Proton `vrclient_x64` DXMT submit, poses, input), then VRChat. Guest side:
-  `docs/vr-guest.md`.
 
-Interfaces between these pieces: `docs/vr-interfaces.md`.
+- [x] Extract candidate OpenVR interface versions from installed VRChat binaries and Unity/IL2CPP metadata, without
+  launching the game. Inventory and caveat: `docs/vr-interfaces.md` and local provenance
+  `/Volumes/LEANWORK/vr-vrchat-interfaces.txt`.
+- [x] Implement DXMT D3D11 texture export in the pinned Proton `vrclient_x64` path and add a COM fake-texture test,
+  including array texture slices and a stock-Proton negative control.
+- [ ] Integrate M6 version adapters, especially `IVRCompositor_028`, and run the real Proton registry bootstrap path
+  (no manual registry-state bypass); verify `HmdSystemFactory` and `VRClientCoreFactory` resolve.
+- [ ] Run the Proton test and `guest/vr` fakehost/testapp under FEX in the VM; no VRChat launch is needed for this gate.
+- [ ] Verify the installer/launcher sets `PROTON_VR_RUNTIME`, installs the rebuilt PE DLL and Unix library, and restores
+  stock Proton files when VR is disabled.
+- [ ] Connect the host pipeline and fake headset, then confirm frame arrival, input/pose, haptics and clean shutdown.
+- [ ] Only after those pass, request explicit coordination for a VRChat live run. Before starting, confirm Steam does not
+  say the account is playing elsewhere; launch in the background without focus stealing. No debugger/ptrace/perf tools.
+
+Interfaces between components: `docs/vr-interfaces.md`. Guest build/test details: `docs/vr-guest.md`.

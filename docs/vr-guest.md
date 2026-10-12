@@ -1,7 +1,9 @@
 # VR in the guest: OpenVR runtime and Proton submit path (experimental, M2/M3)
 
-**Status: experimental.** The guest side is built and tested without a headset (fake host, test app, wmtr loopback).
-It has not run with a game, with Proton's rebuilt `vrclient_x64.dll`, or against a live `steamac-vrhost` yet.
+**Status: experimental.** The runtime and wmtr loopback have offline tests. An x86 Linux build of the patched Proton
+`vrclient_x64.dll` and Unix library has passed a fake-host test for DXMT texture export and array-slice submits. The
+`IVRCompositor_028` bootstrap test still depends on the M6 version adapters. No headset or VRChat game session has been
+run; the guest/FEX test and live host connection remain open.
 
 ## How a frame gets out
 
@@ -79,12 +81,27 @@ guest/vr/build-sniper.sh                     # release build in the Steam Runtim
 The same `vr-fakehost`/`vr-testapp` pair runs in the VM guest under FEX (`STEAMAC_VR_SOCKET` selects the socket
 transport instead of wmtr).
 
-## Deploying (not automated yet)
+## Proton client build and test (x86-64 Linux)
 
-1. `PROTON_VR_RUNTIME=<dir>` where `<dir>/bin/linux64/vrclient.so` is the sniper build.
-2. Rebuild Proton's `vrclient_x64.dll` with `guest/proton-vrclient/patches` applied to the pinned Proton
-   (`guest/proton-vrclient/pin.env`) and put it in the compat tool used for the DXMT path.
-3. DXMT from the `vr-export` branch (`IMTLD3D11ExportableTexture`, call 146) and a wmtr client with `wmtr_vr_call`.
+`guest/proton-vrclient/build.sh [WORK] [OUT]` checks out the Proton commit in `pin.env`, applies the local patch set,
+builds Proton's `vrclient` target in its pinned Steam Runtime SDK, and writes both PE and Unix artifacts to the guest
+layer layout. It reuses the named WORK tree and refuses to replace modified Proton source. The first build requires
+about 4 GB of source and 14 GB for the build tree; do not start it unless the x86 build host has adequate free space.
+
+`guest/proton-vrclient/tests/run.sh WORK <guest/vr build>` exercises the patched PE client under the matching Wine
+build with fake DXMT COM textures and `vr-fakehost`. On a machine without the Proton runtime's `_028` interface, use
+`COMPOSITOR=IVRCompositor_029 MANUAL_REGISTRY=1` only for isolating texture conversion; that bypasses Proton's own
+registry bootstrap and does not count as the full integration gate. The full VRChat-compatible path must exercise the
+normal `_028` registry initialization, export both `HmdSystemFactory` and `VRClientCoreFactory`, then pass under FEX.
+
+## Deploying
+
+1. Set `PROTON_VR_RUNTIME=<dir>` where `<dir>/bin/linux64/vrclient.so` is the sniper build.
+2. Install the rebuilt `vrclient_x64.dll` and `vrclient_x64.so` into the active Proton compat tool.
+3. Use DXMT with `IMTLD3D11ExportableTexture` (DXMT `vr-export`) and a wmtr client exposing `wmtr_vr_call`.
+4. Enable the steam-vr-path guest-layer hook; verify disable/restore returns the stock Proton files.
+
+The installer hook is present, but it has not yet been verified end-to-end under FEX or against the live launcher/host.
 
 ## Licences
 

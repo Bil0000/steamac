@@ -79,6 +79,14 @@ int main(int argc, char **argv) {
   auto *comp = (vr::IVRCompositor *)core->GetGenericInterface(vr::IVRCompositor_Version, &err);
   auto *input = (vr::IVRInput *)core->GetGenericInterface(vr::IVRInput_Version, &err);
   CHECK(sys && comp && input, "core interfaces missing");
+  // Proton resolves HmdSystemFactory next to VRClientCoreFactory and refuses a runtime without it
+  auto hmd_factory = (void *(*)(const char *, int *))dlsym(lib, "HmdSystemFactory");
+  CHECK(hmd_factory != nullptr, "no HmdSystemFactory export");
+  if (hmd_factory) {
+    rc = -1;
+    CHECK(hmd_factory(vr::IVRSystem_Version, &rc) == sys && rc == 0, "HmdSystemFactory(%s) rc %d", vr::IVRSystem_Version, rc);
+    CHECK(!hmd_factory("IVRSystem_001", &rc) && rc == vr::VRInitError_Init_InterfaceNotFound, "HmdSystemFactory unknown rc %d", rc);
+  }
   CHECK(!core->GetGenericInterface("IVRSystem_001", &err) && err == vr::VRInitError_Init_InterfaceNotFound,
         "unknown version must be refused");
   CHECK(core->GetGenericInterface(vr::IVRChaperone_Version, &err) && core->GetGenericInterface(vr::IVRSettings_Version, &err) &&

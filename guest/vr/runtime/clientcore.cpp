@@ -126,3 +126,14 @@ extern "C" __attribute__((visibility("default"))) void *VRClientCoreFactory(cons
   if (ret) *ret = vr::VRInitError_Init_InterfaceNotFound;
   return nullptr;
 }
+
+// The older entry point of vrclient.so. Proton's vrclient_x64 resolves it together with VRClientCoreFactory when it
+// loads the runtime and refuses a runtime without it; it returns the same interfaces as GetGenericInterface.
+extern "C" __attribute__((visibility("default"))) void *HmdSystemFactory(const char *name, int *ret) {
+  int core_err = 0;
+  auto *core = static_cast<svr::IVRClientCore *>(VRClientCoreFactory("IVRClientCore_003", &core_err));
+  vr::EVRInitError err = vr::VRInitError_Init_InterfaceNotFound;
+  void *iface = core ? core->GetGenericInterface(name, &err) : nullptr;
+  if (ret) *ret = err;
+  return iface;
+}
