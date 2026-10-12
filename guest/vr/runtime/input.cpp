@@ -16,6 +16,7 @@
 #include "json.h"
 #include "log.h"
 #include "runtime.h"
+#include "skeleton.h"
 #include "stubs.gen.h"
 #include "vrmath.h"
 
@@ -162,19 +163,91 @@ class Input : public StubIVRInput {
     return VRInputError_None;
   }
 
-  EVRInputError GetSkeletalTrackingLevel(VRActionHandle_t, EVRSkeletalTrackingLevel *level) override {
-    if (level) *level = VRSkeletalTracking_Partial;
+  EVRInputError GetBoneCount(VRActionHandle_t a, uint32_t *count) override {
+    if (!count) return VRInputError_InvalidParam;
+    std::lock_guard<std::mutex> g(m_);
+    if (skeleton_hand(a) < -1) return VRInputError_InvalidHandle;
+    *count = kHandBoneCount;
     return VRInputError_None;
   }
-
+  EVRInputError GetBoneHierarchy(VRActionHandle_t a, BoneIndex_t *parents, uint32_t count) override {
+    if (!parents || count < (uint32_t)kHandBoneCount) return VRInputError_InvalidParam;
+    std::lock_guard<std::mutex> g(m_);
+    if (skeleton_hand(a) < -1) return VRInputError_InvalidHandle;
+    for (int i = 0; i < kHandBoneCount; i++) parents[i] = hand_bone_parent(i);
+    return VRInputError_None;
+  }
+  EVRInputError GetBoneName(VRActionHandle_t a, BoneIndex_t bone, char *name, uint32_t len) override {
+    std::lock_guard<std::mutex> g(m_);
+    int hand = skeleton_hand(a);
+    if (hand < -1) return VRInputError_InvalidHandle;
+    const char *n = hand_bone_name(hand > 0, bone);
+    if (!n) return VRInputError_InvalidBoneIndex;
+    if (!name || len <= strlen(n)) return VRInputError_BufferTooSmall;
+    memcpy(name, n, strlen(n) + 1);
+    return VRInputError_None;
+  }
+  EVRInputError GetSkeletalReferenceTransforms(VRActionHandle_t a, EVRSkeletalTransformSpace space,
+                                               EVRSkeletalReferencePose pose, VRBoneTransform_t *out,
+                                               uint32_t count) override {
+    if (!out || count < (uint32_t)kHandBoneCount) return VRInputError_InvalidParam;
+    std::lock_guard<std::mutex> g(m_);
+    int hand = skeleton_hand(a);
+    if (hand < -1) return VRInputError_InvalidHandle;
+    hand_reference_pose(hand > 0, pose, out);
+    if (space == VRSkeletalTransformSpace_Model) hand_to_model_space(out, out);
+    return VRInputError_None;
+  }
+  EVRInputError GetSkeletalTrackingLevel(VRActionHandle_t a, EVRSkeletalTrackingLevel *level) override {
+    if (!level) return VRInputError_InvalidParam;
+    std::lock_guard<std::mutex> g(m_);
+    if (skeleton_hand(a) < -1) return VRInputError_InvalidHandle;
+    *level = VRSkeletalTracking_Estimated;  // fingers follow buttons, triggers and touch sensors
+    return VRInputError_None;
+  }
+  EVRInputError GetSkeletalBoneData(VRActionHandle_t a, EVRSkeletalTransformSpace space, EVRSkeletalMotionRange range,
+                                    VRBoneTransform_t *out, uint32_t count) override {
+    if (!out || count < (uint32_t)kHandBoneCount) return VRInputError_InvalidParam;
+    std::lock_guard<std::mutex> g(m_);
+    int hand = skeleton_hand(a);
+    if (hand < -1) return VRInputError_InvalidHandle;
+    if (hand < 0) return VRInputError_NoData;
+    bones(hand, range, out);
+    if (space == VRSkeletalTransformSpace_Model) hand_to_model_space(out, out);
+    return VRInputError_None;
+  }
   EVRInputError GetSkeletalSummaryData(VRActionHandle_t a, EVRSummaryType, VRSkeletalSummaryData_t *s) override {
     if (!s) return VRInputError_InvalidParam;
     std::lock_guard<std::mutex> g(m_);
     int hand = skeleton_hand(a);
-    if (hand < 0) return VRInputError_InvalidHandle;
+    if (hand < -1) return VRInputError_InvalidHandle;
+    if (hand < 0) return VRInputError_NoData;
     Runtime &rt = Runtime::get();
     finger_curls(hand, [&](int id) { return rt.input(hand, id); }, s->flFingerCurl);
     for (float &f : s->flFingerSplay) f = 0.2f;
+    return VRInputError_None;
+  }
+  // "Compressed" bone data is only ever handed back to DecompressSkeletalBoneData of the same runtime: a tag and
+  // the parent-space transforms.
+  EVRInputError GetSkeletalBoneDataCompressed(VRActionHandle_t a, EVRSkeletalMotionRange range, void *out, uint32_t size,
+                                              uint32_t *required) override {
+    if (required) *required = sizeof(PackedBones);
+    if (!out || size < sizeof(PackedBones)) return VRInputError_BufferTooSmall;
+    PackedBones p;
+    p.tag = kPackedTag;
+    EVRInputError e = GetSkeletalBoneData(a, VRSkeletalTransformSpace_Parent, range, p.bones, kHandBoneCount);
+    if (e != VRInputError_None) return e;
+    memcpy(out, &p, sizeof(p));
+    return VRInputError_None;
+  }
+  EVRInputError DecompressSkeletalBoneData(const void *in, uint32_t size, EVRSkeletalTransformSpace space,
+                                           VRBoneTransform_t *out, uint32_t count) override {
+    PackedBones p;
+    if (!in || !out || size < sizeof(p) || count < (uint32_t)kHandBoneCount) return VRInputError_InvalidParam;
+    memcpy(&p, in, sizeof(p));
+    if (p.tag != kPackedTag) return VRInputError_InvalidCompressedData;
+    if (space == VRSkeletalTransformSpace_Model) hand_to_model_space(p.bones, p.bones);
+    memcpy(out, p.bones, sizeof(p.bones));
     return VRInputError_None;
   }
 
@@ -238,14 +311,15 @@ class Input : public StubIVRInput {
     uint32_t n = 0;
     for (auto &b : manifest_.bindings) {
       if (lower(b.output) != lower(act->name)) continue;
-      if (info && n < count && size >= sizeof(InputBindingInfo_t)) {
-        InputBindingInfo_t &bi = *(InputBindingInfo_t *)((char *)info + (size_t)n * size);
+      if (info && n < count && size) {
+        InputBindingInfo_t bi;  // older versions of the struct are a prefix of it: the caller's size decides
         memset(&bi, 0, sizeof(bi));
         snprintf(bi.rchDevicePathName, sizeof(bi.rchDevicePathName), "%s", b.hand ? "/user/hand/right" : "/user/hand/left");
         snprintf(bi.rchInputPathName, sizeof(bi.rchInputPathName), "%s", b.input_path.c_str());
         snprintf(bi.rchModeName, sizeof(bi.rchModeName), "%s", b.mode.c_str());
         snprintf(bi.rchSlotName, sizeof(bi.rchSlotName), "%s", b.slot.c_str());
         snprintf(bi.rchInputSourceType, sizeof(bi.rchInputSourceType), "%s", "controller");
+        memcpy((char *)info + (size_t)n * size, &bi, std::min((size_t)size, sizeof(bi)));
       }
       n++;
     }
@@ -317,6 +391,19 @@ class Input : public StubIVRInput {
     for (auto &p : manifest_.haptics)
       if (lower(p.output) == lower(action)) add(p.hand);
     return hands;
+  }
+  static const uint32_t kPackedTag = 0x314b5353;  // "SSK1"
+  struct PackedBones {
+    uint32_t tag;
+    VRBoneTransform_t bones[kHandBoneCount];
+  };
+  void bones(int hand, EVRSkeletalMotionRange range, VRBoneTransform_t *out) {
+    Runtime &rt = Runtime::get();
+    float raw[5], curl[5];
+    const float splay[5] = {0, 0, 0, 0, 0};
+    finger_curls(hand, [&](int id) { return rt.input(hand, id); }, raw);
+    hand_limit_curls(range, raw, curl);
+    hand_pose(hand, curl, splay, out);
   }
   // -2 invalid handle, -1 not bound, else hand
   int skeleton_hand(VRActionHandle_t a) const {

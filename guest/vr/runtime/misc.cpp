@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// The small interfaces: IVRChaperone, IVRSettings, IVRApplications, IVRRenderModels, IVROverlay, IVRScreenshots,
+// The small interfaces: IVRChaperone, IVRSettings, IVRApplications, IVRRenderModels, IVRScreenshots,
 // IVROverlayView. Behaviour = "a running compositor with nothing to show": calls succeed where an app treats an
-// error as fatal, and report "not available" where apps cope with that (render models, overlays).
+// error as fatal, and report "not available" where apps cope with that (render models).
 #include <string.h>
 #include <unistd.h>
 
@@ -134,28 +134,6 @@ class RenderModels : public StubIVRRenderModels {
   const char *GetRenderModelErrorNameFromEnum(vr::EVRRenderModelError) override { return "VRRenderModelError_NotSupported"; }
 };
 
-class Overlay : public StubIVROverlay {
- public:
-  // no dashboard and no overlay compositor yet: overlay creation fails cleanly
-  EVROverlayError FindOverlay(const char *, VROverlayHandle_t *h) override {
-    if (h) *h = k_ulOverlayHandleInvalid;
-    return VROverlayError_UnknownOverlay;
-  }
-  EVROverlayError CreateOverlay(const char *, const char *, VROverlayHandle_t *h) override {
-    if (h) *h = k_ulOverlayHandleInvalid;
-    return VROverlayError_RequestFailed;
-  }
-  EVROverlayError CreateDashboardOverlay(const char *, const char *, VROverlayHandle_t *h,
-                                         VROverlayHandle_t *t) override {
-    if (h) *h = k_ulOverlayHandleInvalid;
-    if (t) *t = k_ulOverlayHandleInvalid;
-    return VROverlayError_RequestFailed;
-  }
-  bool IsDashboardVisible() override { return false; }
-  bool IsActiveDashboardOverlay(VROverlayHandle_t) override { return false; }
-  const char *GetOverlayErrorNameFromEnum(EVROverlayError) override { return "VROverlayError_RequestFailed"; }
-};
-
 class Screenshots : public StubIVRScreenshots {};
 class OverlayView : public StubIVROverlayView {};
 }  // namespace
@@ -175,10 +153,6 @@ void *applications_iface() {
 void *render_models_iface() {
   static RenderModels r;
   return static_cast<vr::IVRRenderModels *>(&r);
-}
-void *overlay_iface() {
-  static Overlay o;
-  return static_cast<vr::IVROverlay *>(&o);
 }
 void *screenshots_iface() {
   static Screenshots s;

@@ -4,9 +4,11 @@
 #include <string.h>
 
 #include <cstdlib>
+#include <mutex>
 #include <string>
 
 #include "interfaces.h"
+#include "legacy.gen.h"
 #include "log.h"
 #include "openvr.h"
 #include "runtime.h"
@@ -30,7 +32,8 @@ struct IfaceEntry {
   void *(*get)();
 };
 
-// One version per interface: the openvr.h this runtime is compiled against (third_party/openvr, v2.15.6).
+// The versions of the openvr.h this runtime is compiled against (third_party/openvr, v2.15.6). Older versions
+// (kLegacyIfaces, legacy.gen.h) are adapters over these: games ask for the versions of their own openvr_api.dll.
 const IfaceEntry kIfaces[] = {
     {vr::IVRSystem_Version, system_iface},
     {vr::IVRCompositor_Version, compositor_iface},
@@ -55,13 +58,13 @@ class ClientCore : public IVRClientCore {
   }
   void Cleanup() override { Runtime::get().shutdown(); }
   vr::EVRInitError IsInterfaceVersionValid(const char *v) override {
-    return find(v) ? vr::VRInitError_None : vr::VRInitError_Init_InterfaceNotFound;
+    return find(v) || find_legacy(v) ? vr::VRInitError_None : vr::VRInitError_Init_InterfaceNotFound;
   }
   void *GetGenericInterface(const char *v, vr::EVRInitError *err) override {
-    const IfaceEntry *e = find(v);
-    SVR_INFO("requested interface %s%s", v ? v : "(null)", e ? "" : " (not available)");
-    if (err) *err = e ? vr::VRInitError_None : vr::VRInitError_Init_InterfaceNotFound;
-    return e ? e->get() : nullptr;
+    void *p = lookup(v);
+    SVR_INFO("requested interface %s%s", v ? v : "(null)", p ? "" : " (not available)");
+    if (err) *err = p ? vr::VRInitError_None : vr::VRInitError_Init_InterfaceNotFound;
+    return p;
   }
   bool BIsHmdPresent() override { return true; }
   const char *GetEnglishStringForHmdError(vr::EVRInitError e) override {
@@ -78,13 +81,37 @@ class ClientCore : public IVRClientCore {
   }
 
  private:
+  static const char *strip(const char *v) {
+    return v && !strncmp(v, "FnTable:", 8) ? v + 8 : v;  // C function tables are built by the caller (Proton)
+  }
   static const IfaceEntry *find(const char *v) {
-    if (!v) return nullptr;
-    if (!strncmp(v, "FnTable:", 8)) v += 8;  // C function tables are built by the caller (Proton) from these
+    if (!(v = strip(v))) return nullptr;
     for (auto &e : kIfaces)
       if (!strcmp(e.version, v)) return &e;
     return nullptr;
   }
+  static const LegacyIface *find_legacy(const char *v) {
+    if (!(v = strip(v))) return nullptr;
+    for (auto &e : kLegacyIfaces)
+      if (!strcmp(e.version, v)) return &e;
+    return nullptr;
+  }
+  // one adapter object per legacy version, created on first request, never freed (like the interfaces)
+  void *lookup(const char *v) {
+    if (const IfaceEntry *e = find(v)) return e->get();
+    const LegacyIface *l = find_legacy(v);
+    if (!l) return nullptr;
+    std::lock_guard<std::mutex> g(m_);
+    void *&a = adapters_[l - kLegacyIfaces];
+    if (!a) {
+      for (auto &e : kIfaces)
+        if (!strncmp(e.version, l->iface, strlen(l->iface)) && e.version[strlen(l->iface)] == '_') a = l->make(e.get());
+    }
+    return a;
+  }
+
+  std::mutex m_;
+  void *adapters_[sizeof(kLegacyIfaces) / sizeof(kLegacyIfaces[0])] = {};
 };
 }  // namespace
 }  // namespace svr

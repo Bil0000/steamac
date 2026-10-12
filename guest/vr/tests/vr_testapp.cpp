@@ -110,6 +110,16 @@ int main(int argc, char **argv) {
   while (sys->PollNextEvent(&ev, sizeof(ev)))
     if (ev.eventType == vr::VREvent_TrackedDeviceActivated) activated++;
   CHECK(activated == 3, "activated events %d", activated);
+  {  // GetFrameTimings with an older (smaller) struct: stride is the caller's m_nSize (IVRCompositor_021: 176 bytes)
+    alignas(8) unsigned char buf[176 * 2 + 16];
+    memset(buf, 0xAB, sizeof(buf));
+    uint32_t sz = 176;
+    memcpy(buf, &sz, 4);
+    CHECK(comp->GetFrameTimings((vr::Compositor_FrameTiming *)buf, 2) == 2, "GetFrameTimings old size");
+    uint32_t sz1;
+    memcpy(&sz1, buf + 176, 4);
+    CHECK(sz1 == 176 && buf[176 * 2] == 0xAB, "GetFrameTimings stride %u", sz1);
+  }
   CHECK(sys->GetTrackedDeviceClass(0) == vr::TrackedDeviceClass_HMD &&
             sys->GetTrackedDeviceClass(1) == vr::TrackedDeviceClass_Controller && sys->IsTrackedDeviceConnected(2),
         "device classes");
