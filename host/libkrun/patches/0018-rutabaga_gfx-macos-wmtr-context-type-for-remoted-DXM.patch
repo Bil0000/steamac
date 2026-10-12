@@ -5,8 +5,8 @@ Subject: [PATCH] rutabaga_gfx(macos): wmtr context type for remoted DXMT
  winemetal calls
 
 Add an opt-in virtio-gpu context type (capset 30, "wmtr") whose guest
-process forwards DXMT's winemetal unix calls through a shared-memory ring
-to a host executor that runs them against Metal. The executor is a
+process forwards DXMT's winemetal unix calls through a shared-memory
+ring to a host executor that runs them against Metal. The executor is a
 separate library (libwmtr_host.dylib, STEAMAC_WMTR_LIB or the default
 name) loaded with dlopen; this patch only carries the transport:
 
@@ -17,8 +17,12 @@ name) loaded with dlopen; this patch only carries the transport:
   start the executor), KICK (wake it), WAIT (the next fence on this ring
   completes when the executor's reply slot reaches the sequence number;
   progress is checked and the waiter queued under one lock, so a reply
-  cannot slip between them); fences on rings without a WAIT complete at
-  once, and pending ones complete when the context is destroyed;
+  cannot slip between them); each (context, ring) is an in-order
+  timeline, and reply slots share rings (slot s on ring 1 + s % 62,
+  events and slots >= 64 on ring 63, as the guest maps them), so the
+  fences of a ring complete strictly in FIFO order: one whose WAIT
+  already holds, or that has no WAIT, waits behind an earlier pending
+  one; pending fences complete when the context is destroyed;
 - the capset id is below 32 because VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs
   reports a 32-bit mask; no stock rutabaga capset uses 30.
 
@@ -26,23 +30,25 @@ The component exists only with STEAMAC_WMTR=1 and a loadable library
 that exports the host API (one cached load shared by the device's config
 space and the rutabaga builder). Then num_capsets counts it: the stock 5
 covers virgl, virgl2, venus, drm and cross-domain, and the guest never
-asks for an index at or above that count. Without it nothing changes:
-no library is loaded and the guest sees the same five capsets.
+asks for an index at or above that count. Without it nothing changes: no
+library is loaded and the guest sees the same five capsets.
 
 Unit tests (cargo test --lib wmtr in rutabaga_gfx, against a stand-in
 executor: no Metal, no library): off unless enabled; a WAIT fence stays
-pending until the reply and completes on it; satisfied WAITs and
-fences without a WAIT complete at once; pending fences complete on
-context drop and the executor is destroyed; malformed blobs and
-commands are rejected. virtio::gpu: num_capsets stays 5 without
+pending until the reply and completes on it; satisfied WAITs and fences
+without a WAIT complete at once on an otherwise idle ring; pending
+fences complete on context drop and the executor is destroyed; malformed
+blobs and commands are rejected; on a shared ring (slots 0 and 62,
+events and slot 70) later fences wait for an earlier pending one and
+complete with it, in order. virtio::gpu: num_capsets stays 5 without
 STEAMAC_WMTR.
 ---
  src/devices/src/virtio/gpu/device.rs   |  23 +-
  src/rutabaga_gfx/src/lib.rs            |   9 +
  src/rutabaga_gfx/src/rutabaga_core.rs  |  18 +-
  src/rutabaga_gfx/src/rutabaga_utils.rs |   3 +
- src/rutabaga_gfx/src/wmtr.rs           | 548 +++++++++++++++++++++++++
- 5 files changed, 598 insertions(+), 3 deletions(-)
+ src/rutabaga_gfx/src/wmtr.rs           | 614 +++++++++++++++++++++++++
+ 5 files changed, 664 insertions(+), 3 deletions(-)
  create mode 100644 src/rutabaga_gfx/src/wmtr.rs
 
 diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
@@ -188,10 +194,10 @@ index 085912c..3ccfd93 100644
  /// Rutabaga handle types (memory and sync in same namespace)
 diff --git a/src/rutabaga_gfx/src/wmtr.rs b/src/rutabaga_gfx/src/wmtr.rs
 new file mode 100644
-index 0000000..d380c20
+index 0000000..813b518
 --- /dev/null
 +++ b/src/rutabaga_gfx/src/wmtr.rs
-@@ -0,0 +1,548 @@
+@@ -0,0 +1,614 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
 +//! wmtr: a virtio-gpu context type that carries DXMT's winemetal unix calls from a guest process
@@ -203,11 +209,18 @@ index 0000000..d380c20
 +//! 24-byte commands: RING (blob 0 is initialised: start the executor), KICK (wake it), WAIT (the
 +//! next fence on this ring completes when the reply slot or event queue reaches `seq`).
 +//!
++//! Each (context, ring) is an in-order timeline for libkrun and the guest: signalling a fence
++//! retires every earlier fence on its ring. Reply slots share rings (slot s waits on ring
++//! 1 + s % 62, events and slots >= 64 on ring 63, matching the guest), so fences on a ring are
++//! completed strictly in FIFO order: a fence whose condition already holds waits behind an earlier
++//! one that is still pending.
++//!
 +//! The component only exists when STEAMAC_WMTR=1 and the library loads, so nothing changes for
 +//! guests that never ask for the capset.
 +
 +use log::{error, info};
 +use std::collections::BTreeMap;
++use std::collections::VecDeque;
 +use std::ffi::c_void;
 +use std::ffi::CString;
 +use std::sync::Arc;
@@ -319,17 +332,18 @@ index 0000000..d380c20
 +    host_lib().is_some()
 +}
 +
++/// A fence on one ring's timeline; `wait` is the (slot, seq) its WAIT command asked for.
 +struct Waiter {
 +    fence: RutabagaFence,
-+    slot: u32,
-+    seq: u64,
++    wait: Option<(u32, u64)>,
 +}
 +
 +/// State shared with the executor's callbacks (which run on executor/dispatch threads).
 +struct Shared {
 +    lib: HostLib,
 +    blobs: Mutex<BTreeMap<u32, (usize, u64)>>,
-+    waiters: Mutex<Vec<Waiter>>,
++    /// Fences not yet completed, per ring, in submission order.
++    waiters: Mutex<BTreeMap<u8, VecDeque<Waiter>>>,
 +    host: Mutex<usize>,
 +    fence_handler: RutabagaFenceHandler,
 +}
@@ -347,10 +361,10 @@ index 0000000..d380c20
 +    }
 +}
 +
-+extern "C" fn cb_wake(ctx: *mut c_void, slot: u32) {
++extern "C" fn cb_wake(ctx: *mut c_void, _slot: u32) {
 +    // SAFETY: as above.
 +    let s = unsafe { &*(ctx as *const Shared) };
-+    s.signal_ready(Some(slot));
++    s.signal_ready();
 +}
 +
 +impl Shared {
@@ -363,17 +377,27 @@ index 0000000..d380c20
 +        unsafe { (self.lib.progress)(host as *mut c_void, slot) }
 +    }
 +
-+    /// Completes every waiter (of `slot`, or all) whose condition holds.
-+    fn signal_ready(&self, slot: Option<u32>) {
-+        let mut w = self.waiters.lock().unwrap();
-+        let mut i = 0;
-+        while i < w.len() {
-+            if slot.is_none_or(|s| s == w[i].slot) && self.progress(w[i].slot) >= w[i].seq {
-+                let x = w.swap_remove(i);
-+                self.fence_handler.call(x.fence);
-+            } else {
-+                i += 1;
++    /// Completes the fences at the head of `queue` whose condition holds, in order, stopping at
++    /// the first one that is still pending (later fences on the ring wait behind it).
++    fn complete_ready(&self, queue: &mut VecDeque<Waiter>) {
++        while let Some(w) = queue.front() {
++            let ready = match w.wait {
++                None => true,
++                Some((slot, seq)) => self.progress(slot) >= seq,
++            };
++            if !ready {
++                break;
 +            }
++            let w = queue.pop_front().unwrap();
++            self.fence_handler.call(w.fence);
++        }
++    }
++
++    /// A reply arrived: any ring's head may now be ready (rings are shared between slots).
++    fn signal_ready(&self) {
++        let mut rings = self.waiters.lock().unwrap();
++        for queue in rings.values_mut() {
++            self.complete_ready(queue);
 +        }
 +    }
 +}
@@ -501,19 +525,13 @@ index 0000000..d380c20
 +    fn detach(&mut self, _resource: &RutabagaResource) {}
 +
 +    fn context_create_fence(&mut self, fence: RutabagaFence) -> RutabagaResult<()> {
-+        let Some((slot, seq)) = self.pending.remove(&fence.ring_idx) else {
-+            self.shared.fence_handler.call(fence);
-+            return Ok(());
-+        };
-+        // Check and enqueue under the waiter lock: the executor publishes progress before it
-+        // takes this lock in cb_wake, so a reply cannot slip between the check and the push.
-+        let mut w = self.shared.waiters.lock().unwrap();
-+        if self.shared.progress(slot) >= seq {
-+            drop(w);
-+            self.shared.fence_handler.call(fence);
-+        } else {
-+            w.push(Waiter { fence, slot, seq });
-+        }
++        let wait = self.pending.remove(&fence.ring_idx);
++        // Enqueue and check under the waiter lock: the executor publishes progress before it
++        // takes this lock in cb_wake, so a reply cannot slip between the push and the check.
++        let mut rings = self.shared.waiters.lock().unwrap();
++        let queue = rings.entry(fence.ring_idx).or_default();
++        queue.push_back(Waiter { fence, wait });
++        self.shared.complete_ready(queue);
 +        Ok(())
 +    }
 +
@@ -530,9 +548,11 @@ index 0000000..d380c20
 +            unsafe { (self.shared.lib.destroy)(h) };
 +            *self.shared.host.lock().unwrap() = 0;
 +        }
-+        // complete anything still waiting so guest pollers do not hang
-+        for w in self.shared.waiters.lock().unwrap().drain(..) {
-+            self.shared.fence_handler.call(w.fence);
++        // complete anything still waiting (in ring order) so guest pollers do not hang
++        for queue in self.shared.waiters.lock().unwrap().values_mut() {
++            for w in queue.drain(..) {
++                self.shared.fence_handler.call(w.fence);
++            }
 +        }
 +        for &(p, n) in &self.maps {
 +            // SAFETY: our own mappings.
@@ -592,7 +612,7 @@ index 0000000..d380c20
 +            shared: Arc::new(Shared {
 +                lib: self.lib,
 +                blobs: Mutex::new(BTreeMap::new()),
-+                waiters: Mutex::new(Vec::new()),
++                waiters: Mutex::new(BTreeMap::new()),
 +                host: Mutex::new(0),
 +                fence_handler,
 +            }),
@@ -617,9 +637,33 @@ index 0000000..d380c20
 +    }
 +    unsafe impl Send for Fake {}
 +    static FAKE: Mutex<Option<Fake>> = Mutex::new(None);
-+    static PROGRESS: AtomicU64 = AtomicU64::new(0);
++    /// done_seq per reply slot (0..64) and the event queue (64)
++    static PROGRESS: [AtomicU64; 65] = [const { AtomicU64::new(0) }; 65];
 +    static KICKS: AtomicU64 = AtomicU64::new(0);
 +    const SLOT: u32 = 5;
++    /// The stand-in executor is process-global: tests that start it run one at a time.
++    static SERIAL: Mutex<()> = Mutex::new(());
++
++    fn serial() -> std::sync::MutexGuard<'static, ()> {
++        let g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
++        for p in &PROGRESS {
++            p.store(0, Ordering::SeqCst);
++        }
++        KICKS.store(0, Ordering::SeqCst);
++        g
++    }
++
++    /// The executor finishes the next call on `slot`: publish progress, then wake (its order).
++    fn reply(slot: u32) {
++        let (ops, ctx) = {
++            let f = FAKE.lock().unwrap();
++            let f = f.as_ref().unwrap();
++            (f.ops, f.ctx)
++        };
++        PROGRESS[slot as usize].fetch_add(1, Ordering::SeqCst);
++        // SAFETY: ops/ctx are the live context's, as for the real executor.
++        unsafe { ((*ops).wake)(ctx, slot) };
++    }
 +
 +    unsafe extern "C" fn create(ring: *mut c_void, ops: *const WmtrHostOps, ctx: *mut c_void) -> *mut c_void {
 +        *FAKE.lock().unwrap() = Some(Fake { ops, ctx, ring });
@@ -628,23 +672,13 @@ index 0000000..d380c20
 +    /// One kick = one reply on SLOT: publish progress, then wake (the real executor's order).
 +    unsafe extern "C" fn kick(_h: *mut c_void) {
 +        KICKS.fetch_add(1, Ordering::SeqCst);
-+        let (ops, ctx) = {
-+            let f = FAKE.lock().unwrap();
-+            let f = f.as_ref().unwrap();
-+            (f.ops, f.ctx)
-+        };
-+        PROGRESS.fetch_add(1, Ordering::SeqCst);
-+        ((*ops).wake)(ctx, SLOT);
++        reply(SLOT);
 +    }
 +    unsafe extern "C" fn destroy(_h: *mut c_void) {
 +        *FAKE.lock().unwrap() = None;
 +    }
 +    unsafe extern "C" fn progress(_h: *mut c_void, slot: u32) -> u64 {
-+        if slot == SLOT {
-+            PROGRESS.load(Ordering::SeqCst)
-+        } else {
-+            0
-+        }
++        PROGRESS.get(slot as usize).map_or(0, |p| p.load(Ordering::SeqCst))
 +    }
 +
 +    fn component(done: Arc<Mutex<Vec<u64>>>) -> (Wmtr, RutabagaFenceHandler) {
@@ -687,6 +721,7 @@ index 0000000..d380c20
 +
 +    #[test]
 +    fn wait_fence_completes_on_reply() {
++        let _serial = serial();
 +        let done = Arc::new(Mutex::new(Vec::new()));
 +        let (comp, handler) = component(done.clone());
 +        assert_eq!(comp.get_capset(RUTABAGA_CAPSET_WMTR, 1).len(), 16);
@@ -738,5 +773,42 @@ index 0000000..d380c20
 +        assert!(ctx.submit_cmd(&mut cmd(9, 0, 0), &[]).is_err());
 +        // KICK without an executor is ignored
 +        ctx.submit_cmd(&mut cmd(WMTR_VGPU_KICK, 0, 0), &[]).unwrap();
++    }
++
++    /// Slots 0 and 62 share ring 1. A ring is an in-order timeline, so a satisfied WAIT (and a
++    /// fence without one) must not complete ahead of an earlier fence that is still pending:
++    /// signalling it would retire the pending one before its reply exists.
++    #[test]
++    fn shared_ring_completes_in_order() {
++        let _serial = serial();
++        let done = Arc::new(Mutex::new(Vec::new()));
++        let (comp, handler) = component(done.clone());
++        let mut ctx = comp.create_context(3, RUTABAGA_CAPSET_WMTR, None, handler).unwrap();
++        ctx.context_create_blob(1, blob(0, 65536), None).unwrap();
++        ctx.submit_cmd(&mut cmd(WMTR_VGPU_RING, 0, 0), &[]).unwrap();
++
++        ctx.submit_cmd(&mut cmd(WMTR_VGPU_WAIT, 0, 1), &[]).unwrap();
++        ctx.context_create_fence(fence(10, 1)).unwrap();
++        // slot 62 seq 0 already holds, but ring 1 still has fence 10 pending
++        ctx.submit_cmd(&mut cmd(WMTR_VGPU_WAIT, 62, 0), &[]).unwrap();
++        ctx.context_create_fence(fence(11, 1)).unwrap();
++        ctx.context_create_fence(fence(12, 1)).unwrap();
++        // the event queue and slots >= 64 share ring 63 the same way
++        ctx.submit_cmd(&mut cmd(WMTR_VGPU_WAIT, 64, 1), &[]).unwrap();
++        ctx.context_create_fence(fence(20, 63)).unwrap();
++        ctx.submit_cmd(&mut cmd(WMTR_VGPU_WAIT, 70, 0), &[]).unwrap();
++        ctx.context_create_fence(fence(21, 63)).unwrap();
++        // another ring is independent
++        ctx.context_create_fence(fence(30, 2)).unwrap();
++        assert_eq!(*done.lock().unwrap(), vec![30]);
++
++        // a reply on another slot of the ring changes nothing
++        reply(62);
++        assert_eq!(*done.lock().unwrap(), vec![30]);
++        reply(0);
++        assert_eq!(*done.lock().unwrap(), vec![30, 10, 11, 12]);
++        reply(64);
++        assert_eq!(*done.lock().unwrap(), vec![30, 10, 11, 12, 20, 21]);
++        drop(ctx);
 +    }
 +}
