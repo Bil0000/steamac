@@ -21,6 +21,7 @@
 #include "wivrn/wivrn_session.h"
 
 #include <algorithm>
+#include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <cstdio>
@@ -122,6 +123,36 @@ static double pct(std::vector<double> v, double q)
 	return v[std::min(v.size() - 1, size_t(q * (v.size() - 1) + 0.5))];
 }
 
+// Waits for a condition another thread brings about (the link thread, the exporter's reader, the session): returns
+// as soon as it holds; the bound only ends a run in which it never does.
+template <typename F>
+static bool wait_until(F && cond, std::chrono::milliseconds bound = std::chrono::seconds(10))
+{
+	auto deadline = std::chrono::steady_clock::now() + bound;
+	while (not cond())
+	{
+		if (std::chrono::steady_clock::now() >= deadline)
+			return false;
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	return true;
+}
+
+// The exporter for whoever asks for it besides the producer. The producer takes vr_mutex again right after each
+// frame; a plain lock_guard here can lose that race for seconds on a busy machine (the mutex is not fair), with the
+// headset's receive thread blocked in on_decoded meanwhile. A waiter announces itself and the producer stays out
+// until it has had its turn.
+struct LinkTurn
+{
+	std::unique_lock<std::mutex> lock;
+	LinkTurn(std::mutex & m, std::atomic<int> & waiters)
+	{
+		++waiters;
+		lock = std::unique_lock(m);
+		--waiters;
+	}
+};
+
 // WiVRn parameter invariants (as m1_pipeline_test): odd length, covers the source, output count = stream size
 static bool foveation_consistent(const std::vector<uint16_t> & v, uint32_t src, uint32_t out)
 {
@@ -172,6 +203,7 @@ int main()
 		REQUIRE(vr);
 
 		std::mutex m, vr_mutex;
+		std::atomic<int> vr_waiters{0}; // LinkTurn
 		std::map<uint64_t, int64_t> submit_ns;
 		std::vector<double> latency_ms;
 		std::atomic<bool> stop{false};
@@ -182,6 +214,11 @@ int main()
 			uint64_t last_frame = 0;
 			while (not stop)
 			{
+				if (vr_waiters)
+				{
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					continue;
+				}
 				std::lock_guard vr_lock(vr_mutex);
 				// what the guest runtime's WaitGetPoses does (guest/vr, M2): SVR_FRAME through the exporter's query, which
 				// answers from the host's newest VRL_TIMING / VRL_POSES / VRL_STATE
@@ -239,7 +276,7 @@ int main()
 		// guest protocol through the link while a headset is connected (once): state, input mapping, haptics
 		bool guest_checked = false;
 		auto check_guest = [&] {
-			std::lock_guard vr_lock(vr_mutex);
+			LinkTurn turn(vr_mutex, vr_waiters);
 			svr_hello_rep hello{};
 			reinterpret_cast<svr_hello_req &>(hello) = {{SVR_HELLO, sizeof(svr_hello_req)}, SVR_VERSION, uint32_t(getpid()), "vr_e2e"};
 			CHECK(wmtr_vr_query(vr, &hello, sizeof hello) == 0);
@@ -251,31 +288,25 @@ int main()
 			      idx == SVR_IN_TRIGGER_VALUE);
 			InputValue iv{uint32_t(wivrn::device_id::RIGHT_TRIGGER_VALUE), 0.75f, now_ns()};
 			pipeline->on_input(std::span(&iv, 1));
-			bool input_seen = false;
-			for (int i = 0; i < 100 and not input_seen; i++)
-			{
+			// the guest's next SVR_FRAME answer (its view of headset and input)
+			auto guest_frame = [&] {
 				svr_frame_rep fr{};
 				reinterpret_cast<svr_frame_req &>(fr) = {{SVR_FRAME, sizeof(svr_frame_req)}, 0};
-				input_seen = wmtr_vr_query(vr, &fr, sizeof fr) == 0 and fr.input[1][SVR_IN_TRIGGER_VALUE] == 0.75f;
-				std::this_thread::sleep_for(std::chrono::milliseconds(2));
-			}
-			CHECK(input_seen); // WiVRn input -> VRL_INPUT -> the guest's snapshot
+				CHECK(wmtr_vr_query(vr, &fr, sizeof fr) == 0);
+				return fr;
+			};
+			// WiVRn input -> VRL_INPUT -> the guest's snapshot
+			CHECK(wait_until([&] { return guest_frame().input[1][SVR_IN_TRIGGER_VALUE] == 0.75f; }));
 			// A new game context has no cached state; HELLO must replay both snapshots.
 			int next_fd = dup(sv[0]);
 			REQUIRE(next_fd >= 0);
 			wmtr_vr_destroy(vr);
 			vr = wmtr_vr_create(next_fd, name);
 			REQUIRE(vr);
-			bool replayed = false;
-			for (int i = 0; i < 100 and not replayed; ++i)
-			{
-				svr_frame_rep fr{};
-				reinterpret_cast<svr_frame_req &>(fr) = {{SVR_FRAME, sizeof(svr_frame_req)}, 0};
-				replayed = wmtr_vr_query(vr, &fr, sizeof fr) == 0 and fr.connected and
-				           fr.input[1][SVR_IN_TRIGGER_VALUE] == 0.75f;
-				std::this_thread::sleep_for(std::chrono::milliseconds(2));
-			}
-			CHECK(replayed);
+			CHECK(wait_until([&] {
+				auto fr = guest_frame();
+				return fr.connected and fr.input[1][SVR_IN_TRIGGER_VALUE] == 0.75f;
+			}));
 
 			union
 			{
@@ -283,8 +314,7 @@ int main()
 				svr_ack ack;
 			} hq{.req = {{SVR_HAPTIC, sizeof(svr_haptic_req)}, 1, 0.05f, 0, 0.5f}};
 			CHECK(wmtr_vr_query(vr, &hq, sizeof hq) == 0 and hq.ack.status == 0);
-			for (int i = 0; i < 100 and pipeline->haptics_routed() == 0; i++)
-				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			CHECK(wait_until([&] { return pipeline->haptics_routed() != 0; }));
 			CHECK(pipeline->haptics_routed() == 1); // SVR_HAPTIC -> VRL_HAPTICS -> VrSession::haptics
 			guest_checked = true;
 		};
@@ -339,14 +369,17 @@ int main()
 		printf("identity: submit -> decoded (both eyes) ms p50 %.2f p99 %.2f max %.2f (%zu frames)\n", pct(latency_ms, .5),
 		       pct(latency_ms, .99), pct(latency_ms, 1), latency_ms.size());
 
-		for (int i = 0; i < 100 and session.connected(); ++i)
-			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		{
-			std::lock_guard vr_lock(vr_mutex);
-			svr_frame_rep fr{};
-			reinterpret_cast<svr_frame_req &>(fr) = {{SVR_FRAME, sizeof(svr_frame_req)}, 0};
-			CHECK(wmtr_vr_query(vr, &fr, sizeof fr) == 0);
-			CHECK(not fr.connected and fr.input[1][SVR_IN_TRIGGER_VALUE] == 0);
+			// The headset left: the guest sees no headset and no held input. The session reports the disconnect before
+			// its listener has sent VRL_STATE / VRL_INPUT (it tears the encoders down in between), so the guest's own
+			// view is what is waited for.
+			LinkTurn turn(vr_mutex, vr_waiters);
+			CHECK(wait_until([&] {
+				svr_frame_rep fr{};
+				reinterpret_cast<svr_frame_req &>(fr) = {{SVR_FRAME, sizeof(svr_frame_req)}, 0};
+				return wmtr_vr_query(vr, &fr, sizeof fr) == 0 and not fr.connected and fr.input[1][SVR_IN_TRIGGER_VALUE] == 0;
+			}));
+			CHECK(not session.connected());
 		}
 		{
 			std::lock_guard l(m);
@@ -387,8 +420,7 @@ int main()
 		// 3. teardown as steamac-vm does it: closing the exporter closes the link, the host sees it
 		wmtr_vr_destroy(vr);
 		int64_t t_close = now_ns();
-		for (int i = 0; i < 500 and not pipeline->peer_closed(); ++i)
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		wait_until([&] { return pipeline->peer_closed(); });
 		printf("link close seen by the host after %.1f ms\n", (now_ns() - t_close) / 1e6);
 		CHECK(pipeline->peer_closed());
 		session.stop();
