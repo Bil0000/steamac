@@ -351,6 +351,27 @@ int main()
 		sender2.join();
 		CHECK(sends_after_close >= 50 and not srv.session.connected());
 	}
+	{
+		// 8. an IPv4 headset (the dual-stack listener sees a v4-mapped peer): its UDP stream handshake must be taken as
+		// from the control peer (macOS reports the IPv4 sender of the AF_INET6 stream socket as a sockaddr_in), with
+		// encryption off and with PIN pairing after the user took a while to type the PIN
+		Server srv({.encryption = WivrnConfig::Encryption::disabled});
+		auto r = run_fake_headset({.port = srv.session.port(), .host = "127.0.0.1", .frames = 10, .timeout_ms = 15000});
+		print("ipv4", r);
+		CHECK(r.error.empty() and r.handshake_state == "encryption_disabled" and r.control_shards == 0);
+		CHECK(r.decoded[0] >= 10 and r.decoded[1] >= 10);
+		srv.wait_disconnect();
+	}
+	{
+		Server srv({.encryption = WivrnConfig::Encryption::pairing, .pin = "271828", .known_keys_file = keys_file});
+		auto r = run_fake_headset({.port = srv.session.port(), .host = "127.0.0.1", .pin_delay_ms = 1500, .frames = 10,
+		                           .timeout_ms = 15000, .pin = "271828"});
+		print("ipv4 pairing", r);
+		CHECK(r.error.empty() and r.handshake_state == "pin_needed" and r.encrypted and r.control_shards == 0);
+		CHECK(r.decoded[0] >= 10 and r.decoded[1] >= 10);
+		CHECK(srv.session.stats().paired == 1);
+		srv.wait_disconnect();
+	}
 	std::filesystem::remove_all(dir_template);
 	test_audio();
 	return test_result("loopback");

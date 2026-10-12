@@ -48,8 +48,13 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 		sockaddr_in6 addr{};
 		addr.sin6_family = AF_INET6;
 		addr.sin6_port = htons(o.port);
-		addr.sin6_addr = in6addr_loopback;
-		control_socket control(addr);
+		sockaddr_in addr4{};
+		addr4.sin_family = AF_INET;
+		addr4.sin_port = htons(o.port);
+		bool ipv4 = inet_pton(AF_INET, o.host.c_str(), &addr4.sin_addr) == 1;
+		if (not ipv4 and inet_pton(AF_INET6, o.host.c_str(), &addr.sin6_addr) != 1)
+			throw std::runtime_error("bad host address " + o.host);
+		control_socket control = ipv4 ? control_socket(addr4) : control_socket(addr);
 
 		auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(o.timeout_ms);
 		bool from_control = false; // the last packet receive() returned came over TCP
@@ -108,6 +113,14 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 			case cs::encryption_disabled:
 				break;
 			case cs::pin_needed: {
+				// the client's PIN prompt: wait for the user while watching the control socket (lobby.cpp pin_enter)
+				for (auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(o.pin_delay_ms);
+				     std::chrono::steady_clock::now() < until;)
+				{
+					pollfd pfd{.fd = control.get_fd(), .events = 0};
+					if (::poll(&pfd, 1, 50) > 0 and (pfd.revents & (POLLHUP | POLLERR)))
+						throw std::runtime_error("server closed the connection during PIN entry");
+				}
 				crypto::smp pin_check;
 				auto msg1 = pin_check.step1(o.pin);
 				control.send(fh::pin_check_1{msg1});
@@ -134,11 +147,25 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 		std::unique_ptr<stream_socket> stream;
 		if (h.stream_port > 0)
 		{
-			stream = std::make_unique<stream_socket>();
+			if (ipv4)
+			{
+				// The Android client connects its AF_INET6 UDP socket to the sockaddr_in (Linux maps it to IPv4);
+				// macOS refuses that, so use an AF_INET socket: same packets on the wire.
+				int fd = socket(AF_INET, SOCK_DGRAM, 0);
+				if (fd < 0)
+					throw std::system_error(errno, std::system_category());
+				stream = std::make_unique<stream_socket>(fd);
+			}
+			else
+				stream = std::make_unique<stream_socket>();
 			if (sec)
 				stream->set_aes_key_and_ivs(sec->stream_key, sec->stream_iv_header_to_headset, sec->stream_iv_header_from_headset);
 			addr.sin6_port = htons(h.stream_port);
-			stream->connect(addr);
+			addr4.sin_port = htons(h.stream_port);
+			if (ipv4)
+				stream->connect(addr4);
+			else
+				stream->connect(addr);
 			stream->send(fh::handshake{});
 		}
 		else

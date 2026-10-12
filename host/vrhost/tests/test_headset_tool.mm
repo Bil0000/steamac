@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // vrhost-test-headset: the loopback test headset (fake_headset.cpp, WiVRn v26.9 client sequence + VideoToolbox decode)
 // as a tool, for checking a running steamac-vrhost on this Mac without a real headset (docs/vr.md):
-//   vrhost-test-headset [--port N] [--pin NNNNNN] [--frames N] [--size WxH]
+//   vrhost-test-headset [--host ADDR] [--port N] [--pin NNNNNN] [--pin-delay MS] [--frames N] [--size WxH]
 // Reports decoded frames per eye, frame numbers read from the image (d3d11bench --vr / test pattern blocks; readable
 // when the stream size equals the eye size, i.e. no foveation), the eyes' colour difference (d3d11bench --vr: left
 // red, right green), the foveation parameters received, and frame arrival intervals. Exit 0 when frames decoded,
@@ -48,6 +48,10 @@ int main(int argc, char ** argv)
 		std::string a = argv[i], v = argv[i + 1];
 		if (a == "--port")
 			o.port = std::stoi(v);
+		else if (a == "--host")
+			o.host = v;
+		else if (a == "--pin-delay")
+			o.pin_delay_ms = std::stoi(v);
 		else if (a == "--pin")
 			o.pin = v;
 		else if (a == "--frames")
@@ -60,7 +64,7 @@ int main(int argc, char ** argv)
 		}
 		else
 		{
-			fprintf(stderr, "usage: vrhost-test-headset [--port N] [--pin NNNNNN] [--frames N] [--size WxH]\n");
+			fprintf(stderr, "usage: vrhost-test-headset [--host ADDR] [--port N] [--pin NNNNNN] [--pin-delay MS] [--frames N] [--size WxH]\n");
 			return 2;
 		}
 	}

@@ -15,6 +15,10 @@
 struct FakeHeadsetOptions
 {
 	int port = 9757;
+	// Server address. An IPv4 literal connects like the WiVRn client does for an IPv4 server address (AF_INET control
+	// and stream sockets); the dual-stack server then sees a v4-mapped peer. Default: IPv6 loopback.
+	std::string host = "::1";
+	int pin_delay_ms = 0; // the "user" types the PIN this long after the PIN prompt (the client polls the socket meanwhile)
 	uint64_t protocol_version = 0; // 0 = ours
 	int frames = 60;              // decoded frames wanted per eye
 	int64_t drop_frame = -1;      // ignore all shards of this frame on stream 0 and report it lost
