@@ -104,6 +104,11 @@ The two VideoToolbox sessions share one media engine (about 350 Mpixel/s of HEVC
 parallel saves little. Quest 3's default stream size at 90 Hz does not fit; 72 Hz at about 1440×1584 per eye does. The
 stream size is the headset's request; `--size WxH` overrides it.
 
+## Real Linux client test
+
+The reproducible Fedora/x86 real-client procedure and current blockers are tracked in [`vr-testing.md`](vr-testing.md).
+It is not yet verified end-to-end; the fake-headset loopback results above are not a substitute.
+
 ## Testing with a headset
 
 The client must be **WiVRn v26.9** exactly: WiVRn refuses any other protocol version (the headset greys the server
