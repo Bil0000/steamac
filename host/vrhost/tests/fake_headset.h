@@ -53,6 +53,7 @@ struct FakeHeadsetResult
 	std::array<int, 2> decoded{};       // frames decoded per eye
 	std::array<int, 2> index_mismatch{}; // decoded frame index != frame_idx
 	std::array<int, 2> idr{};            // IDR access units received
+	std::array<int, 2> index_gaps{};     // frame indices skipped on the wire (reported lost, as the WiVRn client does)
 	int idr_after_drop = 0;              // IDRs on stream 0 after the dropped frame
 	int decoded_after_drop = 0;          // stream 0 frames decoded after the drop
 	int shards = 0, max_shard_bytes = 0;

@@ -276,6 +276,42 @@ struct WivrnSession::impl
 	// pacing: WiVRn's pacer, fed by the headset's feedback packets
 	wivrn::pacer pacer{1'000'000'000 / 72};
 
+	// Video frame index on the wire. The headset expects consecutive indices: a skipped one is reported as a lost
+	// frame ("not sent because no shard was received") and answered with an IDR. The pacer's frame ids are not
+	// consecutive on the wire when the producer asks for a frame timing and then submits nothing for it (a game that
+	// misses a frame), so sent frames are numbered separately, starting at the first frame's id, and the headset's
+	// feedback is mapped back to the pacer's id.
+	struct WireIndex
+	{
+		std::mutex mutex;
+		bool started = false;
+		uint64_t next = 0;
+		std::array<std::pair<uint64_t, uint64_t>, 256> sent{}; // wire index -> pacer frame id
+
+		void reset()
+		{
+			std::lock_guard l(mutex);
+			started = false;
+		}
+		uint64_t assign(uint64_t frame_id)
+		{
+			std::lock_guard l(mutex);
+			if (not started)
+				next = frame_id;
+			started = true;
+			sent[next % sent.size()] = {next, frame_id};
+			return next++;
+		}
+		std::optional<uint64_t> frame_id(uint64_t wire)
+		{
+			std::lock_guard l(mutex);
+			auto [w, id] = sent[wire % sent.size()];
+			if (not started or w != wire)
+				return std::nullopt;
+			return id;
+		}
+	} wire_index;
+
 	// encryption / pairing
 	std::unique_ptr<KnownKeys> keys;
 	mutable std::mutex crypto_mutex; // cfg.encryption + pin: WivrnSession::set_pairing() changes them at run time
@@ -293,7 +329,7 @@ struct WivrnSession::impl
 	void handshake(control_socket & ctl, stream_socket & strm, fh::headset_info_packet & out);
 	void on_headset_info(const fh::headset_info_packet &);
 	void handle(fh::packets && packet);
-	void send_frame_eye(int eye, const Frame & f, CVPixelBufferRef buf);
+	void send_frame_eye(int eye, const Frame & f, uint64_t wire, CVPixelBufferRef buf);
 };
 
 // Throwing receive helper for the handshake phase.
@@ -524,6 +560,7 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	refresh = h.preferred_refresh_rate;
 	pacer.set_frame_duration(uint64_t(1e9 / h.preferred_refresh_rate));
 	pacer.reset();
+	wire_index.reset();
 
 	// HEVC when the client lists it (all Quest/Pico/Frame clients do), else H.264.
 	bool hevc = std::ranges::contains(h.codecs, Codec::hevc);
@@ -645,7 +682,12 @@ void WivrnSession::impl::handle(fh::packets && packet)
 			        stats.feedback++;
 			        if (pkt.received_from_decoder and pkt.received_first_packet)
 				        stats.last_feedback_decode_ns = pkt.received_from_decoder - pkt.received_first_packet;
-			        pacer.on_feedback(pkt, clock.offset());
+			        if (auto id = wire_index.frame_id(pkt.frame_index))
+			        {
+				        auto paced = pkt;
+				        paced.frame_index = *id;
+				        pacer.on_feedback(paced, clock.offset());
+			        }
 			        if (pkt.stream_index < 2 and idr[pkt.stream_index].on_feedback(pkt.frame_index, pkt.sent_to_decoder != 0))
 			        {
 				        stats.idr_requests++;
@@ -793,7 +835,7 @@ void WivrnSession::impl::accept_loop()
 	}
 }
 
-void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferRef buf)
+void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, uint64_t wire, CVPixelBufferRef buf)
 {
 	VtEncoder * enc;
 	bool idr_frame;
@@ -806,7 +848,7 @@ void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferR
 			return;
 		width = uint16_t(enc->config().width);
 		height = uint16_t(enc->config().height);
-		idr_frame = idr[eye].frame_is_idr(f.frame_id);
+		idr_frame = idr[eye].frame_is_idr(wire);
 		out = enc->encode(buf, f.display_time, idr_frame);
 	}
 	if (out.annexb.empty())
@@ -815,7 +857,7 @@ void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, CVPixelBufferR
 
 	th::video_stream_data_shard shard{};
 	shard.stream_item_idx = uint8_t(eye);
-	shard.frame_idx = f.frame_id;
+	shard.frame_idx = wire;
 	shard.shard_idx = 0;
 	th::video_stream_data_shard::view_info_t vi{};
 	vi.display_time = clock.to_headset(f.display_time);
@@ -1045,6 +1087,7 @@ void WivrnSession::submit(const Frame & f)
 		return;
 	// "present" for the pacer = the frame reaches the encoder (WiVRn marks it after the compositor's GPU submit).
 	p->pacer.mark_timing_point(COMP_TARGET_TIMING_POINT_SUBMIT_END, int64_t(f.frame_id), now_ns());
+	uint64_t wire = p->wire_index.assign(f.frame_id);
 	std::array<CVPixelBufferRef, 2> buf{};
 	for (int eye = 0; eye < 2; ++eye)
 		if (f.eye[eye].surface and CVPixelBufferCreateWithIOSurface(nullptr, f.eye[eye].surface, nullptr, &buf[eye]) != kCVReturnSuccess)
@@ -1056,7 +1099,7 @@ void WivrnSession::submit(const Frame & f)
 		try
 		{
 			if (buf[1])
-				p->send_frame_eye(1, f, buf[1]);
+				p->send_frame_eye(1, f, wire, buf[1]);
 		}
 		catch (...)
 		{
@@ -1066,7 +1109,7 @@ void WivrnSession::submit(const Frame & f)
 	try
 	{
 		if (buf[0])
-			p->send_frame_eye(0, f, buf[0]);
+			p->send_frame_eye(0, f, wire, buf[0]);
 	}
 	catch (...)
 	{

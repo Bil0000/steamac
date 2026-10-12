@@ -231,6 +231,22 @@ int main()
 	}
 
 	{
+		// 1c. a producer that misses frames (asks for a frame timing, submits nothing): the frame indices on the
+		// wire stay consecutive, so the headset reports no lost frame and no IDR is requested (the real WiVRn client
+		// answered every skipped index with an IDR request: 990 requests in 75 s of a 25 fps game on a 60 Hz headset)
+		Server srv({.encryption = WivrnConfig::Encryption::disabled});
+		srv.skip_every = 3;
+		auto r = run_fake_headset({.port = srv.session.port(), .frames = 90, .decode_ns = 8'000'000,
+		                           .display_period_ns = 13'888'889, .display_phase_ns = 3'300'000});
+		print("skipping", r);
+		CHECK(r.error.empty());
+		CHECK(r.decoded[0] >= 90 and r.decoded[1] >= 90);
+		CHECK(r.index_gaps[0] == 0 and r.index_gaps[1] == 0);
+		CHECK(srv.session.stats().idr_requests == 0);
+		CHECK(r.idr[0] == 1 and r.idr[1] == 1);
+	}
+
+	{
 		// 1b. pacing from the headset's feedback: the headset decodes in 8 ms and blits on its own 72 Hz vsync grid
 		// (phase 3.3 ms); WiVRn's pacer must phase-lock the announced display times to that grid.
 		Server srv({.encryption = WivrnConfig::Encryption::disabled});

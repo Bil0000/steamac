@@ -36,6 +36,8 @@ struct Server
 	WivrnSession session;
 	std::unique_ptr<AudioBridge> audio; // optional, wraps the session listener as in steamac-vrhost --audio-fd
 	std::atomic<bool> stop{false};
+	std::atomic<int> skip_every{0}; // > 0: every n-th frame timing gets no submit
+	int timings = 0;
 	std::thread producer;
 
 	static WivrnConfig local(WivrnConfig cfg)
@@ -66,6 +68,8 @@ struct Server
 					for (auto & b: bufs)
 						b = make_nv12(info->eye_width, info->eye_height);
 				FrameTiming t = session.next_frame_timing();
+				if (skip_every and ++timings % skip_every == 0)
+					continue; // a game that misses a frame: timing asked, nothing submitted
 				Frame f;
 				f.frame_id = t.frame_id;
 				f.display_time = t.predicted_display;

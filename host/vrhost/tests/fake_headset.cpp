@@ -167,6 +167,7 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 		std::array<std::map<uint64_t, pending_frame>, 2> frames;
 		std::array<bool, 2> need_idr{true, true};
 		bool dropped = false;
+		std::array<std::optional<uint64_t>, 2> last_frame; // newest frame index seen per stream
 		auto last_tracking = std::chrono::steady_clock::now();
 		float t = 0;
 
@@ -321,6 +322,16 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 					}
 					continue;
 				}
+				// WiVRn's shard accumulator: a newer frame's shard ends the wait for the indices before it, which are
+				// reported as "not sent because no shard was received"
+				if (last_frame[idx] and s->frame_idx > *last_frame[idx] + 1)
+					for (uint64_t lost = *last_frame[idx] + 1; lost < s->frame_idx and lost < *last_frame[idx] + 9; ++lost)
+					{
+						res.index_gaps[idx]++;
+						send_feedback(idx, lost, false);
+					}
+				if (not last_frame[idx] or s->frame_idx > *last_frame[idx])
+					last_frame[idx] = s->frame_idx;
 				first_packet[idx].try_emplace(s->frame_idx, hs_now());
 				if (first_packet[idx].size() > 64)
 					first_packet[idx].erase(first_packet[idx].begin());

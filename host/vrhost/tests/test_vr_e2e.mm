@@ -232,6 +232,10 @@ int main()
 		});
 
 		int bad_colour = 0, checked = 0, wrong_index = 0, unreadable = 0;
+		// The index on the wire counts sent frames; the number in the picture is the pacer's id. They start equal and
+		// the picture's runs ahead by one for every frame timing the producer got without a frame reaching the host
+		// (wmtr drops a submit while the previous blit is in flight): the lead never shrinks within a connection.
+		std::array<int64_t, 2> lead{};
 		// guest protocol through the link while a headset is connected (once): state, input mapping, haptics
 		bool guest_checked = false;
 		auto check_guest = [&] {
@@ -296,12 +300,19 @@ int main()
 			checked++;
 			if (read < 0)
 				unreadable++;
-			else if (read != int64_t(frame & 0xffff) and wrong_index++ < 3)
-				fprintf(stderr, "eye %d frame %llu: carries frame %lld\n", eye, (unsigned long long)frame, (long long)read);
+			else
+			{
+				int64_t ahead = (read - int64_t(frame & 0xffff)) & 0xffff;
+				if ((ahead < lead[eye] or ahead > lead[eye] + 100) and wrong_index++ < 3)
+					fprintf(stderr, "eye %d frame %llu: carries frame %lld (lead was %lld)\n", eye, (unsigned long long)frame,
+					        (long long)read, (long long)lead[eye]);
+				else
+					lead[eye] = ahead;
+			}
 			if (not ok and bad_colour++ < 3)
 				fprintf(stderr, "eye %d frame %llu: centre Cb %d Cr %d\n", eye, (unsigned long long)frame, cb, cr);
-			if (eye == 1 and submit_ns.count(frame))
-				latency_ms.push_back((now_ns() - submit_ns[frame]) / 1e6);
+			if (eye == 1 and submit_ns.count(frame + lead[eye]))
+				latency_ms.push_back((now_ns() - submit_ns[frame + lead[eye]]) / 1e6);
 		};
 
 		// 1. stream size = eye size: identity foveation, frame numbers readable after the full path
@@ -340,6 +351,7 @@ int main()
 		{
 			std::lock_guard l(m);
 			bad_colour = checked = wrong_index = unreadable = 0;
+			lead = {};
 			latency_ms.clear();
 		}
 
