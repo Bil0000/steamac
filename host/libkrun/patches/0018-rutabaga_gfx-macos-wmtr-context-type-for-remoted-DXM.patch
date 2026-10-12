@@ -28,6 +28,10 @@ transport:
   fences of a ring complete strictly in FIFO order: one whose WAIT
   already holds, or that has no WAIT, waits behind an earlier pending
   one; pending fences complete when the context is destroyed;
+- teardown takes the executor handle out under its lock before
+  wmtr_host_destroy, so a wake during destroy never reaches the executor
+  being freed; the library runs no callback after wmtr_host_destroy
+  returns, and the context frees its state and mappings only then;
 - the capset id is below 32 because VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs
   reports a 32-bit mask; no stock rutabaga capset uses 30.
 
@@ -48,15 +52,16 @@ events and slot 70) later fences wait for an earlier pending one and
 complete with it, in order; reused blob ids, ids at or above 1024 (1 <<
 32, u64::MAX) and blobs over max_blob are rejected and leave the
 existing blob in place; a library without wmtr_host_abi_version, with
-another version or with part of the API is refused. virtio::gpu:
+another version or with part of the API is refused; a wake delivered
+while the executor is destroyed does not call into it. virtio::gpu:
 num_capsets stays 5 without STEAMAC_WMTR.
 ---
  src/devices/src/virtio/gpu/device.rs   |  23 +-
  src/rutabaga_gfx/src/lib.rs            |   9 +
  src/rutabaga_gfx/src/rutabaga_core.rs  |  18 +-
  src/rutabaga_gfx/src/rutabaga_utils.rs |   3 +
- src/rutabaga_gfx/src/wmtr.rs           | 690 +++++++++++++++++++++++++
- 5 files changed, 740 insertions(+), 3 deletions(-)
+ src/rutabaga_gfx/src/wmtr.rs           | 731 +++++++++++++++++++++++++
+ 5 files changed, 781 insertions(+), 3 deletions(-)
  create mode 100644 src/rutabaga_gfx/src/wmtr.rs
 
 diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
@@ -202,10 +207,10 @@ index 085912c..3ccfd93 100644
  /// Rutabaga handle types (memory and sync in same namespace)
 diff --git a/src/rutabaga_gfx/src/wmtr.rs b/src/rutabaga_gfx/src/wmtr.rs
 new file mode 100644
-index 0000000..6c20c1b
+index 0000000..048ca1f
 --- /dev/null
 +++ b/src/rutabaga_gfx/src/wmtr.rs
-@@ -0,0 +1,690 @@
+@@ -0,0 +1,731 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
 +//! wmtr: a virtio-gpu context type that carries DXMT's winemetal unix calls from a guest process
@@ -260,6 +265,10 @@ index 0000000..6c20c1b
 +const WMTR_HOST_ABI_VERSION: u32 = 1;
 +
 +/// Callbacks the context gives the executor (`struct wmtr_host_ops` in wmtr_host.h, ABI 1).
++///
++/// Contract for the library: callbacks may run on any executor or dispatch thread until
++/// `wmtr_host_destroy` returns, and never after; `wmtr_host_destroy` stops and joins everything
++/// that could call them. `wmtr_host_progress` must not call back into the ops.
 +#[repr(C)]
 +struct WmtrHostOps {
 +    /// Host address and size of blob `blob` of this context, or null if it does not exist.
@@ -391,13 +400,15 @@ index 0000000..6c20c1b
 +}
 +
 +impl Shared {
++    /// The executor's progress on `slot`, 0 once teardown has begun. The handle lock is held
++    /// across the call, so Drop cannot destroy the executor underneath it.
 +    fn progress(&self, slot: u32) -> u64 {
-+        let host = *self.host.lock().unwrap();
-+        if host == 0 {
++        let host = self.host.lock().unwrap();
++        if *host == 0 {
 +            return 0;
 +        }
-+        // SAFETY: host is a live executor handle.
-+        unsafe { (self.lib.progress)(host as *mut c_void, slot) }
++        // SAFETY: host is a live executor handle: Drop zeroes it under this lock before destroy.
++        unsafe { (self.lib.progress)(*host as *mut c_void, slot) }
 +    }
 +
 +    /// Completes the fences at the head of `queue` whose condition holds, in order, stopping at
@@ -572,11 +583,14 @@ index 0000000..6c20c1b
 +
 +impl Drop for WmtrContext {
 +    fn drop(&mut self) {
-+        let h = self.host();
++        // Retire the handle under the lock first: a wake from an executor or dispatch thread
++        // during destroy then sees 0 and never calls into the executor being freed.
++        let h = std::mem::take(&mut *self.shared.host.lock().unwrap()) as *mut c_void;
 +        if !h.is_null() {
-+            // SAFETY: live executor; destroy joins its thread.
++            // SAFETY: live executor, no longer reachable through `shared`. Once destroy returns
++            // no callback runs (the WmtrHostOps contract), so `ops`, `shared` and the blob
++            // mappings can be released below.
 +            unsafe { (self.shared.lib.destroy)(h) };
-+            *self.shared.host.lock().unwrap() = 0;
 +        }
 +        // complete anything still waiting (in ring order) so guest pollers do not hang
 +        for queue in self.shared.waiters.lock().unwrap().values_mut() {
@@ -673,6 +687,9 @@ index 0000000..6c20c1b
 +    /// done_seq per reply slot (0..64) and the event queue (64)
 +    static PROGRESS: [AtomicU64; 65] = [const { AtomicU64::new(0) }; 65];
 +    static KICKS: AtomicU64 = AtomicU64::new(0);
++    /// set while the stand-in destroy runs; progress calls during it are counted in LATE
++    static DESTROYING: AtomicU64 = AtomicU64::new(0);
++    static LATE: AtomicU64 = AtomicU64::new(0);
 +    const SLOT: u32 = 5;
 +    /// The stand-in executor is process-global: tests that start it run one at a time.
 +    static SERIAL: Mutex<()> = Mutex::new(());
@@ -683,6 +700,7 @@ index 0000000..6c20c1b
 +            p.store(0, Ordering::SeqCst);
 +        }
 +        KICKS.store(0, Ordering::SeqCst);
++        LATE.store(0, Ordering::SeqCst);
 +        g
 +    }
 +
@@ -707,10 +725,19 @@ index 0000000..6c20c1b
 +        KICKS.fetch_add(1, Ordering::SeqCst);
 +        reply(SLOT);
 +    }
++    /// A dispatch thread still delivers a wake while the executor is being destroyed.
 +    unsafe extern "C" fn destroy(_h: *mut c_void) {
-+        *FAKE.lock().unwrap() = None;
++        DESTROYING.store(1, Ordering::SeqCst);
++        let f = FAKE.lock().unwrap().take();
++        if let Some(f) = f {
++            ((*f.ops).wake)(f.ctx, SLOT);
++        }
++        DESTROYING.store(0, Ordering::SeqCst);
 +    }
 +    unsafe extern "C" fn progress(_h: *mut c_void, slot: u32) -> u64 {
++        if DESTROYING.load(Ordering::SeqCst) != 0 {
++            LATE.fetch_add(1, Ordering::SeqCst);
++        }
 +        PROGRESS.get(slot as usize).map_or(0, |p| p.load(Ordering::SeqCst))
 +    }
 +
@@ -811,6 +838,25 @@ index 0000000..6c20c1b
 +    }
 +    unsafe extern "C" fn abi_next() -> u32 {
 +        WMTR_HOST_ABI_VERSION + 1
++    }
++
++    /// Teardown retires the executor handle before destroying it: a wake that arrives during
++    /// wmtr_host_destroy must not reach wmtr_host_progress with the handle being freed.
++    #[test]
++    fn teardown_retires_handle_before_destroy() {
++        let _serial = serial();
++        let done = Arc::new(Mutex::new(Vec::new()));
++        let (comp, handler) = component(done.clone());
++        let mut ctx = comp.create_context(4, RUTABAGA_CAPSET_WMTR, None, handler).unwrap();
++        ctx.context_create_blob(1, blob(0, 65536), None).unwrap();
++        ctx.submit_cmd(&mut cmd(WMTR_VGPU_RING, 0, 0), &[]).unwrap();
++        ctx.submit_cmd(&mut cmd(WMTR_VGPU_WAIT, SLOT, 1), &[]).unwrap();
++        ctx.context_create_fence(fence(40, 6)).unwrap();
++        assert!(done.lock().unwrap().is_empty());
++        drop(ctx);
++        assert_eq!(LATE.load(Ordering::SeqCst), 0, "progress called during destroy");
++        assert!(FAKE.lock().unwrap().is_none(), "executor not destroyed");
++        assert_eq!(*done.lock().unwrap(), vec![40]);
 +    }
 +
 +    /// The library is used only if it reports this ABI version and exports the whole API.

@@ -107,7 +107,8 @@ done
 	# Speaker detection/config consistency, PCM permutations, height routing and downmix.
 	RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
 		cargo test -q --features snd --test macos_audio
-	# wmtr context type against a stand-in executor (fences, blobs, command checks).
+	# wmtr context type against a stand-in executor (fence order per ring, blob limits, host ABI
+	# version, teardown, command checks).
 	cd ../rutabaga_gfx
 	cargo test -q --lib -- wmtr
 )
