@@ -288,7 +288,9 @@ Game audio goes to the headset and the headset microphone comes back through one
   otherwise the guest's audio is the Mac's again.
 * In vrhost, `AudioBridge` wraps the session listener (the pipeline or the test pattern) and adds the microphone and
   connect/disconnect handling. Tests: `test_audio` (vrhost ctest), the libkrun `vr_audio` unit tests.
-* **Open for the launcher:** creating the region and passing `--audio-fd` from `VRHost.swift`.
+* Launcher: with VR on and a virtio-snd device, `VRHost.apply` creates the region (`steamac_vra_create` in
+  `CKrun/shim.h`), attaches it with `KRUN_SND_VR_MUTE_LOCAL` and passes `--audio-fd`; `--selftest-vr` round 2 checks
+  that the host beats on it with the headset word 0 (Mac output kept). Failure leaves VR video on and audio on the Mac.
 
 ## Change log
 

@@ -1,3 +1,4 @@
+import CKrun
 import Darwin
 import Foundation
 
@@ -43,15 +44,20 @@ enum VRHost {
 
     /// Called once per boot before libkrun creates the wmtr context (VM.start). Never fatal: VR stays off
     /// with a log line when the host cannot start.
-    static func apply(_ o: Options) {
+    /// With a virtio-snd device (`sound`) it also creates the VR audio region (docs/vr-interfaces.md section 6),
+    /// attaches it to libkrun and hands it to the host (--audio-fd): the guest's audio follows a connected
+    /// headset and is the Mac's again whenever none is connected (the host clears the region's headset word).
+    static func apply(_ o: Options, ctx: UInt32, sound: Bool) {
         for k in envKeys { unsetenv(k) }
         guard o.vr else { return }
         if let reason = unavailableReason(o) {
             log("vr: off, \(reason)")
             return
         }
+        let audioFD = sound ? audioRegion(ctx: ctx) : -1
+        defer { if audioFD >= 0 { close(audioFD) } } // mapped by libkrun, inherited by the host
         do {
-            let r = try start(extraArgs: hostArgs(o), logPath: logPath)
+            let r = try start(extraArgs: hostArgs(o), logPath: logPath, audioFD: audioFD)
             setenv("WMTR_VR_FD", String(r.fd), 1)
             setenv("WMTR_VR_MACH_NAME", r.machName, 1)
             log("vr: steamac-vrhost pid \(r.pid), link fd \(r.fd), mach name \(r.machName), log \(logPath)")
@@ -68,10 +74,27 @@ enum VRHost {
         return a
     }
 
+    /// A new VR audio region attached to libkrun (local output silenced while a headset plays), or -1 with
+    /// a log line: VR video still works, the guest's audio then stays on the Mac.
+    static func audioRegion(ctx: UInt32) -> Int32 {
+        let fd = steamac_vra_create()
+        guard fd >= 0 else {
+            log("vr: no headset audio, region: \(String(cString: strerror(-fd)))")
+            return -1
+        }
+        let rc = krun_snd_set_vr_audio(ctx, fd, UInt32(KRUN_SND_VR_MUTE_LOCAL))
+        guard rc == 0 else {
+            log("vr: no headset audio, krun_snd_set_vr_audio: \(rc)")
+            close(fd)
+            return -1
+        }
+        return fd
+    }
+
     /// Creates the link, spawns the host with its end, and returns our end (FD_CLOEXEC: no other child
     /// inherits it, so the host sees end-of-file exactly when this process lets go of it).
     @discardableResult
-    static func start(extraArgs: [String], logPath: String?) throws -> Running {
+    static func start(extraArgs: [String], logPath: String?, audioFD: Int32 = -1) throws -> Running {
         guard let exe = path else { throw OptionError("\(executable) not found") }
         var sv: [Int32] = [-1, -1]
         guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &sv) == 0 else {
@@ -87,6 +110,7 @@ enum VRHost {
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
         posix_spawn_file_actions_addinherit_np(&actions, sv[1])
+        if audioFD >= 0 { posix_spawn_file_actions_addinherit_np(&actions, audioFD) }
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
         if let logPath {
             try? FileManager.default.createDirectory(atPath: (logPath as NSString).deletingLastPathComponent,
@@ -106,7 +130,8 @@ enum VRHost {
         posix_spawnattr_setsigmask(&attr, &noMask)
         posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
 
-        let args = [exe, "--link-fd", String(sv[1]), "--mach-name", machName] + extraArgs
+        let args = [exe, "--link-fd", String(sv[1]), "--mach-name", machName]
+            + (audioFD >= 0 ? ["--audio-fd", String(audioFD)] : []) + extraArgs
         var cArgs = args.map { strdup($0) } + [nil]
         defer { for p in cArgs { free(p) } }
         var pid: pid_t = 0
@@ -158,6 +183,30 @@ enum VRHost {
 /// child's pid, and checks that closing our end alone ends the host (what a VM stop does); a second run
 /// checks that the host's port is free again.
 enum VRSelfTest {
+    /// The host maps the region and beats on it with no headset connected: headset word 0, so libkrun
+    /// keeps the guest's audio on the Mac.
+    static func audio(fd: Int32) -> Int {
+        let n = Int(STEAMAC_VRA_REGION_BYTES)
+        guard let p = mmap(nil, n, PROT_READ, MAP_SHARED, fd, 0), p != MAP_FAILED else {
+            log("selftest-vr: FAIL audio region mmap"); return 1
+        }
+        defer { munmap(p, n) }
+        let r = p.assumingMemoryBound(to: vra_region.self)
+        var bad = 0
+        if vra_region_valid(r) == 0 { log("selftest-vr: FAIL audio region not valid"); bad += 1 }
+        let b0 = r.pointee.beat
+        var beat = b0
+        for _ in 0..<50 where beat == b0 {
+            usleep(20_000)
+            OSMemoryBarrier()
+            beat = r.pointee.beat
+        }
+        if beat == b0 { log("selftest-vr: FAIL host does not beat on the audio region"); bad += 1 }
+        if r.pointee.headset != 0 { log("selftest-vr: FAIL headset word \(r.pointee.headset) with no headset"); bad += 1 }
+        if bad == 0 { log("selftest-vr: audio region ok (beat \(b0) -> \(beat), no headset: Mac output)") }
+        return bad
+    }
+
     static func run(_ resolved: Options) -> Never {
         var failures = 0
         func check(_ ok: Bool, _ what: String) { if !ok { failures += 1; log("selftest-vr: FAIL \(what)") } }
@@ -165,7 +214,7 @@ enum VRSelfTest {
         var off = resolved
         off.vr = false
         setenv("WMTR_VR_FD", "99", 1)   // left over from a shell: must not survive VR off
-        VRHost.apply(off)
+        VRHost.apply(off, ctx: 0, sound: true)
         check(getenv("WMTR_VR_FD") == nil && getenv("WMTR_VR_MACH_NAME") == nil, "VR off: link environment left set")
         check(VRHost.running == nil, "VR off: host started")
         check(Options().vr == false, "VR must default off")
@@ -197,7 +246,12 @@ enum VRSelfTest {
         for round in 1...2 {
             do {
                 // no Bonjour, fixed loopback-free port 0: the self-test must not show up on headsets
-                let r = try VRHost.start(extraArgs: ["--no-advertise", "--port", "0", "--control-socket", sock], logPath: nil)
+                // round 2 also hands over a VR audio region (what apply() does with a sound device, minus libkrun)
+                let audioFD: Int32 = round == 2 ? steamac_vra_create() : -1
+                check(round == 1 || audioFD >= 0, "round 2: steamac_vra_create \(audioFD)")
+                defer { if audioFD >= 0 { close(audioFD) } }
+                let r = try VRHost.start(extraArgs: ["--no-advertise", "--port", "0", "--control-socket", sock], logPath: nil,
+                                         audioFD: audioFD)
                 setenv("WMTR_VR_FD", String(r.fd), 1)
                 setenv("WMTR_VR_MACH_NAME", r.machName, 1)
                 check(fcntl(r.fd, F_GETFD) & FD_CLOEXEC != 0, "our link end is inheritable")
@@ -209,6 +263,7 @@ enum VRSelfTest {
                 check(n >= 16 && words[0] == 1 && words[3] == UInt32(r.pid),
                       "round \(round): no VRL_HELLO from the host (got \(n) bytes, type \(words[0]), pid \(words[3]) vs \(r.pid))")
                 check(kill(r.pid, 0) == 0, "round \(round): host not running")
+                if audioFD >= 0 { failures += audio(fd: audioFD) }
                 failures += VRPanelSelfTest.control(socket: sock, executable: VRHost.path!, round: round)
                 let how = VRHost.stop()
                 log("selftest-vr: round \(round): host pid \(r.pid), hello version \(words[2]), \(how)")
