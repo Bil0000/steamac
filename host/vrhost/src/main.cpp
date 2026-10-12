@@ -53,6 +53,7 @@ static void usage()
 	        "  --link-socket PATH  manual runs: accept the link from wmtr_vr_connect at PATH\n"
 	        "  --control-socket PATH  answer status/pairing requests on this AF_UNIX socket (launcher VR panel)\n"
 	        "       steamac-vrhost --show-pin | --list-headsets [--json] | --unpair NAME | --unpair-all\n"
+	        "  --test-tone         with --testpattern: send a 440 Hz tone as game audio\n"
 	        "  --audio-fd N        VR audio region fd from steamac-vm (game audio to the headset, its microphone back)\n"
 	        "  --pair              accept new headsets (PIN pairing); default only when no headset is paired yet\n"
 	        "  --pin NNNNNN        pairing PIN (default: random, printed and readable with --show-pin)\n"
@@ -249,6 +250,27 @@ static void announce_pairing(WivrnSession & session, const WivrnConfig & cfg)
 }
 
 static int g_audio_fd = -1;
+static bool g_test_tone = false;
+
+// --test-tone: stand-in for the VM's playback (a 440 Hz sine, 48 kHz stereo) written into a private audio region,
+// so a headset's audio path can be checked without the guest. Stops with `quit`.
+static void tone_writer(vra_region * r, std::atomic<bool> & quit)
+{
+	std::vector<int16_t> blk(480 * VRA_PLAY_CHANNELS);
+	uint64_t n = 0;
+	r->play.rate = 48000;
+	while (not quit)
+	{
+		if (VRA_PLAY_FRAMES - pcm::ring_available(r->play) >= 480)
+		{
+			for (size_t f = 0; f < 480; ++f, ++n)
+				for (uint32_t c = 0; c < VRA_PLAY_CHANNELS; ++c)
+					blk[f * VRA_PLAY_CHANNELS + c] = int16_t(8000 * std::sin(2 * M_PI * 440.0 * double(n) / 48000));
+			pcm::ring_write(r->play, r->play_data, blk.data(), 480);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+}
 
 static void write_pin(const std::string & pin)
 {
@@ -300,6 +322,16 @@ static int testpattern(WivrnConfig cfg)
 			return 1;
 		audio = std::make_unique<AudioBridge>(audio_region, session, &src);
 	}
+	std::unique_ptr<vra_region> tone_region;
+	std::atomic<bool> tone_quit{false};
+	std::thread tone_thread;
+	if (g_test_tone and not audio)
+	{
+		tone_region = std::make_unique<vra_region>();
+		vra_region_init(tone_region.get());
+		audio = std::make_unique<AudioBridge>(tone_region.get(), session, &src);
+		tone_thread = std::thread(tone_writer, tone_region.get(), std::ref(tone_quit));
+	}
 	session.start(audio ? static_cast<SessionListener *>(audio.get()) : &src);
 	auto control = make_control(session);
 	printf("steamac-vrhost: listening on port %d, protocol %016" PRIx64 " (WiVRn v26.9)%s\n", session.port(),
@@ -349,12 +381,19 @@ static int testpattern(WivrnConfig cfg)
 			       " last encode %.2f ms, headset decode %.2f ms, %.1f Mbit/s\n",
 			       s.frames_sent.load(), s.idr_sent.load(), s.idr_requests.load(), s.feedback.load(), s.tracking.load(),
 			       s.last_encode_ns / 1e6, s.last_feedback_decode_ns / 1e6, s.bytes_sent * 8 / 1e6 / ((now_ns() - last_report) / 1e9));
+			if (audio)
+				printf("audio speaker packets %" PRIu64 " frames %" PRIu64 " discarded %" PRIu64 " mic frames %" PRIu64 "\n",
+				       audio->stats().speaker_packets.load(), audio->stats().speaker_frames.load(),
+				       audio->stats().speaker_discarded.load(), audio->stats().mic_frames.load());
 			fflush(stdout);
 			last_report = now_ns();
 		}
 	}
 	control.reset();
 	session.stop();
+	tone_quit = true;
+	if (tone_thread.joinable())
+		tone_thread.join();
 	audio.reset();
 	if (audio_region)
 		munmap(audio_region, VRA_REGION_BYTES);
@@ -498,6 +537,8 @@ int main(int argc, char ** argv)
 		}
 		else if (a == "--unpair-all")
 			mode = unpair;
+		else if (a == "--test-tone")
+			g_test_tone = true;
 		else if (a == "--audio-fd")
 			g_audio_fd = std::stoi(next());
 		else if (a == "--pair")
