@@ -64,10 +64,14 @@ struct wmtr_vr {
   struct vrl_input input;
   _Atomic uint64_t queries, haptics;
   _Atomic int have_state; /* a VRL_STATE arrived on this link */
-  int64_t created_ns;
+  int64_t state_wait_ns;  /* when a hello last waited for it */
 };
 
-#define VR_FIRST_STATE_WAIT_NS 250000000ll
+/* a runtime hello on a link without host state yet: how long it waits, how often it asks the host again, and how
+ * long until the next hello waits again (a host that never answers must not slow every hello down) */
+#define VR_STATE_WAIT_NS 250000000ll
+#define VR_STATE_ASK_NS 50000000ll
+#define VR_STATE_WAIT_AGAIN_NS 2000000000ll
 
 static int64_t
 now_ns(void) {
@@ -305,12 +309,25 @@ wmtr_vr_query(struct wmtr_vr *vr, void *buf, uint32_t size) {
   if (!vr) return query_locked(NULL, buf, size);
   /* The host answers VRL_HELLO with its state (headset connected, eye size). A runtime that starts with the link
    * (VR_Init right after the process attached: Proton's steam.exe, a relaunched game) would read "no headset,
-   * 0x0" in between: its hello waits for that first state, only while the link is new. */
-  if (size >= sizeof(struct svr_hdr) && ((struct svr_hdr *)buf)->op == SVR_HELLO)
-    while (!atomic_load(&vr->have_state) && now_ns() - vr->created_ns < VR_FIRST_STATE_WAIT_NS) {
+   * 0x0" before that state arrives, or for good when the host's answer was lost (it is sent without waiting, and a
+   * link socket left full by the previous link drops it): its hello waits for the state and asks the host again. */
+  if (size >= sizeof(struct svr_hdr) && ((struct svr_hdr *)buf)->op == SVR_HELLO && !atomic_load(&vr->have_state)) {
+    pthread_mutex_lock(&vr->lock);
+    int64_t start = now_ns(), asked = start;
+    int wait = !vr->state_wait_ns || start - vr->state_wait_ns > VR_STATE_WAIT_AGAIN_NS;
+    if (wait) vr->state_wait_ns = start;
+    pthread_mutex_unlock(&vr->lock);
+    while (wait && !atomic_load(&vr->have_state) && now_ns() - start < VR_STATE_WAIT_NS) {
       drain_releases(vr);
-      if (!atomic_load(&vr->have_state)) usleep(1000);
+      if (atomic_load(&vr->have_state)) break;
+      usleep(1000);
+      if (now_ns() - asked > VR_STATE_ASK_NS) {
+        struct vrl_hello hello = {{VRL_HELLO, sizeof hello}, VRL_VERSION, (uint32_t)getpid()};
+        send_packet(vr, &hello, sizeof hello);
+        asked = now_ns();
+      }
     }
+  }
   pthread_mutex_lock(&vr->lock);
   int r = query_locked(vr, buf, size);
   pthread_mutex_unlock(&vr->lock);
@@ -413,8 +430,12 @@ wmtr_vr_create(int link_fd, const char *mach_name) {
    * VRL_RELEASE sends behind them */
   int space = VRL_SOCKET_BUFFER;
   setsockopt(link_fd, SOL_SOCKET, SO_RCVBUF, &space, sizeof space);
+  /* WMTR_VR_FD outlives its links: while no context was attached the host kept sending (timing and poses every
+   * frame) and the socket is full of packets for nobody. They are dropped here, before the hello: the host's answer
+   * (its state) is sent without waiting and would be lost against the full buffer. */
+  uint8_t stale[2048];
+  for (int i = 0; i < 65536 && recv(link_fd, stale, sizeof stale, MSG_DONTWAIT) > 0; i++) {}
   struct vrl_hello hello = {{VRL_HELLO, sizeof hello}, VRL_VERSION, (uint32_t)getpid()};
-  vr->created_ns = now_ns();
   send_packet(vr, &hello, sizeof hello);
   pthread_create(&vr->reader, NULL, reader_main, vr);
   return vr;

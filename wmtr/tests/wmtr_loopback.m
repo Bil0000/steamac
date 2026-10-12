@@ -384,6 +384,27 @@ static void test_vr_fd(void) {
   CHECK(wmtr_vr_query(wmtr_host_vr(c), &hb, sizeof hb) == 0 && hb.r.connected && hb.r.eye_width == 1832 && hb.r.eye_height == 1920,
         "WMTR_VR_FD: hello right after reattach: connected %u, %ux%u", hb.r.connected, hb.r.eye_width, hb.r.eye_height);
   wmtr_host_destroy(c);
+  /* no context for a while: the host's per-frame packets fill the socket. The next link must still get the host's
+   * answer to its hello (sent without waiting, as steamac-vrhost does) */
+  struct vrl_timing tm = {{VRL_TIMING, sizeof tm}, 7, 1, 2, 72.0f, 0};
+  int filled = 0;
+  while (send(sv[1], &tm, sizeof tm, MSG_DONTWAIT) == (ssize_t)sizeof tm && filled < 1000000) filled++;
+  CHECK(filled > 0 && filled < 1000000, "WMTR_VR_FD: could not fill the link socket (%d)", filled);
+  struct wmtr_host *d = idle_host();
+  CHECK(vr_next(sv[1], VRL_HELLO, &u, sizeof u), "WMTR_VR_FD: no VRL_HELLO over a full socket");
+  /* the host's answer to that hello was lost (not sent here): the runtime's hello asks again and gets the state */
+  dispatch_async(dispatch_get_global_queue(0, 0), ^{
+    union { struct vrl_header h; uint8_t raw[1024]; } again;
+    if (!vr_next(host_fd, VRL_HELLO, &again, sizeof again)) return;
+    struct vrl_state st2 = {{VRL_STATE, sizeof st2}, 1, 2000, 2100, 90.0f, 0.065f, {{-0.9f, 0.8f, 0.85f, -0.85f}, {-0.8f, 0.9f, 0.85f, -0.85f}},
+                            VRL_PROFILE_INDEX, 0, "Quest 3"};
+    send(host_fd, &st2, sizeof st2, MSG_DONTWAIT);
+  });
+  memset(&hb, 0, sizeof hb);
+  hb.q = (struct svr_hello_req){{SVR_HELLO, sizeof hb.q}, SVR_VERSION, 1, "test"};
+  CHECK(wmtr_vr_query(wmtr_host_vr(d), &hb, sizeof hb) == 0 && hb.r.connected && hb.r.eye_width == 2000,
+        "WMTR_VR_FD: host state lost after the hello (connected %u, %ux%u)", hb.r.connected, hb.r.eye_width, hb.r.eye_height);
+  wmtr_host_destroy(d);
   unsetenv("WMTR_VR_FD"); unsetenv("WMTR_VR_MACH_NAME");
   close(sv[0]); close(sv[1]);
   printf("vr fd attach: ok\n");
