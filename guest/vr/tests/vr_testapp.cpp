@@ -179,7 +179,11 @@ struct Title {
           case 'b': case '?': e = in->GetDigitalActionData(a.h, &dd, sizeof(dd), src[s]), active = dd.bActive; break;
           case '1': case '2': e = in->GetAnalogActionData(a.h, &ad, sizeof(ad), src[s]), active = ad.bActive; break;
           case 'p': e = in->GetPoseActionDataForNextFrame(a.h, vr::TrackingUniverseStanding, &pd, sizeof(pd), src[s]), active = pd.bActive; break;
-          case 's': e = s ? vr::VRInputError_None : in->GetSkeletalActionData(a.h, &sd, sizeof(sd)); break;
+          case 's':  // the plugin reads both the skeleton and its pose
+            e = s ? vr::VRInputError_None : in->GetSkeletalActionData(a.h, &sd, sizeof(sd));
+            if (e == vr::VRInputError_None)
+              e = in->GetPoseActionDataForNextFrame(a.h, vr::TrackingUniverseStanding, &pd, sizeof(pd), src[s]), active = pd.bActive;
+            break;
           default: break;
         }
         reads++;
@@ -429,6 +433,12 @@ int main(int argc, char **argv) {
       CHECK(tt.in->GetPoseActionDataForNextFrame(pose, vr::TrackingUniverseStanding, &ph, sizeof(ph), tt.src[9]) == vr::VRInputError_None &&
                 !ph.bActive,
             "pose for the head source: inactive");
+      {  // reading a digital action as a pose stays a type error
+        vr::InputPoseActionData_t pw{};
+        CHECK(tt.in->GetPoseActionDataForNextFrame(tt.action("/actions/Global/in/Jump"), vr::TrackingUniverseStanding, &pw, sizeof(pw), 0) ==
+                  vr::VRInputError_WrongType,
+              "pose read of a boolean action");
+      }
       CHECK(pl.bActive && pl.pose.bPoseIsValid && near(pl.pose.mDeviceToAbsoluteTracking.m[0][3], -0.2f, 1e-4f) && pl.activeOrigin == tt.src[1],
             "left hand pose");
       CHECK(pr.bActive && pr.pose.bPoseIsValid && near(pr.pose.mDeviceToAbsoluteTracking.m[0][3], 0.2f, 1e-4f) && pr.activeOrigin == tt.src[2],
@@ -442,6 +452,20 @@ int main(int argc, char **argv) {
         CHECK(tt.in->GetSkeletalBoneData(sk, vr::VRSkeletalTransformSpace_Parent, vr::VRSkeletalMotionRange_WithoutController, bones, 31) ==
                   vr::VRInputError_None,
               "skeleton bones %d", hnd);
+        // the plugin reads a skeleton action's pose too: the hand's pose, for Any and for its own hand
+        vr::InputPoseActionData_t sp{}, spo{}, sph{};
+        CHECK(tt.in->GetPoseActionDataForNextFrame(sk, vr::TrackingUniverseStanding, &sp, sizeof(sp), 0) == vr::VRInputError_None &&
+                  sp.bActive && sp.pose.bPoseIsValid && sp.activeOrigin == tt.src[1 + hnd] &&
+                  near(sp.pose.mDeviceToAbsoluteTracking.m[0][3], hnd ? 0.2f : -0.2f, 1e-4f),
+              "pose of skeleton action %d", hnd);
+        CHECK(tt.in->GetPoseActionDataRelativeToNow(sk, vr::TrackingUniverseStanding, 0, &spo, sizeof(spo), tt.src[2 - hnd]) ==
+                      vr::VRInputError_None &&
+                  !spo.bActive,
+              "pose of skeleton action %d restricted to the other hand: inactive", hnd);
+        CHECK(tt.in->GetPoseActionDataRelativeToNow(sk, vr::TrackingUniverseStanding, 0, &sph, sizeof(sph), tt.src[1 + hnd]) ==
+                      vr::VRInputError_None &&
+                  sph.bActive,
+              "pose of skeleton action %d restricted to its hand", hnd);
       }
     } else {
     // input
