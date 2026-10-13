@@ -84,6 +84,12 @@ class Runtime {
   uint32_t frames_presented_ = 0;
   svr_wmtvr_submit pending_{};
   bool pending_eye_[2] = {};
+  // diagnostics: the last logged submit geometry per eye and head pose flags (logged when they change)
+  struct SubmitGeometry {
+    uint32_t width, height, format, array_size, slice, x, y, w, h, flags;
+  };
+  SubmitGeometry logged_geometry_[2] = {};
+  uint32_t logged_head_flags_ = ~0u;
   bool pending_valid_ = false;
   std::deque<vr::VREvent_t> events_;
   bool connected_[kDeviceCount] = {};

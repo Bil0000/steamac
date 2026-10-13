@@ -128,6 +128,15 @@ bool Runtime::wait_frame() {
   std::lock_guard<std::mutex> g(m_);
   if (frame_.frame_id) last_vsync_ = host_to_guest(frame_.predicted_display);
   frame_ = rep;
+  const svr_pose &head = rep.pose[SVR_DEV_HEAD];
+  if (head.flags != logged_head_flags_) {
+    // the render pose the game gets: invalid poses leave the scene head-locked in the headset
+    logged_head_flags_ = head.flags;
+    SVR_INFO("frame %llu head pose %s%s: orientation %.3f %.3f %.3f %.3f position %.3f %.3f %.3f",
+             (unsigned long long)rep.frame_id, (head.flags & SVR_POSE_VALID) ? "valid" : "INVALID",
+             (head.flags & SVR_POSE_TRACKED) ? ", tracked" : "", head.orientation[0], head.orientation[1],
+             head.orientation[2], head.orientation[3], head.position[0], head.position[1], head.position[2]);
+  }
   SVR_TRACE("frame %llu display in %.2f ms", (unsigned long long)rep.frame_id,
             (host_to_guest(rep.predicted_display) - now_ns()) / 1e6);
   return true;
@@ -244,7 +253,17 @@ vr::EVRCompositorError Runtime::submit(vr::EVREye eye, const vr::Texture_t *tex,
   // Single-pass stereo uses an array texture with one eye per slice. Proton stores an explicit slice in the
   // description for SubmitWithArrayIndex; otherwise array textures default to one slice per eye.
   e.slice = array_index != ~0u ? array_index : mt->array_size > 1 ? mt->array_index : 0;
-  (void)flags;
+  SubmitGeometry geo{mt->width, mt->height, mt->dxgi_format, mt->array_size, e.slice, e.x, e.y, e.w, e.h, e.flags};
+  if (memcmp(&geo, &logged_geometry_[eye], sizeof geo)) {
+    // what the game submits, once per change: whole texture, a bounds rect (double-wide) or an array slice
+    logged_geometry_[eye] = geo;
+    SVR_INFO("submit %s eye: texture %ux%u dxgi %u array %u slice %u, bounds u %.3f..%.3f v %.3f..%.3f -> rect %u,%u %ux%u%s, "
+             "flags %#x%s%s",
+             eye == vr::Eye_Left ? "left" : "right", mt->width, mt->height, mt->dxgi_format, mt->array_size, e.slice,
+             bounds ? bounds->uMin : 0.f, bounds ? bounds->uMax : 1.f, bounds ? bounds->vMin : 0.f,
+             bounds ? bounds->vMax : 1.f, e.x, e.y, e.w ? e.w : mt->width, e.w ? e.h : mt->height,
+             e.w ? "" : " (whole)", (unsigned)flags, flip ? ", bottom-up" : "", (e.flags & SVR_EYE_SRGB) ? ", sRGB" : "");
+  }
   if (mt->event_handle && mt->event_value >= pending_.wait_value) {
     pending_.wait_event = mt->event_handle;
     pending_.wait_value = mt->event_value;
