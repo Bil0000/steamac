@@ -85,13 +85,22 @@ jobs:
           xcrun -sdk macosx -f metal
           arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license
           echo "kern.hv_support: $(sysctl -n kern.hv_support 2>/dev/null || echo n/a)"
+      # Each cache is saved as soon as its step succeeds, so a later failure does not lose it.
       - name: LLVM 15 cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: llvm
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: work/out/host/llvm15
           key: llvm15-${{ runner.os }}-${{ runner.arch }}-xcode26.6-${{ hashFiles('host/dxmt/build.sh', 'host/dxmt/pin.env') }}
-      - name: DXMT (fetch, llvm, native, host, pe)
-        run: host/dxmt/build.sh fetch llvm native host pe
+      - name: DXMT source, LLVM 15
+        run: host/dxmt/build.sh fetch llvm
+      - if: steps.llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: work/out/host/llvm15
+          key: ${{ steps.llvm.outputs.cache-primary-key }}
+      - name: DXMT (native, host, pe)
+        run: host/dxmt/build.sh native host pe
       - name: Pack
         run: tar -cf dxmt-host.tar work/out/host/lib/libwmtr_host.dylib work/out/dxmt-pe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -121,7 +130,8 @@ jobs:
           test "$(docker run --rm --platform linux/amd64 docker.io/library/busybox:1.37 uname -m)" = x86_64
           df -h / "$PWD"
       - name: Kernel cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: kernel
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             work/out/Image
@@ -131,7 +141,8 @@ jobs:
             work/cache/kernel
           key: kernel-${{ hashFiles('guest/kernel/**') }}
       - name: Mesa cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: mesa
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             work/out/mesa-venus
@@ -147,6 +158,16 @@ jobs:
           else
             JOBS=$(nproc) guest/kernel/build.sh
           fi
+      - if: steps.kernel.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            work/out/Image
+            work/out/Image.inputs.json
+            work/out/kernel.config
+            work/out/kernel-check-config.log
+            work/cache/kernel
+          key: ${{ steps.kernel.outputs.cache-primary-key }}
       - name: Builder image
         run: scripts/build-image.sh builder
       - name: Mesa (with the verified SteamOS rootfs it is checked against)
@@ -161,6 +182,15 @@ jobs:
           fi
           sudo chown -R "$(id -u):$(id -g)" work
           df -h "$PWD"
+      - if: steps.mesa.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            work/out/mesa-venus
+            work/out/mesa-venus.inputs.json
+            work/out/mesa-aarch64.inputs.json
+            work/out/mesa-x86.inputs.json
+          key: ${{ steps.mesa.outputs.cache-primary-key }}
       - name: Initramfs
         run: scripts/build-image.sh initramfs
       - name: Pack
