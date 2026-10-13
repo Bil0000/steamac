@@ -45,11 +45,12 @@ env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
   HOMEBREW_NO_AUTO_UPDATE: '1'
   HOMEBREW_NO_INSTALL_CLEANUP: '1'
-  # Scripts a tag older than this workflow lacks (or has in an older form) are taken from the
-  # workflow's commit. None of them is an input of a guest receipt.
+  # Scripts and tests a tag older than this workflow lacks (or has in an older form) are taken from
+  # the workflow's commit (each one is announced in the log). None of them is an input of a guest
+  # receipt or compiled into the app; the GPL source archive carries the files as built.
   PACKAGING: >-
     host/launcher/dist.sh host/launcher/licenses.sh host/dxmt/build.sh
-    scripts/guest-toolchain.sh scripts/test/dist-verify.sh
+    scripts/guest-toolchain.sh scripts/test/dist-verify.sh wmtr/tests/wmtr_loopback.m
 
 jobs:
   dxmt:
