@@ -109,6 +109,17 @@ enum VMSizing {
         for (p, n, want) in cpus where autoCPUs(host(16, p, n)) != want {
             failures.append("sizing: \(p.map(String.init) ?? "-")P/\(n) cores → \(autoCPUs(host(16, p, n))) vCPUs, want \(want)")
         }
+        // --mem is checked on a first boot too (needsDisk), with a kernel, so the other checks cannot mask it.
+        func memRejected(_ mib: Int, needsDisk: Bool) -> Bool {
+            guard var o = try? Options.parse(["steamac-vm", "--mem", String(mib)]) else { return false }
+            o.kernel = "/dev/null"
+            o.needsDisk = needsDisk
+            return (try? o.validate()) == nil
+        }
+        if !memRejected(0, needsDisk: true) { failures.append("sizing: --mem 0 accepted on a first boot") }
+        if !memRejected(0, needsDisk: false) { failures.append("sizing: --mem 0 accepted") }
+        if !memRejected(255, needsDisk: false) { failures.append("sizing: --mem 255 accepted") }
+        if memRejected(256, needsDisk: false) { failures.append("sizing: --mem 256 rejected") }
         let air = host(8, 4, 8)
         if memWarning(memMiB: 4096, host: air) == nil { failures.append("sizing: 1 GiB GPU budget on an 8 GB Mac not warned") }
         if memWarning(memMiB: 5120, host: air) == nil { failures.append("sizing: 5 GB on an 8 GB Mac not warned") }
