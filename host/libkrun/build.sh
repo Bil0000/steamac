@@ -108,6 +108,8 @@ done
 	# CoreAudio backend: control requests and the pump stalling each other (patch 0022).
 	RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
 		cargo test -q --features gpu,snd --lib -- virtio::snd
+	# A discard/write-zeroes at the end of a raw image keeps the disk size (patch 0027).
+	cargo test -q --features blk --lib -- virtio::block
 	# Freed guest memory leaves the VMM's footprint (patch 0026). Runs a guest vCPU, so the
 	# test binary needs the hypervisor entitlement: built, signed, then run.
 	cd "$src"
