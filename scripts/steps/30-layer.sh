@@ -79,7 +79,8 @@ grep -q 'fx-progress-agent sleep suspend$' "$ST/usr/lib/systemd/system/systemd-s
 for f in usr/bin/splctl usr/lib/rauc/post-install.sh usr/lib/steamac/kernelsetup.sh \
          usr/lib/steamac/rauc-shims/steamos-chroot usr/lib/steamac/steam-gfx-env \
          usr/lib/steamac/steam-shader-defaults usr/lib/steamac/steam-client \
-         usr/lib/steamac/nested-desktop usr/lib/steamac/steam-gfx-path usr/lib/steamac/desktop-bin/kwin_wayland_wrapper \
+         usr/lib/steamac/nested-desktop usr/lib/steamac/steam-gfx-path usr/lib/steamac/steam-frame-latency \
+         usr/lib/steamac/desktop-bin/kwin_wayland_wrapper \
          usr/lib/steamac/desktop-bin/steamosctl usr/lib/steamos/gamescope-session; do
     [[ -x $ST/$f ]] || { echo "[layer] $f missing or not executable" >&2; exit 1; }
     bash -n "$ST/$f"
@@ -95,6 +96,8 @@ ls "$ST"/usr/lib/steamac/masks.d/*.list >/dev/null
 grep -q 'ExecStartPre=-/usr/lib/steamac/steam-gfx-path' "$ST/usr/lib/systemd/user/steam.service.d/50-steamac.conf" \
     && [[ -L $ST/usr/lib/systemd/user/gamescope-session.target.wants/steamac-gfx-path.service ]] \
     || { echo "[layer] steam-gfx-path (steam.service ExecStartPre, steamac-gfx-path.service) missing" >&2; exit 1; }
+grep -q 'ExecStartPre=-/usr/lib/steamac/steam-frame-latency' "$ST/usr/lib/systemd/user/steam.service.d/50-steamac.conf" \
+    || { echo "[layer] steam-frame-latency (steam.service ExecStartPre) missing" >&2; exit 1; }
 
 # layer-release: content hash (excluding itself) so a boot log identifies the layer.
 tree_hash=$(cd "$ST" && find usr -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)

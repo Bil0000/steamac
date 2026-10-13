@@ -2185,6 +2185,22 @@
         }
       }
     },
+    "Frame latency" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Задержка кадра"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帧延迟"
+          }
+        }
+      }
+    },
     "Forget this game" : {
       "localizations" : {
         "ru" : {
@@ -6428,6 +6444,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "通过含 steamac 补丁的 MoltenVK 在 Metal 3 上实现 Vulkan（macOS 15 或更高版本）。"
+          }
+        }
+      }
+    },
+    "Vulkan path only: let the CPU run at most one frame ahead of the GPU (DXVK's dxgi.maxFrameLatency = 1) for lower input latency at some cost in throughput. Writes into the guest's DXVK config before Steam starts. Off leaves it unchanged." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Только путь Vulkan: разрешить CPU опережать GPU не более чем на один кадр (dxgi.maxFrameLatency = 1 в DXVK) ради меньшей задержки ввода в ущерб пропускной способности. Записывается в конфиг DXVK гостя до запуска Steam. Выключено — конфиг не меняется."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅限 Vulkan 路径：让 CPU 最多领先 GPU 一帧（DXVK 的 dxgi.maxFrameLatency = 1），以降低输入延迟，但会损失一些吞吐量。在 Steam 启动前写入客户机的 DXVK 配置。关闭时不改动。"
           }
         }
       }

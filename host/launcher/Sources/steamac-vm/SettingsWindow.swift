@@ -1057,6 +1057,12 @@ private struct AdvancedTab: View {
                                    " " + String(localized: "Not available here: \($0); Vulkan is used.") } ?? ""),
                            now: false, key: .graphicsPath)
                 }
+                Toggle(isOn: $settings.frameLatency) {
+                    Label2(title: "Frame latency",
+                           detail: String(localized: "Vulkan path only: let the CPU run at most one frame ahead of the GPU (DXVK's dxgi.maxFrameLatency = 1) for lower input latency at some cost in throughput. Writes into the guest's DXVK config before Steam starts. Off leaves it unchanged."),
+                           now: false, key: .frameLatency)
+                }
+                .disabled(settings.graphicsPath == .dxmt)
             }
             Section {
                 HStack {
