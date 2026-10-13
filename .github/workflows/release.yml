@@ -125,8 +125,9 @@ jobs:
         run: |
           echo "runner image: $ImageOS $ImageVersion, $(nproc) cpus"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends qemu-user-static binfmt-support >/dev/null
+          # QEMU 10.2 user emulation (the Ubuntu package, 8.2, crashes on the x86 fault reporter's own SIGSEGV
+          # test in guest/mesa verify); the same installer docker/setup-qemu-action uses, pinned
+          docker run --rm --privileged docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install amd64
           # probe only (not a build input); a separate image: an index digest pulled for amd64 cannot be pulled again for arm64
           test "$(docker run --rm --platform linux/amd64 docker.io/library/busybox:1.37 uname -m)" = x86_64
           df -h / "$PWD"
@@ -171,18 +172,18 @@ jobs:
           key: ${{ steps.kernel.outputs.cache-primary-key }}
       - name: Builder image
         run: scripts/build-image.sh builder
-      - name: Mesa (with the verified SteamOS rootfs it is checked against)
+      # Both architectures first, cached as soon as they are built; then the verification against
+      # Valve's rootfs (a restored build whose per-architecture receipts match is only verified).
+      - name: Mesa (aarch64, x86_64 + i386)
         run: |
           if python3 scripts/guest-artifacts.py check mesa; then
             echo "mesa: receipt valid, build skipped"
+          elif python3 scripts/guest-artifacts.py check mesa-aarch64 && python3 scripts/guest-artifacts.py check mesa-x86; then
+            echo "mesa: per-architecture receipts valid, only verify runs"
           else
-            scripts/build-image.sh rootfs
-            sudo chown -R "$(id -u):$(id -g)" work
-            guest/mesa/build.sh
-            sudo rm -rf work/cache/rootfs
+            guest/mesa/build.sh fetch aarch64 x86
           fi
           sudo chown -R "$(id -u):$(id -g)" work
-          df -h "$PWD"
       - if: steps.mesa.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -192,6 +193,17 @@ jobs:
             work/out/mesa-aarch64.inputs.json
             work/out/mesa-x86.inputs.json
           key: ${{ steps.mesa.outputs.cache-primary-key }}
+      - name: Mesa verify (against the verified SteamOS rootfs)
+        run: |
+          if ! python3 scripts/guest-artifacts.py check mesa; then
+            scripts/build-image.sh rootfs
+            sudo chown -R "$(id -u):$(id -g)" work
+            guest/mesa/build.sh verify
+            sudo rm -rf work/cache/rootfs
+          fi
+          sudo chown -R "$(id -u):$(id -g)" work
+          python3 scripts/guest-artifacts.py check mesa
+          df -h "$PWD"
       - name: Initramfs
         run: scripts/build-image.sh initramfs
       - name: Pack
@@ -224,9 +236,7 @@ jobs:
           persist-credentials: false
       - *packaging
       - name: amd64 emulation for the DXMT client container
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends qemu-user-static binfmt-support >/dev/null
+        run: docker run --rm --privileged docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install amd64
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: guest-base
