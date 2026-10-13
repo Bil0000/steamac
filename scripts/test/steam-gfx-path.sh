@@ -6,9 +6,15 @@
 #   update    a Proton update rewrites stock files (new version): the next run keeps the NEW stock files and re-applies
 #   vulkan    Proton's files are back byte for byte (the updated ones), every added file and marker is gone,
 #             prefixes hold Proton's DXVK again and nothing else changed
+#   d3d12     a payload with d3d12.dll replaces vkd3d-proton's d3d12.dll where a Proton has one (P1, not P2); a
+#             payload without it puts vkd3d-proton's back
 #   missing   steamac.gfx=dxmt without the DXMT files leaves everything stock
 #   poisoned  a kept original that is a DXMT file (kept by an older script from a payload it no longer knows) is never
 #             kept and never restored: the file stays, a log line points at Steam's Verify integrity, the backup goes
+#   foreign   switching between app bundles (DXMT payload A -> B -> Vulkan with A's layer) where neither payload's
+#             checksum is kept: the DXMT file is still recognised, Proton's kept originals go back and are only then
+#             dropped (before: no restore, originals deleted, "DXVK back" logged with DXMT's d3d11/dxgi in place)
+#   noorig    a DXMT file with no kept original: it stays, a WARNING names Steam's Verify integrity, no "DXVK back"
 # usage: scripts/test/steam-gfx-path.sh
 set -u
 S=$(cd "$(dirname "$0")/../.." && pwd)/guest/layer/usr/lib/steamac/steam-gfx-path
@@ -23,12 +29,19 @@ for p in "$P1" "$P2"; do
   mkdir -p "$p/files/share/default_pfx/drive_c/windows/system32"
   ln -s ../../../../../lib/wine/x86_64-windows/d3d11.dll "$p/files/share/default_pfx/drive_c/windows/system32/d3d11.dll"
 done
+# an ARM64 Proton: DXVK/vkd3d-proton sets, but no x86-64 Wine; it must stay stock
+P3=$ST/steamapps/common/Proton-arm64
+mkdir -p "$P3/files/lib/wine/dxvk/x86_64-windows" "$P3/files/lib/wine/vkd3d-proton/x86_64-windows"
+for f in d3d11 dxgi d3d10core; do blob "$P3/files/lib/wine/dxvk/x86_64-windows/$f.dll" a; done
+blob "$P3/files/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll" a
+mkdir -p "$P1/files/lib/wine/vkd3d-proton/x86_64-windows"
+for f in d3d12 d3d12core; do blob "$P1/files/lib/wine/vkd3d-proton/x86_64-windows/$f.dll" r; done
 for a in 100 200; do
   s=$ST/steamapps/compatdata/$a/pfx/drive_c/windows/system32; mkdir -p "$s"
   for f in d3d11 dxgi d3d10core; do cp "$P1/files/lib/wine/dxvk/x86_64-windows/$f.dll" "$s/"; done; blob "$s/kernel32.dll" k
 done
 X=$T/dxmt; mkdir -p "$X/x86_64-windows" "$X/x86_64-unix"
-for f in d3d11 dxgi d3d10core winemetal; do blob "$X/x86_64-windows/$f.dll" m; done; blob "$X/x86_64-unix/winemetal.so" s
+for f in d3d11 dxgi d3d10core winemetal d3d12; do blob "$X/x86_64-windows/$f.dll" m; done; blob "$X/x86_64-unix/winemetal.so" s
 snap() { (cd "$T" && find steam -type f | LC_ALL=C sort | while read -r f; do echo "$f $(cksum < "$f")"; done
   find steam -type l | LC_ALL=C sort | while read -r f; do echo "$f -> $(readlink "$f")"; done); }
 run() { echo "$1" > "$T/cmdline"
@@ -47,6 +60,13 @@ for p in "$P1" "$P2"; do
   cmp -s "$p/files/share/default_pfx/drive_c/windows/system32/winemetal.dll" "$X/x86_64-windows/winemetal.dll" \
     || fail dxmt "$p prefix template has no winemetal.dll link"
 done
+V=$P1/files/lib/wine/vkd3d-proton/x86_64-windows
+for f in dxvk/x86_64-windows/d3d11 vkd3d-proton/x86_64-windows/d3d12; do
+  [ "$(tr -d a < "$P3/files/lib/wine/$f.dll")" = "" ] || fail arm64 "ARM64 Proton $f.dll touched"; done
+grep -q "cannot set up" "$T/log" && fail arm64 "error for the ARM64 Proton: $(grep 'cannot set up' "$T/log" | head -1)"
+isdxmt "$V/d3d12.dll" || fail d3d12 "P1 d3d12.dll is not DXMT (native copy)"
+[ "$(tr -d r < "$V/d3d12core.dll")" = "" ] || fail d3d12 "d3d12core.dll touched"
+[ -e "$P2/files/lib/wine/vkd3d-proton" ] && fail d3d12 "P2 got a vkd3d-proton directory"
 for a in 100 200; do
   cmp -s "$ST/steamapps/compatdata/$a/pfx/drive_c/windows/system32/winemetal.dll" "$X/x86_64-windows/winemetal.dll" || fail dxmt "prefix $a placeholder"
 done
@@ -67,6 +87,7 @@ for f in d3d11 dxgi d3d10core winemetal; do blob "$X2/x86_64-windows/$f.dll" n; 
 rm -f "$T"/state/orig/*/installed   # state as left by a version of this script that kept no checksums
 run "steamac.gfx=dxmt" "$X2"
 [ "$(head -c 64 "$P2/files/lib/wine/dxvk/x86_64-windows/d3d11.dll" | tr -d n)" = "" ] || fail payload "new payload not installed"
+[ "$(tr -d r < "$V/d3d12.dll")" = "" ] || fail d3d12 "payload without d3d12.dll left DXMT's d3d12.dll in place"
 X=$X2
 run "steamac.gfx=vulkan" "$X2"
 [ "$(cksum < "$P1/files/lib/wine/dxvk/x86_64-windows/dxgi.dll")" = "$upd" ] || fail vulkan "P1 dxgi is not the updated stock file"
@@ -103,5 +124,26 @@ cmp -s "$D2/dxgi.dll" "$D2/d3d9.dll" || fail poisoned "sound kept original of dx
 # a DXMT file in Proton's tree that no payload or checksum knows is not kept as Proton's original
 dxblob "$D2/dxgi.dll" y; run "steamac.gfx=dxmt" "$X2"
 grep -rl dxmt "$T/state" >/dev/null 2>&1 && fail poisoned "unknown DXMT file kept as an original"
+# foreign: a fresh tree, two real-looking DXMT payloads (dxmt:: symbols), checksums lost between bundles
+rm -rf "$T/state" "$ST/steamapps/compatdata"; : > "$T/log"
+for f in d3d11 dxgi d3d10core d3d9; do blob "$P1/files/lib/wine/dxvk/x86_64-windows/$f.dll" v; done
+DA=$T/dxa; DB=$T/dxb; mkdir -p "$DA/x86_64-windows" "$DA/x86_64-unix" "$DB/x86_64-windows" "$DB/x86_64-unix"
+for f in d3d11 dxgi d3d10core winemetal; do dxblob "$DA/x86_64-windows/$f.dll" a; dxblob "$DB/x86_64-windows/$f.dll" b; done
+blob "$DA/x86_64-unix/winemetal.so" s; blob "$DB/x86_64-unix/winemetal.so" s
+D1=$P1/files/lib/wine/dxvk/x86_64-windows
+run "steamac.gfx=dxmt" "$DA"; rm -f "$T"/state/orig/*/installed
+run "steamac.gfx=dxmt" "$DB"; rm -f "$T"/state/orig/*/installed
+run "steamac.gfx=vulkan" "$DA"
+for f in d3d11 dxgi d3d10core; do
+  cmp -s "$D1/$f.dll" "$D1/d3d9.dll" || fail foreign "P1 $f.dll not Proton's after A -> B -> vulkan"
+done
+[ -z "$(ls -A "$T/state/orig" 2>/dev/null)" ] || fail foreign "backups left after a full restore"
+# noorig: DXMT's dxgi.dll in Proton's tree with nothing kept
+run "steamac.gfx=dxmt" "$DB"; rm -rf "$T"/state/orig/*/dxgi.dll; : > "$T/log"
+run "steamac.gfx=vulkan" "$DB"
+cmp -s "$D1/d3d11.dll" "$D1/d3d9.dll" || fail noorig "kept d3d11.dll not restored"
+grep -q "dxmt" "$D1/dxgi.dll" || fail noorig "dxgi.dll changed although no original was kept"
+grep -q "WARNING: no original of dxgi.dll kept for $P1.*Verify integrity" "$T/log" || fail noorig "no warning: $(cat "$T/log")"
+grep -q "DXVK back in $P1" "$T/log" && fail noorig "claims DXVK back with DXMT's dxgi.dll in place"
 echo "steam-gfx-path: $([ $fails = 0 ] && echo passed || echo FAILED)"
 exit $((fails > 0))

@@ -76,6 +76,9 @@ struct Options {
     var vulkanDriver = LauncherSettings.VulkanDriver.moltenvk
     var graphicsPath = LauncherSettings.GraphicsPath.vulkan
     var selftestGraphicsPath = false
+    /// Settings > Advanced "Frame latency" (kernel cmdline `steamac.frame_latency=1`): the guest's
+    /// DXVK config gets dxgi.maxFrameLatency = 1 for the Vulkan path. Default false: unset.
+    var frameLatency = false
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
     var gvproxyPath: String?
@@ -137,7 +140,8 @@ struct Options {
                       [--mouse auto|tablet|capture] [--no-gamepad] [--pad auto|xbox360|dualsense|dualshock4]
                       [--krun-log-level 0-5] [--perf-stats]
                       [--no-crash-reports] [--steam-client frame|deck|deckbeta]
-                      [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan] [--lan-remote-play | --no-lan-remote-play]
+                      [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan]
+                      [--frame-latency | --no-frame-latency] [--lan-remote-play | --no-lan-remote-play]
            steamac-vm --selftest-display [--headless] [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-overlay [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-stall [--selftest-out DIR] [--display WxH]
@@ -228,6 +232,11 @@ struct Options {
                            include it: host/kosmickrisp);
                            moltenvk: MoltenVK with steamac's patches (every Mac).
                            Switching makes Steam and games rebuild their shader caches.
+      --frame-latency      frame latency mode on (kernel cmdline steamac.frame_latency=1; default:
+                           Settings > Advanced "Frame latency", off): the guest's DXVK config gets
+                           dxgi.maxFrameLatency = 1 (Vulkan path only), trading some throughput for
+                           lower input latency. Off means no key is added, so the guest side is
+                           unchanged. --no-frame-latency turns it off for this run.
 
     Creating a SteamOS disk (no Docker; the same code as Settings > Advanced "Create New Disk…"):
       --create-disk PATH   download the signed SteamOS bundle of the branch (default: the saved setting,
@@ -376,6 +385,8 @@ struct Options {
                 }
                 o.graphicsPath = g
             case "--selftest-graphics-path": o.selftestGraphicsPath = true
+            case "--frame-latency": o.frameLatency = true
+            case "--no-frame-latency": o.frameLatency = false
             case "--vulkan-driver":
                 let v = try value(a)
                 guard let d = LauncherSettings.VulkanDriver(rawValue: v) else {
@@ -469,6 +480,12 @@ struct Options {
         return o
     }
 
+    /// Settings > Advanced "Frame latency" -> kernel cmdline key: on writes `steamac.frame_latency=1`,
+    /// off writes nothing (absent is the default). The key is `steamac.frame_latency`.
+    static func frameLatencyArg(_ on: Bool) -> (key: String, value: String)? {
+        on ? ("steamac.frame_latency", "1") : nil
+    }
+
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
             || selftestMetalCache || selftestGameLayers || createDisk != nil || growDisk != nil
@@ -508,6 +525,8 @@ struct Options {
             add("steamac.gpu_mib", String(VMSizing.gpuBudgetMiB(memMiB: o.memMiB)))
             // the guest's Proton-lean tool uses DXMT only when the host offers the wmtr context
             add("steamac.gfx", o.graphicsPath.rawValue)
+            // only written when on; absent is the default (off), so an explicit =0 needs no key
+            if let a = Options.frameLatencyArg(o.frameLatency) { add(a.key, a.value) }
             if o.macTime {
                 add("steamac.tz", MacTime.zone)
                 add("steamac.clock24", MacTime.clock24.map { $0 ? "1" : "0" })
@@ -562,6 +581,9 @@ struct Options {
         if given("--steam-client") { ov[.steamClient] = "--steam-client \(steamClient.rawValue)" } else { steamClient = s.steamClient }
         if given("--vulkan-driver") { ov[.vulkanDriver] = "--vulkan-driver \(vulkanDriver.rawValue)" } else { vulkanDriver = s.vulkanDriver }
         if given("--graphics-path") { ov[.graphicsPath] = "--graphics-path \(graphicsPath.rawValue)" } else { graphicsPath = s.graphicsPath }
+        if given("--frame-latency") || given("--no-frame-latency") {
+            ov[.frameLatency] = frameLatency ? "--frame-latency" : "--no-frame-latency"
+        } else { frameLatency = s.frameLatency }
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }

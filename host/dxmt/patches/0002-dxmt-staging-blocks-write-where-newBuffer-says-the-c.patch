@@ -1,8 +1,8 @@
-From 9abb2db9c446fefedf7f0f47229c83a1c1549aff Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: StonkGuy <68372320+StonkGuy@users.noreply.github.com>
 Date: Sat, 10 Oct 2026 15:14:52 +0300
-Subject: [PATCH] dxmt: staging blocks write where newBuffer says the contents
- are
+Subject: [PATCH 02/24] dxmt: staging blocks write where newBuffer says the
+ contents are
 
 StagingBufferBlockAllocator placed its own malloc() under each block and
 kept writing to that pointer, ignoring the WMTBufferInfo.memory that
@@ -19,7 +19,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  1 file changed, 13 insertions(+), 5 deletions(-)
 
 diff --git a/src/dxmt/dxmt_ring_bump_allocator.hpp b/src/dxmt/dxmt_ring_bump_allocator.hpp
-index 5c92d92..15a1e4d 100644
+index 5c92d92fb128d2d50af56b921351a891ab425eb5..15a1e4da54b5cd39956802697725ffa658e50aef 100644
 --- a/src/dxmt/dxmt_ring_bump_allocator.hpp
 +++ b/src/dxmt/dxmt_ring_bump_allocator.hpp
 @@ -94,12 +94,16 @@ public:
@@ -69,6 +69,3 @@ index 5c92d92..15a1e4d 100644
      return block;
    };
  
--- 
-2.39.5 (Apple Git-154)
-
