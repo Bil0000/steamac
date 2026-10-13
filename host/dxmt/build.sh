@@ -45,6 +45,9 @@ LLVM_MINGW_SHA256=d1dc5d1ecf3a3ced5ed5544c72f1acd0c8e84eb3024d520ecc6b143eec62a1
 # Guest unixlib build container (debian:trixie index digest, gcc 14: DXMT's winemetal.h uses C23 enums with a fixed underlying type); wmtr_glibc_compat.h keeps its symbols <= 2.14
 CLIENT_IMAGE=docker.io/library/debian@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
 BREW_DEPS="meson ninja cmake pkgconf zstd"
+# Like libepoxy, virglrenderer and libkrun: the launcher's floor, whatever the build host's SDK is
+# (host/launcher/bundle.sh rejects a library with a higher LC_BUILD_VERSION minos).
+export MACOSX_DEPLOYMENT_TARGET=15.0
 
 cache=$root/work/cache/dxmt
 src=$root/work/src/dxmt
@@ -53,7 +56,7 @@ native=$root/work/build/dxmt-native
 pebuild=$root/work/build/dxmt-pe
 pe=$root/work/out/dxmt-pe
 toolchains=$root/work/cache/toolchains
-jobs=${JOBS:-$(sysctl -n hw.ncpu)}
+jobs=${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc)}
 
 log() { printf '\n=== %s\n' "$*"; }
 die() { echo "host/dxmt/build.sh: $*" >&2; exit 1; }
@@ -176,9 +179,12 @@ if [ "${1:-}" = clean ]; then
 fi
 steps=("$@")
 [ ${#steps[@]} -gt 0 ] || steps=(fetch llvm native host pe client payload)
-for dep in $BREW_DEPS; do
-    brew list --versions "$dep" >/dev/null 2>&1 || brew install "$dep"
-done
+# fetch, client and payload also run on a Linux host (the guest half of a build split over two machines)
+case " ${steps[*]} " in *" llvm "*|*" native "*|*" host "*|*" pe "*)
+    for dep in $BREW_DEPS; do
+        brew list --versions "$dep" >/dev/null 2>&1 || brew install "$dep"
+    done ;;
+esac
 for s in "${steps[@]}"; do
     case $s in
         fetch|llvm|native|host|pe|client|payload) "step_$s" ;;
