@@ -32,6 +32,8 @@ enum VMSizing {
     }
 
     static let minAutoMemMiB = 4096, maxAutoMemMiB = 16384
+    /// Smallest guest RAM a boot accepts (--mem; Options.validate). Saved settings are floored at 1024.
+    static let minMemMiB = 256
     /// Fewer than 4 vCPUs leave Steam's UI loading for minutes (STEAMAC-2K: 2 vCPUs on a 12-core Mac).
     static let minAutoCPUs = 4, maxAutoCPUs = 8
     /// macOS, the launcher, driver-internal allocations and other apps need room besides
@@ -118,8 +120,8 @@ enum VMSizing {
         }
         if !memRejected(0, needsDisk: true) { failures.append("sizing: --mem 0 accepted on a first boot") }
         if !memRejected(0, needsDisk: false) { failures.append("sizing: --mem 0 accepted") }
-        if !memRejected(255, needsDisk: false) { failures.append("sizing: --mem 255 accepted") }
-        if memRejected(256, needsDisk: false) { failures.append("sizing: --mem 256 rejected") }
+        if !memRejected(minMemMiB - 1, needsDisk: false) { failures.append("sizing: --mem \(minMemMiB - 1) accepted") }
+        if memRejected(minMemMiB, needsDisk: false) { failures.append("sizing: --mem \(minMemMiB) rejected") }
         let air = host(8, 4, 8)
         if memWarning(memMiB: 4096, host: air) == nil { failures.append("sizing: 1 GiB GPU budget on an 8 GB Mac not warned") }
         if memWarning(memMiB: 5120, host: air) == nil { failures.append("sizing: 5 GB on an 8 GB Mac not warned") }
