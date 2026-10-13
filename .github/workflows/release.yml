@@ -117,7 +117,8 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends qemu-user-static binfmt-support >/dev/null
-          docker run --rm --platform linux/amd64 docker.io/library/alpine@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 uname -m
+          # probe only (not a build input); a separate image: an index digest pulled for amd64 cannot be pulled again for arm64
+          test "$(docker run --rm --platform linux/amd64 docker.io/library/busybox:1.37 uname -m)" = x86_64
           df -h / "$PWD"
       - name: Kernel cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -134,7 +135,7 @@ jobs:
         with:
           path: |
             work/out/mesa-venus
-            work/out/mesa.inputs.json
+            work/out/mesa-venus.inputs.json
             work/out/mesa-aarch64.inputs.json
             work/out/mesa-x86.inputs.json
           key: mesa-${{ hashFiles('guest/mesa/**', 'scripts/config.env', 'scripts/steps/10-rootfs.sh', 'scripts/builder/Dockerfile', 'scripts/keys/**') }}
@@ -170,7 +171,7 @@ jobs:
           tar -cf guest-base.tar \
             work/out/Image work/out/Image.inputs.json work/out/kernel.config \
             work/out/initramfs.cpio.gz work/out/initramfs.cpio.gz.inputs.json \
-            work/out/mesa-venus work/out/mesa.inputs.json work/out/mesa-aarch64.inputs.json work/out/mesa-x86.inputs.json \
+            work/out/mesa-venus work/out/mesa-venus.inputs.json work/out/mesa-aarch64.inputs.json work/out/mesa-x86.inputs.json \
             work/cache/kernel/*.tar.xz work/cache/dosfstools/*/*.tar.gz work/cache/e2fsprogs/*/*.tar.xz work/cache/btrfs-progs/*/*.tar.xz
           ls -l guest-base.tar
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -224,7 +225,7 @@ jobs:
             work/out/Image work/out/Image.inputs.json work/out/kernel.config \
             work/out/initramfs.cpio.gz work/out/initramfs.cpio.gz.inputs.json \
             work/out/steamac-layer.img work/out/steamac-layer.img.inputs.json \
-            work/out/mesa-venus work/out/mesa.inputs.json work/out/mesa-aarch64.inputs.json work/out/mesa-x86.inputs.json \
+            work/out/mesa-venus work/out/mesa-venus.inputs.json work/out/mesa-aarch64.inputs.json work/out/mesa-x86.inputs.json \
             work/out/dxmt work/out/guest-toolchain.json \
             work/cache/licenses work/cache/cargo-home/registry \
             work/cache/kernel/*.tar.xz work/cache/dosfstools/*/*.tar.gz work/cache/e2fsprogs/*/*.tar.xz work/cache/btrfs-progs/*/*.tar.xz
