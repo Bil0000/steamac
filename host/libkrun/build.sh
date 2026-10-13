@@ -108,6 +108,13 @@ done
 	# CoreAudio backend: control requests and the pump stalling each other (patch 0022).
 	RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
 		cargo test -q --features gpu,snd --lib -- virtio::snd
+	# Freed guest memory leaves the VMM's footprint (patch 0026). Runs a guest vCPU, so the
+	# test binary needs the hypervisor entitlement: built, signed, then run.
+	cd "$src"
+	bin=$(cargo test -q -p krun-hvf --lib --no-run --message-format=json |
+		sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -1)
+	codesign --force -s - --entitlements "$here/test/hypervisor.entitlements" "$bin"
+	"$bin" -q
 )
 
 # --- install (temp file + rename for every output)
