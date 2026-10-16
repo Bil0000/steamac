@@ -309,6 +309,8 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 					in.values = {{wivrn::device_id::RIGHT_TRIGGER_VALUE, trig, now},
 					             {wivrn::device_id::RIGHT_TRIGGER_TOUCH, trig > 0.05f ? 1.f : 0.f, now},
 					             {wivrn::device_id::A_CLICK, a ? 1.f : 0.f, now},
+					             // B (VRChat: menu) held for 0.3 s every 8 s
+					             {wivrn::device_id::B_CLICK, std::fmod(t, 8.f) < 0.3f ? 1.f : 0.f, now},
 					             {wivrn::device_id::LEFT_THUMBSTICK_X, 0.5f * std::sin(ph), now},
 					             {wivrn::device_id::LEFT_SQUEEZE_VALUE, a ? 0.f : 1.f, now}};
 					control.send(std::move(in));
