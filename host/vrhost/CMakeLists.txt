@@ -133,7 +133,7 @@ set_tests_properties(encoder loopback control PROPERTIES TIMEOUT 60)
 # the test headset as a tool, for a running steamac-vrhost (docs/vr.md "Testing without a headset")
 add_executable(vrhost-test-headset tests/test_headset_tool.mm tests/fake_headset.cpp tests/vt_decode.mm)
 set_source_files_properties(tests/test_headset_tool.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
-target_link_libraries(vrhost-test-headset PRIVATE vrhost-core)
+target_link_libraries(vrhost-test-headset PRIVATE vrhost-core "-framework ImageIO" "-framework CoreGraphics" "-framework Foundation")
 
 # End-to-end game-frame test (wmtr exporter -> link -> compositor -> session -> test headset). The exporter
 # (wmtr/src/wmtr_vr.m) needs the WMTVRSubmitInfo layout from a StonkGuy/dxmt vr-export checkout.
