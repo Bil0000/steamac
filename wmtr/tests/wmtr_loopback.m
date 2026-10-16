@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sched.h>
+#include <libproc.h>
+#include <sys/mman.h>
 
 #define WINEMETAL_API
 #include "winemetal_thunks.h"
@@ -128,12 +130,24 @@ static void *t_open_ring(struct wmtr_transport *t, uint64_t size) {
   H = wmtr_host_create(R, &host_ops, NULL);
   return R;
 }
-static void *t_add_blob(struct wmtr_transport *t, uint32_t b, uint64_t size) { blob_base[b] = pages(size); blob_size[b] = size; return blob_base[b]; }
+/* arena blobs are their own mappings, like the shm blobs of the real transports */
+static void *t_add_blob(struct wmtr_transport *t, uint32_t b, uint64_t size) {
+  void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+  blob_base[b] = p; blob_size[b] = size; return p;
+}
+static int n_blob_released;
+static void t_release_blob(struct wmtr_transport *t, uint32_t b, void *base, uint64_t size) {
+  if (base == blob_base[b] && size == blob_size[b]) { munmap(blob_base[b], size); blob_base[b] = NULL; blob_size[b] = 0; n_blob_released++; }
+}
+static uint64_t arena_bytes(void) { uint64_t n = 0; for (int b = 1; b < WMTR_MAX_BLOBS; b++) n += blob_base[b] ? blob_size[b] : 0; return n; }
+static uint64_t footprint(void) { struct rusage_info_v2 ri; return proc_pid_rusage(getpid(), RUSAGE_INFO_V2, (rusage_info_t *)&ri) ? 0 : ri.ri_phys_footprint; }
 static void t_kick(struct wmtr_transport *t) { wmtr_host_kick(H); }
 static void t_wait(struct wmtr_transport *t, volatile uint64_t *d, uint64_t seq, uint32_t slot, uint64_t spin_ns) { (void)spin_ns; while (__atomic_load_n(d, __ATOMIC_ACQUIRE) < seq) sched_yield(); }
 struct wmtr_transport *wmtr_transport_create(void) {
   struct wmtr_transport *t = calloc(1, sizeof *t);
   t->open_ring = t_open_ring; t->add_blob = t_add_blob; t->kick = t_kick; t->wait = t_wait;
+  t->release_blob = t_release_blob;
   return t;
 }
 static NTSTATUS remote(int call, void *p) { return ((fn_t)__wine_unix_call_funcs[call])(p); }
@@ -145,6 +159,7 @@ int main(void) {
     snprintf(frames_path, sizeof frames_path, "/tmp/wmtr_frames_%d.csv", (int)getpid());
     unlink(frames_path);
     setenv("WMTR_FRAMES", frames_path, 1);
+    setenv("WMTR_ARENA_TRIM_MS", "300", 1); /* section 7 */
     char stats_path[] = "/tmp/wmtr_callstats_XXXXXX";
     close(mkstemp(stats_path));
     /* WMTR_TEST_TRIGGER=1: statistics turned on at runtime through the trigger file instead of the environment */
@@ -260,6 +275,42 @@ int main(void) {
       CHECK(cb2.ret && ci.memory.ptr && ci.memory.ptr != own && ((uint8_t *)ci.memory.ptr)[65535] == 0x3c,
             "caller-placed buffer ret %llx mem %p", cb2.ret, ci.memory.ptr);
       free(own);
+    }
+    /* 7. after a peak, idle arena blobs beyond the 128 MiB reserve go back to the host once they have
+          been idle for WMTR_ARENA_TRIM_MS; blobs reused within that time are kept */
+    {
+      enum { NB = 8 };
+      struct wmtr_ring *R = blob_base[0];
+      uint64_t a0 = arena_bytes();
+      obj_handle_t bh[NB];
+      for (int i = 0; i < NB; i++) {
+        struct WMTBufferInfo pi = {60u << 20, WMTResourceStorageModeShared, {NULL}, 0};
+        struct unixcall_mtldevice_newbuffer pb = {(obj_handle_t)dev, {&pi}, 0};
+        remote(18, &pb);
+        bh[i] = pb.ret;
+        if (pi.memory.ptr) memset(pi.memory.ptr, i + 1, 60u << 20);
+      }
+      uint64_t a_peak = arena_bytes(), fp_peak = footprint();
+      CHECK(bh[NB - 1] && a_peak >= a0 + (NB - 1) * (60ull << 20), "peak: %llu arena MiB", a_peak >> 20);
+      uint64_t fh = R->free_head;
+      for (int i = 0; i < NB; i++) remote(1, &bh[i]);
+      remote(26, &fb);
+      for (int i = 0; i < 2000 && R->free_head < fh + NB; i++) usleep(1000);
+      remote(26, &fb); /* takes the frees: the blobs are idle, but not for long enough yet */
+      CHECK(n_blob_released == 0 && arena_bytes() == a_peak, "released %d blobs before the idle time", n_blob_released);
+      usleep(400000);
+      remote(26, &fb);
+      uint64_t a_after = arena_bytes(), fp_after = footprint();
+      printf("arena trim: arena %llu -> %llu MiB, footprint %llu -> %llu MiB, %d blobs released\n",
+             a_peak >> 20, a_after >> 20, fp_peak >> 20, fp_after >> 20, n_blob_released);
+      CHECK(a_after <= a0 + (128ull << 20), "arena kept %llu MiB after the peak (before %llu MiB)", a_after >> 20, a0 >> 20);
+      CHECK(fp_after + (256ull << 20) <= fp_peak, "footprint %llu -> %llu MiB", fp_peak >> 20, fp_after >> 20);
+      /* the arena still works: a released blob number is reused */
+      struct WMTBufferInfo ri = {100u << 20, WMTResourceStorageModeShared, {NULL}, 0};
+      struct unixcall_mtldevice_newbuffer rb = {(obj_handle_t)dev, {&ri}, 0};
+      remote(18, &rb);
+      CHECK(rb.ret && ri.memory.ptr, "newBuffer after trim");
+      if (rb.ret) { memset(ri.memory.ptr, 7, 100u << 20); obj_handle_t h = rb.ret; remote(1, &h); }
     }
     struct wmtr_host_stats st; wmtr_host_get_stats(H, &st);
     printf("requests=%llu sync=%llu bytes=%llu\n", st.requests, st.sync_requests, st.bytes);
