@@ -330,7 +330,6 @@ int main(void) {
       CHECK(rb.ret && ri.memory.ptr, "newBuffer after trim");
       if (rb.ret) { memset(ri.memory.ptr, 7, 100u << 20); obj_handle_t h = rb.ret; remote(1, &h); }
     }
-    {
     /* 8. client-assigned handles: a frame's pool + encoder creations do not wait for the host (one sync call
           apart from the calls that return values); each use reaches the host after its creation and gets the object;
           a failed creation makes the calls using its handle no-ops. WMTR_CLIENT_HANDLES=0: every creation waits. */
