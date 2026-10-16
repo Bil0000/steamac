@@ -83,9 +83,11 @@ class System : public StubIVRSystem {
   bool IsDisplayOnDesktop() override { return false; }
   bool SetDisplayVisibility(bool) override { return false; }
 
-  void GetDeviceToAbsoluteTrackingPose(ETrackingUniverseOrigin, float seconds, TrackedDevicePose_t *poses,
+  void GetDeviceToAbsoluteTrackingPose(ETrackingUniverseOrigin origin, float seconds, TrackedDevicePose_t *poses,
                                        uint32_t count) override {
     Runtime &rt = Runtime::get();
+    rt.pose_stats().abs_pose++;
+    if (origin == TrackingUniverseSeated) rt.pose_stats().abs_seated++;
     rt.poll();
     for (uint32_t i = 0; i < count; i++) poses[i] = rt.device_pose(i, seconds);
   }
@@ -131,7 +133,13 @@ class System : public StubIVRSystem {
     return i == kHmd ? TrackedDeviceClass_HMD : (i == kLeft || i == kRight) ? TrackedDeviceClass_Controller
                                                                             : TrackedDeviceClass_Invalid;
   }
-  bool IsTrackedDeviceConnected(vr::TrackedDeviceIndex_t i) override { return Runtime::get().device_connected(i); }
+  bool IsTrackedDeviceConnected(vr::TrackedDeviceIndex_t i) override {
+    Runtime &rt = Runtime::get();
+    bool c = rt.device_connected(i);
+    rt.pose_stats().connected_query++;
+    if (i == kHmd && !c) rt.pose_stats().connected_false_hmd++;
+    return c;
+  }
 
   bool GetBoolTrackedDeviceProperty(vr::TrackedDeviceIndex_t i, ETrackedDeviceProperty p,
                                     ETrackedPropertyError *e) override {

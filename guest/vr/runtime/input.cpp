@@ -459,6 +459,12 @@ class Input : public StubIVRInput {
   EVRInputError pose_data(VRActionHandle_t a, int64_t t, InputPoseActionData_t *d, uint32_t size,
                           VRInputValueHandle_t restrict_to) {
     if (!d || size < sizeof(*d)) return VRInputError_InvalidParam;
+    Runtime::get().pose_stats().pose_action++;
+    EVRInputError r = pose_data_locked(a, t, d, restrict_to);
+    if (r == VRInputError_None && !d->bActive) Runtime::get().pose_stats().pose_action_inactive++;
+    return r;
+  }
+  EVRInputError pose_data_locked(VRActionHandle_t a, int64_t t, InputPoseActionData_t *d, VRInputValueHandle_t restrict_to) {
     std::lock_guard<std::mutex> g(m_);
     if (!valid(a)) return VRInputError_InvalidHandle;
     memset(d, 0, sizeof(*d));
