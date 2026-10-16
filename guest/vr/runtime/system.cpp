@@ -39,12 +39,7 @@ class System : public StubIVRSystem {
 
   void GetProjectionRaw(EVREye eye, float *l, float *r, float *t, float *b) override {
     svr_hello_rep hi = Runtime::get().hello();
-    const float *f = hi.fov[eye == Eye_Right ? 1 : 0];  // left, right, up, down (radians)
-    // OpenVR: tangents, y down (top is negative for an upward angle)
-    if (l) *l = std::tan(f[0]);
-    if (r) *r = std::tan(f[1]);
-    if (t) *t = -std::tan(f[2]);
-    if (b) *b = -std::tan(f[3]);
+    raw_tangents(hi.fov[eye == Eye_Right ? 1 : 0], l, r, t, b);
   }
 
   HmdMatrix44_t GetProjectionMatrix(EVREye eye, float zn, float zf) override {

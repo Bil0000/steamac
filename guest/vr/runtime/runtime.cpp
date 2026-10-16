@@ -51,6 +51,7 @@ vr::EVRInitError Runtime::init(vr::EVRApplicationType type) {
     return vr::VRInitError_Init_HmdNotFound;
   }
   hello_ = rep;
+  hello_view_ = rep.connected && rep.eye_width;
   SVR_INFO("init app type %d over %s: %s %ux%u per eye %.0f Hz connected=%u", (int)type, transport_->name(),
            rep.name, rep.eye_width, rep.eye_height, rep.refresh_hz, rep.connected);
   return vr::VRInitError_None;
@@ -78,10 +79,12 @@ float Runtime::refresh_hz() const {
 bool Runtime::fetch(svr_frame_rep *out) {
   svr_frame_req req{};
   req.h = {SVR_FRAME, sizeof(req)};
+  bool need_view;
   {
     std::lock_guard<std::mutex> g(m_);
     if (!transport_) return false;
     req.last_frame_id = frame_.frame_id;
+    need_view = !hello_view_;
   }
   svr_frame_rep rep{};
   int r = transport_->call(&req.h, &rep.h, sizeof(rep));
@@ -89,6 +92,22 @@ bool Runtime::fetch(svr_frame_rep *out) {
   if (r || rep.h.op != SVR_FRAME || rep.h.size != sizeof(rep)) {
     SVR_ERR("frame request failed (%d)", r);
     return false;
+  }
+  if (rep.connected && need_view) {
+    // VR_Init ran before a headset connected: its hello had no eye size, FOV or IPD (GetProjectionRaw would be all
+    // zero). Ask again now that the host has the headset's view.
+    svr_hello_req hq{};
+    hq.h = {SVR_HELLO, sizeof(hq)};
+    hq.version = SVR_VERSION;
+    hq.pid = (uint32_t)getpid();
+    strncpy(hq.app_key, app_key.c_str(), sizeof(hq.app_key) - 1);
+    svr_hello_rep hr{};
+    if (transport_->call(&hq.h, &hr.h, sizeof(hr)) == 0 && hr.h.op == SVR_HELLO && hr.connected && hr.eye_width) {
+      std::lock_guard<std::mutex> g(m_);
+      hello_ = hr;
+      hello_view_ = true;
+      SVR_INFO("headset view: %s %ux%u per eye %.0f Hz", hr.name, hr.eye_width, hr.eye_height, hr.refresh_hz);
+    }
   }
   std::lock_guard<std::mutex> g(m_);
   clock_offset_ = now - rep.host_now;

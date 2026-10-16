@@ -77,6 +77,7 @@ class Runtime {
   mutable std::mutex m_;
   std::unique_ptr<Transport> transport_;
   svr_hello_rep hello_{};
+  bool hello_view_ = false;  // hello_ carries a connected headset's eye size / FOV / IPD
   svr_frame_rep latest_{};  // newest snapshot
   svr_frame_rep frame_{};   // snapshot of the frame being rendered
   int64_t clock_offset_ = 0;  // guest = host + offset

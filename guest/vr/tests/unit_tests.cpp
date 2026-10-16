@@ -238,6 +238,26 @@ static void test_math() {
   CHECK(near(o[0], 0) && near(o[2], -1));
   vr::HmdMatrix44_t pm = projection(-1, 1, -1, 1, 0.1f, 100);
   CHECK(near(pm.m[0][0], 1) && near(pm.m[1][1], 1) && near(pm.m[3][2], -1));
+  // GetProjectionRaw -> GetProjectionMatrix with a Quest 3-like asymmetric FOV (up 0.87, down -0.91 rad): the FOV's
+  // edges must land on the NDC edges, or the game renders a frustum that is not the one the headset displays
+  const float fov[4] = {-0.96f, 0.79f, 0.87f, -0.91f};
+  float l, r2, t, b;
+  raw_tangents(fov, &l, &r2, &t, &b);
+  CHECK(t < 0 && b > 0 && l < 0 && r2 > 0);  // SteamVR's signs: top and left negative
+  vr::HmdMatrix44_t qm = projection(l, r2, t, b, 0.1f, 100);
+  auto ndc = [&](float x, float y, int row) {  // view-space point at z = -1 (y up, -z forward)
+    float v[4] = {x, y, -1, 1}, c[4] = {};
+    for (int i = 0; i < 4; i++)
+      for (int k = 0; k < 4; k++) c[i] += qm.m[i][k] * v[k];
+    return c[row] / c[3];
+  };
+  CHECK(near(ndc(0, tanf(fov[2]), 1), 1));    // up edge -> top of the image
+  CHECK(near(ndc(0, tanf(fov[3]), 1), -1));   // down edge -> bottom
+  CHECK(near(ndc(tanf(fov[0]), 0, 0), -1));   // left edge
+  CHECK(near(ndc(tanf(fov[1]), 0, 0), 1));    // right edge
+  float d = 0;
+  for (int i = 0; i < 4; i++) d += qm.m[2][i] * (i == 2 ? -0.1f : i == 3 ? 1.f : 0.f);
+  CHECK(near(d / 0.1f, 0));  // D3D depth: near plane -> 0
 }
 
 static float dist(const vr::VRBoneTransform_t &a, const vr::VRBoneTransform_t &b) {
