@@ -59,6 +59,12 @@ struct Manifest {
   std::vector<PoseBinding> poses;
   std::vector<HandBinding> haptics;
   std::vector<HandBinding> skeletons;
+  // HMD bindings from the manifest's generic_hmd default binding (/user/head/proximity -> e.g. VRChat's
+  // HeadsetOnHead): set, output (both lower-case) and the head component
+  struct HeadBinding {
+    std::string set, output, component;
+  };
+  std::vector<HeadBinding> head;
   std::string binding_controller;  // controller_type of the binding file that was loaded ("" = none)
 
   // Load the manifest and the default binding file for `controller_type` (falls back to oculus_touch,

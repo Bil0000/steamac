@@ -139,6 +139,18 @@ class Input : public StubIVRInput {
           if (fabsf(v.v[i]) > fabsf(st->v[i])) st->v[i] = v.v[i];
       }
     });
+    // headset bindings (VRChat's HeadsetOnHead = /user/head/proximity): a connected headset is worn
+    for (auto &hb : manifest_.head) {
+      if (hb.component != "proximity") continue;
+      bool set_active = false;
+      for (auto &a : active) set_active |= a.name == hb.set;
+      auto it = handles_.find(hb.output);
+      if (!set_active || it == handles_.end() || slots_[it->second - 1].action < 0) continue;
+      ActionState &st = slots_[it->second - 1].st[0];
+      st.active = true;
+      st.digital = st.digital || rt.device_connected(kHmd);
+      if (st.digital) st.v[0] = 1;
+    }
     for (size_t i : action_slots_)
       for (ActionState &st : slots_[i].st)
         if (st.digital != st.prev_digital || memcmp(st.v, st.prev_v, sizeof(st.v))) st.changed_at = now;

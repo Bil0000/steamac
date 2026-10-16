@@ -155,6 +155,31 @@ bool Manifest::load(const std::string &manifest_path, const std::string &control
     return true;
   }
   binding_controller = lower(pick->get_str("controller_type"));
+  // the headset's own binding (SteamVR loads it beside the controller's): only /user/head sources are used
+  for (auto &d : defs->arr) {
+    if (lower(d.get_str("controller_type")) != "generic_hmd") continue;
+    std::string hurl = d.get_str("binding_url"), htext;
+    std::string hpath = !hurl.empty() && hurl[0] == '/' ? hurl : dir_of(manifest_path) + "/" + hurl;
+    Json hroot;
+    std::string herr;
+    if (!read_file(hpath, &htext) || !Json::parse(htext, &hroot, &herr)) break;
+    const Json *hsets = hroot.get("bindings");
+    if (!hsets || !hsets->is_obj()) break;
+    for (auto &skv : hsets->obj) {
+      const Json *sources = skv.second.get("sources");
+      if (!sources || !sources->is_arr()) continue;
+      for (auto &src : sources->arr) {
+        std::string path = lower(src.get_str("path"));
+        if (path.compare(0, 11, "/user/head/")) continue;
+        const Json *inputs = src.get("inputs");
+        if (!inputs || !inputs->is_obj()) continue;
+        for (auto &ikv : inputs->obj)
+          if (const Json *o = ikv.second.get("output"))
+            if (o->type == Json::String) head.push_back({lower(skv.first), lower(o->str), path.substr(11)});
+      }
+    }
+    break;
+  }
   for (auto &b : bindings) b.output = lower(b.output);
   for (auto &c : chords) c.output = lower(c.output);
   for (auto &p : poses) p.output = lower(p.output);

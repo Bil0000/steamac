@@ -291,6 +291,14 @@ int main(int argc, char **argv) {
   char buf[256];
   sys->GetStringTrackedDeviceProperty(1, vr::Prop_ControllerType_String, buf, sizeof(buf), nullptr);
   CHECK(!strcmp(buf, index ? "knuckles" : "oculus_touch"), "controller type %s", buf);
+  // the HMD has a controller type and the family's tracking system, as SteamVR reports them (VRChat ignores an HMD
+  // without Prop_ControllerType_String: no head tracking at all)
+  buf[0] = 0;
+  vr::ETrackedPropertyError herr = vr::TrackedProp_UnknownProperty;
+  sys->GetStringTrackedDeviceProperty(0, vr::Prop_ControllerType_String, buf, sizeof(buf), &herr);
+  CHECK(herr == vr::TrackedProp_Success && !strcmp(buf, index ? "indexhmd" : "oculus"), "HMD controller type '%s' (%d)", buf, herr);
+  sys->GetStringTrackedDeviceProperty(0, vr::Prop_TrackingSystemName_String, buf, sizeof(buf), &herr);
+  CHECK(herr == vr::TrackedProp_Success && !strcmp(buf, index ? "lighthouse" : "oculus"), "HMD tracking system '%s'", buf);
   vr::ETrackedPropertyError perr;
   uint32_t need = sys->GetStringTrackedDeviceProperty(1, vr::Prop_ModelNumber_String, buf, 2, &perr);
   CHECK(perr == vr::TrackedProp_BufferTooSmall && need > 2, "string property size query");
@@ -390,6 +398,11 @@ int main(int argc, char **argv) {
       if (tt.digital("/actions/Global/in/Menu", 0)) menu_seen++;
       bool il = tt.digital("/actions/Global/in/Interact", 1, &la), ir = tt.digital("/actions/Global/in/Interact", 2, &ra);
       CHECK(la && ra, "Interact is bound on both hands: active for each");
+      // the generic_hmd binding: /user/head/proximity drives HeadsetOnHead while the headset is connected
+      // (VRChat treats an inactive/false HeadsetOnHead as the headset taken off)
+      bool hoa = false;
+      bool hon = tt.digital("/actions/Global/in/HeadsetOnHead", 0, &hoa);
+      CHECK(hoa && hon, "HeadsetOnHead active and on (active %d, state %d)", hoa, hon);
       bool ua, ula;
       bool use_r = tt.digital("/actions/One_Hand/in/Use", 2, &ua), use_l = tt.digital("/actions/One_Hand/in/Use", 1, &ula);
       CHECK(ua && !ula && !use_l, "One_Hand is active for the right hand only");
