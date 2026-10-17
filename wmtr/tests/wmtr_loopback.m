@@ -224,8 +224,10 @@ static void test_vr_query(struct wmtr_vr *vr, int host_fd) {
 
   struct vrl_state st = {{VRL_STATE, sizeof st}, 1, 1832, 1920, 72.0f, 0.065f, {{-0.9f, 0.8f, 0.85f, -0.85f}, {-0.8f, 0.9f, 0.85f, -0.85f}},
                          VRL_PROFILE_INDEX, 0, "Quest 3"};
-  struct vrl_timing tm = {{VRL_TIMING, sizeof tm}, 500, 1000000, 1000000 + 27777778, 72.0f, 0};
-  struct vrl_poses po = {{VRL_POSES, sizeof po}, 1000000 + 27777778};
+  /* host clock = this process's (CLOCK_UPTIME_RAW, as steamac-vrhost): a current pacer frame */
+  const int64_t t0 = (int64_t)clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 5000000;
+  struct vrl_timing tm = {{VRL_TIMING, sizeof tm}, 500, t0, t0 + 27777778, 72.0f, 0};
+  struct vrl_poses po = {{VRL_POSES, sizeof po}, t0 + 27777778};
   for (int d = 0; d < VRL_DEV_COUNT; d++) {
     po.pose[d].orientation[3] = 1;
     po.pose[d].position[0] = (float)d;
@@ -240,13 +242,14 @@ static void test_vr_query(struct wmtr_vr *vr, int host_fd) {
   CHECK(wmtr_vr_call(&hq, sizeof hq, &hr, sizeof hr) == 0 && hr.connected && hr.eye_width == 1832 && hr.refresh_hz == 72.0f &&
         hr.profile == SVR_PROFILE_INDEX && !strcmp(hr.name, "Quest 3") && hr.fov[1][1] == 0.9f, "hello from VRL_STATE");
   fq.last_frame_id = 0;
-  CHECK(wmtr_vr_call(&fq, sizeof fq, &fr, sizeof fr) == 0 && fr.frame_id == 500 && fr.wake_up == 1000000 &&
-        fr.predicted_display == 1000000 + 27777778 && fr.pose_time == po.time && fr.pose[SVR_DEV_RIGHT_AIM].position[0] == 4.0f &&
+  CHECK(wmtr_vr_call(&fq, sizeof fq, &fr, sizeof fr) == 0 && fr.frame_id == 500 && fr.wake_up == t0 &&
+        fr.predicted_display == t0 + 27777778 && fr.pose_time == po.time && fr.pose[SVR_DEV_RIGHT_AIM].position[0] == 4.0f &&
         fr.input[1][SVR_IN_TRIGGER_VALUE] == 0.5f && fr.input[0][SVR_IN_THUMBSTICK_X] == -1.0f && fr.connected,
         "frame from VRL_TIMING/POSES/INPUT");
   fq.last_frame_id = 500; /* the guest already rendered it: continue the cadence */
+  /* no newer host frame: the next one a period later (wmtr_vr_frame_cadence) */
   CHECK(wmtr_vr_call(&fq, sizeof fq, &fr, sizeof fr) == 0 && fr.frame_id == 501 &&
-        fr.predicted_display == 1000000 + 27777778 + (int64_t)(1e9f / 72.0f), "frame after the pacer's");
+        fr.wake_up == t0 + (int64_t)(1e9f / 72.0f), "frame after the pacer's");
 
   struct svr_haptic_req hp = {{SVR_HAPTIC, sizeof hp}, 1, 0.05f, 160.0f, 0.75f};
   struct svr_ack ack;
@@ -464,8 +467,38 @@ static void test_vr_fd(void) {
 }
 
 static char frames_path[64];
+/* SVR_FRAME cadence across headset connect / disconnect / reconnect (live 2026-10-17: VRChat started without a
+ * headset ran ~9050 locally paced frames; after the reconnect the host pacer restarted at id 1 and the guest was
+ * told to wake ~9000 frames later, i.e. froze). Each step: ids grow, wake-up within two frames of now. */
+static void test_vr_cadence(void) {
+  const int64_t P = 11111111; /* 90 Hz */
+  struct wmtr_vr_cadence c = {0};
+  int64_t now = 1000000000000ll, wake, disp;
+  uint64_t last = 0, id;
+  int bad = 0;
+#define STEP(hid, hwake) do { \
+    wmtr_vr_frame_cadence(&c, (hid), (hwake), (hwake) + 2 * P, last, now, P, &id, &wake, &disp); \
+    if (id <= last || wake > now + 2 * P || wake < now - 2 * P || disp < wake) bad++; \
+    last = id; now += P; } while (0)
+  for (int i = 0; i < 9050; i++) STEP(0, 0);                 /* game started, no headset ever connected */
+  CHECK(bad == 0 && last == 9050, "no-headset cadence: %d bad, last %llu", bad, (unsigned long long)last);
+  for (uint64_t h = 1; h <= 300; h++) STEP(h, now + P / 2);  /* headset connects: pacer ids from 1 */
+  CHECK(bad == 0 && last == 9350, "connect: %d bad, last %llu", bad, (unsigned long long)last);
+  CHECK(wake == now - P + P / 2, "connect: host wake not used");
+  for (int i = 0; i < 500; i++) STEP(300, now - 3 * P - i * P); /* disconnect: the host's last timing goes stale */
+  CHECK(bad == 0 && last == 9850, "disconnect: %d bad, last %llu", bad, (unsigned long long)last);
+  for (uint64_t h = 1; h <= 300; h++) STEP(h, now + P / 3);  /* reconnect: pacer restarts at 1 again */
+  CHECK(bad == 0 && last == 10150, "reconnect: %d bad, last %llu", bad, (unsigned long long)last);
+  CHECK(wake == now - P + P / 3, "reconnect: host wake not used");
+  STEP(9999, now + 500 * P); /* a timing far ahead is clamped */
+  CHECK(bad == 0, "far-ahead timing: wake %lld ms ahead", (long long)((wake - now + P) / 1000000));
+#undef STEP
+  printf("vr cadence: no headset / connect / disconnect / reconnect / far-ahead ok\n");
+}
+
 int main(void) {
   @autoreleasepool {
+    test_vr_cadence();
     snprintf(frames_path, sizeof frames_path, "/tmp/wmtr_frames_%d.csv", (int)getpid());
     unlink(frames_path);
     setenv("WMTR_FRAMES", frames_path, 1);

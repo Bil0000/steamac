@@ -103,6 +103,22 @@ static vrl_pose to_vrl(const std::optional<TrackedPose> & t)
 	return p;
 }
 
+vrl_state VrPipeline::default_view()
+{
+	// Meta Quest 3 under WiVRn v26.9 (live 2026-10-16/17): 1836x1924 per eye, 90 Hz, its asymmetric FOV
+	vrl_state s{};
+	s.h = {VRL_STATE, sizeof s};
+	s.eye_width = 1836;
+	s.eye_height = 1924;
+	s.refresh_hz = 90;
+	s.ipd_m = 0.064f;
+	const float fov[2][4] = {{-0.96f, 0.79f, 0.87f, -0.91f}, {-0.79f, 0.96f, 0.87f, -0.91f}};
+	memcpy(s.fov, fov, sizeof fov);
+	s.profile = VRL_PROFILE_TOUCH;
+	snprintf(s.name, sizeof s.name, "Meta Quest 3");
+	return s;
+}
+
 void VrPipeline::send_state(bool connected)
 {
 	vrl_state s{};
@@ -129,6 +145,15 @@ void VrPipeline::send_state(bool connected)
 		s.ipd_m = d2 > 0 ? std::sqrt(d2) : 0.064f;
 		s.profile = VRL_PROFILE_TOUCH; // WiVRn clients: Quest/Pico touch-style controllers
 		snprintf(s.name, sizeof s.name, "%s", info->name.c_str());
+		last_view = s;
+	}
+	else
+	{
+		// No headset (not yet, or it left): the game keeps an HMD with the last headset's view, or a Quest 3's before
+		// the first one, as SteamVR keeps an HMD in standby. A game that starts now never sees a 0x0 / zero-FOV
+		// headset, and one already running keeps its projection; only `connected` changes.
+		s = last_view.eye_width ? last_view : default_view();
+		s.connected = 0;
 	}
 	server->send(&s, sizeof s);
 }
@@ -291,7 +316,18 @@ void VrPipeline::on_frame(const LinkFrame & f)
 		       info->render_eye_width, info->render_eye_height, f.fov[0].left, f.fov[0].right, f.fov[0].up, f.fov[0].down);
 		fflush(stdout);
 	}
-	(*bridge)(f);
+	// A frame rendered with a zero FOV (a runtime that got no view, an older guest): foveate with the headset's own
+	// FOV instead of degenerate parameters.
+	const LinkFrame * frame = &f;
+	LinkFrame fixed;
+	if (f.fov[0].right - f.fov[0].left <= 0 or f.fov[1].right - f.fov[1].left <= 0)
+	{
+		fixed = f;
+		for (int e = 0; e < 2; e++)
+			fixed.fov[e] = {info->fov[e].left, info->fov[e].right, info->fov[e].up, info->fov[e].down};
+		frame = &fixed;
+	}
+	(*bridge)(*frame);
 	last_upscaler = bridge->last_upscaler();
 	int64_t sent = now_ns();
 	st.submitted++;

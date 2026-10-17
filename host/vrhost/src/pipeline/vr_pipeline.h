@@ -9,6 +9,7 @@
 //   VrSession::start(&pipeline).
 #pragma once
 #include "compositor/vrlink_server.h"
+#include "vrlink.h"
 #include "session/vr_session.h"
 
 #include <array>
@@ -81,6 +82,8 @@ private:
 	void on_frame_error();
 	void on_message(const void *, size_t);
 	void send_state(bool connected);
+	static vrl_state default_view(); // the view a game gets before any headset connected
+	vrl_state last_view{};           // the last connected headset's view (send_state)
 	void send_input();
 	void frame_clock();
 	VrSession & session;
