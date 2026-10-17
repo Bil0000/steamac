@@ -369,6 +369,26 @@ static void test_vr(id<MTLDevice> dev) {
   rel.swapchain = held.eye[1].swapchain; rel.image = held.eye[1].image; send(sv[1], &rel, sizeof rel, 0);
   sub.info.frame_id = 20; remote(146, &sub); remote(39, &sync);
   CHECK(vr_next(sv[1], VRL_SUBMIT, &u, sizeof u) && u.s.frame_id == 20, "frame after release not sent");
+  /* a stalled host (link buffer full): the copy's completion handler must not block on the send (it would stall
+   * Metal's completion thread for the whole process); the frame is dropped and its images freed */
+  {
+    rel.swapchain = u.s.eye[0].swapchain; rel.image = u.s.eye[0].image; send(sv[1], &rel, sizeof rel, 0);
+    rel.swapchain = u.s.eye[1].swapchain; rel.image = u.s.eye[1].image; send(sv[1], &rel, sizeof rel, 0);
+    remote(39, &sync);
+    struct vrl_submit junk; memset(&junk, 0, sizeof junk); /* the size of the frame's packet: no room for it after */
+    int filled = 0;
+    while (send(sv[0], &junk, sizeof junk, MSG_DONTWAIT) > 0) filled++;
+    struct wmtr_vr_stats s0; wmtr_vr_get_stats(vr, &s0);
+    sub.info.frame_id = 25; remote(146, &sub); remote(39, &sync);
+    int64_t t_wait = (int64_t)clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    struct wmtr_vr_stats s1;
+    do { usleep(2000); wmtr_vr_get_stats(vr, &s1); }
+    while (s1.dropped == s0.dropped && s1.sent == s0.sent && clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t_wait < 2000000000ull);
+    CHECK(filled > 0 && s1.dropped == s0.dropped + 1 && s1.sent == s0.sent,
+          "stalled host: filled %d, dropped %llu -> %llu, sent %llu -> %llu", filled, s0.dropped, s1.dropped, s0.sent, s1.sent);
+    char drain[4096];
+    while (recv(sv[1], drain, sizeof drain, MSG_DONTWAIT) > 0) {}
+  }
   /* a size change recreates the swapchain (new ports, new id) */
   sub.info.eye[0].w = 128; sub.info.eye[0].h = 64; sub.info.frame_id = 21;
   remote(146, &sub); remote(39, &sync);

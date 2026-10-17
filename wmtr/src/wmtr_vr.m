@@ -480,7 +480,17 @@ wmtr_vr_submit(struct wmtr_vr *vr, const struct WMTVRSubmitInfo *info) {
     }
     q.ready_time = now_ns();
     stage_account(vr, q.app_submit_time, wait_event && wait_value ? signal_time(vr, wait_event, wait_value) : 0, done, q.ready_time);
-    if (send_packet(vr, &q, sizeof q)) atomic_fetch_add(&vr->sent, 1);
+    /* Never block Metal's completion thread on the link (a stalled host would stall every completion handler of
+     * the process, the game's too): when the host's buffer is full the frame is dropped and its images freed. */
+    ssize_t r;
+    do r = send(vr->fd, &q, sizeof q, MSG_DONTWAIT); while (r < 0 && errno == EINTR);
+    if (r == (ssize_t)sizeof q) atomic_fetch_add(&vr->sent, 1);
+    else {
+      if (r < 0 && (errno == EAGAIN || errno == ENOBUFS)) atomic_fetch_add(&vr->dropped, 1);
+      else atomic_fetch_add(&vr->errors, 1);
+      for (int e = 0; e < 2; e++)
+        if (vr->sc[e].id == q.eye[e].swapchain) atomic_store(&vr->sc[e].busy[q.eye[e].image], 0);
+    }
     atomic_fetch_sub(&vr->inflight, 1);
   }];
   [cb commit];
