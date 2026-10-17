@@ -9,11 +9,20 @@ M4 guest/FEX and host-launcher integration remain open.
 1. Install the WiVRn v26.9 client for the headset as described below, and put the Mac and headset on the same LAN.
 2. In Launcher Settings → VR, enable **VR (experimental)**. This setting is off by default and is available only with
    the DXMT graphics path. Start the VM; the launcher starts the separate `steamac-vrhost` process with it.
-3. Use the panel's status and pairing controls. When pairing is open, enter the displayed six-digit PIN in WiVRn on the
-   headset. Paired headsets reconnect with encryption enabled; use the panel to unpair a headset or open pairing for
-   another one. Resolution and bitrate changes are used the next time the host starts with the VM.
-4. The panel reports headset connection and host encoder/stream statistics. If the host is not running, it can still
-   show and remove the saved paired-headset list; pairing and live status require the host.
+3. Pairing: with **Let new headsets ask to pair** (default on) a headset that is not paired yet opens pairing when it
+   connects; enter the six-digit PIN shown in the panel and in the VM window's title in WiVRn on the headset. Pairing
+   closes again once it has paired. With the option off, new headsets are refused (the panel names the refused headset
+   and offers **Pair this headset**). Paired headsets reconnect with encryption enabled; the paired list groups entries
+   of the same name (a reinstalled or test client), and **Unpair** removes them all.
+4. Encoder: **Bitrate** applies at once to a running host (control socket `bitrate`); **Resolution per eye** and
+   **Codec** (Automatic = HEVC when the headset has it, or H.264) on the next start. While a headset is connected, the
+   **Refresh rate** picker asks it to switch among the rates it offers (WiVRn `refresh_rate_change`, not saved).
+5. Game: **Start in VR** runs `steam -ifrunning steam://launch/<id>/vr` in the guest (fx-progress-agent `launch-vr`;
+   a plain launch may pick a game's desktop mode). The same game (Steam app ID, default VRChat 438100) is listed in the
+   WiVRn app's app list on the headset; picking it there starts it the same way. **Game audio in the headset** (default
+   on) routes the guest's sound to a connected headset and its microphone to the guest.
+6. The panel reports headset connection, battery, codec, encryption and host encoder/stream statistics. If the host is
+   not running, it can still show and remove the saved paired-headset list; pairing and live status require the host.
 
 **Limitations:** VR is experimental and off by default. The guest OpenVR runtime and the Proton `vrclient_x64` path are
 not included in the end-user launcher, so a game cannot currently submit eye frames through this UI. The headset server

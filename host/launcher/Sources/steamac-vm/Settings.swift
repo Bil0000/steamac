@@ -35,7 +35,7 @@ final class LauncherSettings: ObservableObject {
         case cpus, memMiB, sshEnabled, sshPort, network, lanRemotePlay, diskImage, steamosBranch, steamClient, vulkanDriver,
              graphicsPath, frameLatency
         // VR
-        case vrEnabled, vrBitrateMbps, vrEyeSize
+        case vrEnabled, vrBitrateMbps, vrEyeSize, vrCodec, vrPairOnRequest, vrHeadsetAudio, vrGameAppID
 
         var nextStart: Bool {
             switch self {
@@ -43,7 +43,7 @@ final class LauncherSettings: ObservableObject {
                  .windowWidth, .windowHeight, .windowSizePreset, .retinaResolution, .renderScale, .soundEnabled, .cpus, .memMiB, .sshEnabled,
                  .sshPort, .network, .lanRemotePlay,
                  .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath, .frameLatency, .vrEnabled,
-                 .vrBitrateMbps, .vrEyeSize:
+                 .vrEyeSize, .vrCodec, .vrPairOnRequest, .vrHeadsetAudio:
                 return true
             default:
                 return false
@@ -403,10 +403,24 @@ final class LauncherSettings: ObservableObject {
     @Published var graphicsPath = GraphicsPath.preferred { didSet { save(.graphicsPath, graphicsPath.rawValue) } }
     /// VR (experimental) of the next start: steamac-vrhost with the VM (VRHost; DXMT path only).
     @Published var vrEnabled = false { didSet { save(.vrEnabled, vrEnabled) } }
-    /// Total stream bitrate of the next start, Mbit/s (steamac-vrhost --bitrate; both eyes).
+    /// Total stream bitrate, Mbit/s (steamac-vrhost --bitrate; both eyes). Settings > VR also applies it to a
+    /// running host (control socket "bitrate"), so it is not a next-start setting.
     @Published var vrBitrateMbps = LauncherSettings.vrDefaultBitrateMbps { didSet { save(.vrBitrateMbps, vrBitrateMbps) } }
     /// Encoded size per eye of the next start, "WxH"; "" = what the headset asks for (steamac-vrhost --size).
     @Published var vrEyeSize = "" { didSet { save(.vrEyeSize, vrEyeSize) } }
+    /// Video codec of the next start (steamac-vrhost --codec; automatic = HEVC when the headset has it).
+    @Published var vrCodec = VRCodec.automatic { didSet { save(.vrCodec, vrCodec.rawValue) } }
+    /// An unpaired headset that connects opens pairing with a fresh PIN (steamac-vrhost --pair-on-request).
+    @Published var vrPairOnRequest = true { didSet { save(.vrPairOnRequest, vrPairOnRequest) } }
+    /// The guest's audio follows a connected headset (VR audio region, docs/vr-interfaces.md section 6).
+    @Published var vrHeadsetAudio = true { didSet { save(.vrHeadsetAudio, vrHeadsetAudio) } }
+    /// Steam app id that "Start in VR" and the headset's app list start (steam://launch/<id>/vr); 0 = none.
+    @Published var vrGameAppID = LauncherSettings.vrDefaultGameAppID { didSet { save(.vrGameAppID, vrGameAppID) } }
+    static let vrDefaultGameAppID = 438100 // VRChat
+    enum VRCodec: String, CaseIterable, Identifiable {
+        case automatic = "auto", hevc, h264
+        var id: String { rawValue }
+    }
     static let vrDefaultBitrateMbps = 50
     static let vrBitrateRange = 5...200
     /// Per-eye sizes offered in Settings > VR (the headset's own size is the default).
@@ -508,6 +522,11 @@ final class LauncherSettings: ObservableObject {
         vrBitrateMbps = min(LauncherSettings.vrBitrateRange.upperBound, max(LauncherSettings.vrBitrateRange.lowerBound, vrBitrateMbps))
         string(.vrEyeSize, &vrEyeSize)
         if !vrEyeSize.isEmpty && !LauncherSettings.vrEyeSizeValid(vrEyeSize) { vrEyeSize = "" }
+        if let v = d.string(forKey: Key.vrCodec.rawValue).flatMap(VRCodec.init(rawValue:)) { vrCodec = v }
+        bool(.vrPairOnRequest, &vrPairOnRequest)
+        bool(.vrHeadsetAudio, &vrHeadsetAudio)
+        int(.vrGameAppID, &vrGameAppID)
+        if vrGameAppID < 0 { vrGameAppID = 0 }
         reloadGames()
     }
 
@@ -589,6 +608,10 @@ final class LauncherSettings: ObservableObject {
         case .vrEyeSize:
             guard text == "headset" || LauncherSettings.vrEyeSizeValid(text) else { return false }
             vrEyeSize = text == "headset" ? "" : text
+        case .vrCodec: guard let v = VRCodec(rawValue: text) else { return false }; vrCodec = v
+        case .vrPairOnRequest: guard let b else { return false }; vrPairOnRequest = b
+        case .vrHeadsetAudio: guard let b else { return false }; vrHeadsetAudio = b
+        case .vrGameAppID: guard let i, i >= 0 else { return false }; vrGameAppID = i
         }
         return true
     }
@@ -624,6 +647,8 @@ final class LauncherSettings: ObservableObject {
         graphicsPath = fresh.graphicsPath
         frameLatency = fresh.frameLatency
         vrEnabled = fresh.vrEnabled; vrBitrateMbps = fresh.vrBitrateMbps; vrEyeSize = fresh.vrEyeSize
+        vrCodec = fresh.vrCodec; vrPairOnRequest = fresh.vrPairOnRequest; vrHeadsetAudio = fresh.vrHeadsetAudio
+        vrGameAppID = fresh.vrGameAppID
         loading = false
         reloadGames()
         log("settings: reset to defaults")
@@ -658,7 +683,8 @@ final class LauncherSettings: ObservableObject {
             .network: network, .lanRemotePlay: lanRemotePlay,
             .diskImage: diskImage, .steamClient: steamClient.rawValue, .followMacTime: followMacTime,
             .vulkanDriver: vulkanDriver.rawValue, .graphicsPath: graphicsPath.rawValue, .frameLatency: frameLatency,
-            .vrEnabled: vrEnabled, .vrBitrateMbps: vrBitrateMbps, .vrEyeSize: vrEyeSize,
+            .vrEnabled: vrEnabled, .vrEyeSize: vrEyeSize, .vrCodec: vrCodec.rawValue,
+            .vrPairOnRequest: vrPairOnRequest, .vrHeadsetAudio: vrHeadsetAudio,
         ]
         var s: [Key: String] = [:]
         for (k, v) in values where k.nextStart && overrides[k] == nil { s[k] = "\(v)" }

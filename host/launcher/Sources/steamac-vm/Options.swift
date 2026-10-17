@@ -86,6 +86,16 @@ struct Options {
     var vrBitrateMbps = LauncherSettings.vrDefaultBitrateMbps
     /// Settings > VR "Resolution per eye" / --vr-size WxH: "" = the headset's own stream size.
     var vrEyeSize = ""
+    /// Settings > VR "Codec" / --vr-codec auto|hevc|h264.
+    var vrCodec = LauncherSettings.VRCodec.automatic
+    /// Settings > VR "Let new headsets ask to pair" / --vr-pair-on-request, --no-vr-pair-on-request.
+    var vrPairOnRequest = true
+    /// Settings > VR "Game audio in the headset" / --no-vr-audio.
+    var vrHeadsetAudio = true
+    /// Settings > VR "Game": Steam app id offered in the headset's app list (0 = none).
+    var vrGameAppID = LauncherSettings.vrDefaultGameAppID
+    /// Its name as the guest agent reported it (`game <appid> <name>`), if seen before.
+    var vrGameName: String?
     var selftestVR = false
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
@@ -151,6 +161,7 @@ struct Options {
                       [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan]
                       [--frame-latency | --no-frame-latency] [--lan-remote-play | --no-lan-remote-play]
                       [--vr | --no-vr] [--vr-bitrate MBIT] [--vr-size WxH]
+                      [--vr-codec auto|hevc|h264] [--no-vr-pair-on-request] [--no-vr-audio]
            steamac-vm --selftest-display [--headless] [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-overlay [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-stall [--selftest-out DIR] [--display WxH]
@@ -255,6 +266,9 @@ struct Options {
                            ~/Library/Logs/es.fxgam.steamac/steamac-vrhost.log
       --vr-bitrate MBIT    total VR stream bitrate, 5-200 Mbit/s (default: Settings > VR, 50)
       --vr-size WxH        encoded size per eye (default: Settings > VR; the headset's own size)
+      --vr-codec C         auto (HEVC when the headset has it), hevc or h264 (default: Settings > VR)
+      --no-vr-pair-on-request  an unpaired headset is refused instead of opening pairing with a new PIN
+      --no-vr-audio        keep the guest's audio on the Mac while a headset is connected
       --selftest-vr        spawn/teardown self-test of steamac-vrhost (no VM, no headset)
 
     Creating a SteamOS disk (no Docker; the same code as Settings > Advanced "Create New Disk…"):
@@ -416,6 +430,13 @@ struct Options {
                 let s = try value(a)
                 guard LauncherSettings.vrEyeSizeValid(s) else { throw OptionError("--vr-size: WxH, even sides, 256-4096") }
                 o.vrEyeSize = s
+            case "--vr-codec":
+                let s = try value(a)
+                guard let c = LauncherSettings.VRCodec(rawValue: s) else { throw OptionError("--vr-codec: auto, hevc or h264") }
+                o.vrCodec = c
+            case "--vr-pair-on-request": o.vrPairOnRequest = true
+            case "--no-vr-pair-on-request": o.vrPairOnRequest = false
+            case "--no-vr-audio": o.vrHeadsetAudio = false
             case "--selftest-vr": o.selftestVR = true
             case "--vulkan-driver":
                 let v = try value(a)
@@ -624,6 +645,13 @@ struct Options {
         if given("--vr") || given("--no-vr") { ov[.vrEnabled] = vr ? "--vr" : "--no-vr" } else { vr = s.vrEnabled }
         if given("--vr-bitrate") { ov[.vrBitrateMbps] = "--vr-bitrate \(vrBitrateMbps)" } else { vrBitrateMbps = s.vrBitrateMbps }
         if given("--vr-size") { ov[.vrEyeSize] = "--vr-size \(vrEyeSize)" } else { vrEyeSize = s.vrEyeSize }
+        if given("--vr-codec") { ov[.vrCodec] = "--vr-codec \(vrCodec.rawValue)" } else { vrCodec = s.vrCodec }
+        if given("--vr-pair-on-request") || given("--no-vr-pair-on-request") {
+            ov[.vrPairOnRequest] = vrPairOnRequest ? "--vr-pair-on-request" : "--no-vr-pair-on-request"
+        } else { vrPairOnRequest = s.vrPairOnRequest }
+        if given("--no-vr-audio") { ov[.vrHeadsetAudio] = "--no-vr-audio" } else { vrHeadsetAudio = s.vrHeadsetAudio }
+        vrGameAppID = s.vrGameAppID
+        vrGameName = s.gameName(vrGameAppID)
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }

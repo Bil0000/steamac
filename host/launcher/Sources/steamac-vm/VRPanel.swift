@@ -62,7 +62,13 @@ struct VRStatus: Decodable, Equatable {
         var render_height: Int?
         var refresh_hz: Double
         var refresh_rates: [Double]?
+        struct Battery: Decodable, Equatable { var charge: Double; var charging: Bool }
+        var codec: String?          // hevc | h264 (hosts since vr-polish)
+        var battery: Battery?
     }
+    /// The last unpaired headset that connected; `refused` = pairing was off and not opened on request.
+    struct PairingRequest: Decodable, Equatable { var name: String; var at: Int64; var refused: Bool }
+    struct AppRequest: Decodable, Equatable { var id: String; var seq: UInt64 }
     struct Stream: Decodable, Equatable {
         var frames: Int
         var bitrate_mbps: Double
@@ -79,12 +85,42 @@ struct VRStatus: Decodable, Equatable {
     var pin: String
     var headset: Headset?
     var stream: Stream
+    var pairing_request: PairingRequest?
+    var app_request: AppRequest?
 }
 
 struct VRPairedHeadset: Decodable, Equatable, Identifiable {
     var name: String
     var last_connection: Int64
     var id: String { name }
+    /// Entries of the same name (the store keeps one per key: a client reinstalled or a test client that
+    /// connected many times); unpairing by name removes them all.
+    var count = 1
+
+    private enum CodingKeys: String, CodingKey { case name, last_connection }
+
+    init(name: String, last_connection: Int64, count: Int = 1) {
+        self.name = name
+        self.last_connection = last_connection
+        self.count = count
+    }
+
+    /// One row per name, newest connection first.
+    static func grouped(_ list: [VRPairedHeadset]) -> [VRPairedHeadset] {
+        var byName: [String: VRPairedHeadset] = [:]
+        var order: [String] = []
+        for h in list {
+            if var g = byName[h.name] {
+                g.count += 1
+                g.last_connection = max(g.last_connection, h.last_connection)
+                byName[h.name] = g
+            } else {
+                byName[h.name] = VRPairedHeadset(name: h.name, last_connection: h.last_connection)
+                order.append(h.name)
+            }
+        }
+        return order.compactMap { byName[$0] }.sorted { $0.last_connection > $1.last_connection }
+    }
 }
 
 private struct VRHeadsetList: Decodable { var headsets: [VRPairedHeadset] }
@@ -147,7 +183,7 @@ final class VRPanelModel: ObservableObject {
                 : Self.cliHeadsets(exe)
             await MainActor.run {
                 self.status = status
-                if let list { self.headsets = list }
+                if let list { self.headsets = VRPairedHeadset.grouped(list) }
                 self.busy = false
             }
         }
@@ -155,6 +191,12 @@ final class VRPanelModel: ObservableObject {
 
     /// Pairing on/off through the running host (WiVRn's "enable pairing": a fresh PIN each time).
     func setPairing(_ on: Bool) { send(on ? "pair on" : "pair off") }
+
+    /// Total bitrate of the running host (Settings > VR "Bitrate" applies at once; the next start reads the setting).
+    func setBitrate(_ mbps: Int) { if hostRunning { send("bitrate \(mbps)") } }
+
+    /// Asks the connected headset for another refresh rate (WiVRn's dashboard does the same; not saved).
+    func setRefresh(_ hz: Double) { send("refresh \(Int(hz.rounded()))") }
 
     /// Unpair one headset ("" = all): through the host when it runs, else the executable.
     func unpair(_ name: String) {
@@ -210,6 +252,10 @@ final class VRPanelModel: ObservableObject {
         var bonjour: String
         var pin: String?
         var family: VRHeadsetFamily?
+        var codec: String?
+        var battery: String?
+        var encryption: String?
+        var pairingRequest: String?   // an unpaired headset was refused (pairing off)
     }
 
     nonisolated static func lines(_ s: VRStatus?, available: Bool) -> Lines {
@@ -220,12 +266,22 @@ final class VRPanelModel: ObservableObject {
         var l = Lines(host: String(localized: "Running, port \(String(s.port))"),
                       bonjour: s.bonjour.isEmpty ? String(localized: "Not advertised") : s.bonjour,
                       pin: s.encryption == "pairing" && !s.pin.isEmpty ? s.pin : nil)
+        l.encryption = s.encryption == "disabled" ? String(localized: "Off (trusted network only)")
+                                                  : String(localized: "On (AES-128, paired headsets)")
+        if let r = s.pairing_request, r.refused, l.pin == nil {
+            l.pairingRequest = String(localized: "“\(r.name)” tried to connect but is not paired, and pairing is off.")
+        }
         if let h = s.headset {
             let hz = Int(h.refresh_hz.rounded())
             // sizes as text: a localized integer would get a grouping separator ("1.440")
             l.headset = String(localized: "\(h.name): \(String(h.eye_width))×\(String(h.eye_height)) per eye, \(hz) Hz")
             l.family = VRHeadsetFamily(name: h.name)
             l.refresh = String(localized: "\(hz) Hz")
+            l.codec = h.codec.map { $0 == "h264" ? "H.264" : "HEVC" }
+            if let b = h.battery {
+                let pct = Int((b.charge * 100).rounded())
+                l.battery = b.charging ? String(localized: "\(pct) %, charging") : String(localized: "\(pct) %")
+            }
             let rate = String(format: "%.1f", s.stream.bitrate_mbps), target = String(format: "%.0f", s.stream.target_mbps)
             l.stream = String(localized: "\(rate) of \(target) Mbit/s, \(s.stream.frames) frames sent")
             let enc = String(format: "%.1f", s.stream.encode_ms), dec = String(format: "%.1f", s.stream.decode_ms)
@@ -258,7 +314,7 @@ struct VRTab: View {
             Section {
                 Toggle(isOn: $settings.vrEnabled) {
                     Label2(title: "VR (experimental)",
-                           detail: String(localized: "DXMT path only: starts the bundled steamac-vrhost with the VM, which streams games' VR eye images to a standalone headset running the WiVRn v26.9 client on the same network. Games need an OpenVR runtime in the guest, which is not included yet. steamac-vrhost is GPL-3.0 software; see the licences in the app.")
+                           detail: String(localized: "DXMT path only: starts the bundled steamac-vrhost with the VM, which streams games' VR eye images to a standalone headset running the WiVRn v26.9 client on the same network. Games run with the guest's OpenVR runtime; start them in VR mode (below, or from the headset's app list). steamac-vrhost is GPL-3.0 software; see the licences in the app.")
                                + (VRHost.path == nil ? " " + String(localized: "Not included in this build.") : ""),
                            now: false, key: .vrEnabled)
                 }
@@ -271,8 +327,11 @@ struct VRTab: View {
                         : settings.vrEnabled ? String(localized: "VR is on: the host starts with the VM (DXMT graphics path).")
                         : String(localized: "Turn on VR above, then start the VM."))
                 if let h = l.headset { row("Headset", h) }
+                if let b = l.battery { row("Headset battery", b) }
                 if let s = l.stream { row("Stream", s) }
+                if let c = l.codec { row("Codec", c) }
                 if let lat = l.latency { row("Latency", lat) }
+                if let e = l.encryption { row("Encryption", e) }
                 row("Bonjour name", l.bonjour,
                     detail: String(localized: "Headsets on the same network list the Mac under this name; WiVRn can also connect by IP address."))
             } header: { Text("Status") }
@@ -289,6 +348,10 @@ struct VRTab: View {
                         Text(verbatim: pin).font(.system(.title, design: .monospaced).weight(.semibold)).textSelection(.enabled)
                     }
                     Button("Stop pairing") { model.setPairing(false) }
+                } else if let req = l.pairingRequest {
+                    Label { Text(verbatim: req) } icon: { Image(systemName: "exclamationmark.triangle") }
+                        .foregroundStyle(.orange)
+                    Button("Pair this headset") { model.setPairing(true) }
                 } else {
                     HStack {
                         Button("Pair a new headset") { model.setPairing(true) }
@@ -298,14 +361,23 @@ struct VRTab: View {
                         }
                     }
                 }
+                Toggle(isOn: $settings.vrPairOnRequest) {
+                    Label2(title: "Let new headsets ask to pair",
+                           detail: String(localized: "A headset that is not paired yet opens pairing when it connects: its PIN appears here and in the VM window's title. Off: new headsets are refused until you pair them here."),
+                           now: false, key: .vrPairOnRequest)
+                }
                 if model.headsets.isEmpty {
                     Text("No headset paired yet.").foregroundStyle(.secondary)
                 } else {
                     ForEach(model.headsets) { h in
                         HStack {
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(verbatim: h.name)
+                                Text(verbatim: h.count > 1 ? "\(h.name) (\(h.count))" : h.name)
                                 Text(lastConnected(h)).font(.caption).foregroundStyle(.secondary)
+                                if h.count > 1 {
+                                    Text("Paired \(h.count) times (a reinstalled or test client); Unpair removes all of them.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                             Spacer()
                             Button("Unpair") { model.unpair(h.name) }
@@ -333,15 +405,60 @@ struct VRTab: View {
                 Stepper(value: $settings.vrBitrateMbps, in: LauncherSettings.vrBitrateRange, step: 5) {
                     HStack(alignment: .firstTextBaseline) {
                         Label2(title: "Bitrate",
-                               detail: String(localized: "Total for both eyes. Higher is sharper and needs a faster Wi-Fi link; the headset can lower it while streaming."),
-                               now: false, key: .vrBitrateMbps)
+                               detail: String(localized: "Total for both eyes. Higher is sharper and needs a faster Wi-Fi link; the headset can lower it while streaming. Applies at once to a running VR host."),
+                               now: true, key: .vrBitrateMbps)
                         Spacer()
                         Text("\(settings.vrBitrateMbps) Mbit/s").foregroundStyle(.secondary).monospacedDigit()
                     }
                 }
-                row("Refresh rate", l.refresh ?? String(localized: "Chosen by the headset"),
-                    detail: String(localized: "Set in the WiVRn app on the headset; the host encodes at that rate."))
+                .onChange(of: settings.vrBitrateMbps) { _, mbps in model.setBitrate(mbps) }
+                Picker(selection: $settings.vrCodec) {
+                    Text("Automatic").tag(LauncherSettings.VRCodec.automatic)
+                    Text(verbatim: "HEVC").tag(LauncherSettings.VRCodec.hevc)
+                    Text(verbatim: "H.264").tag(LauncherSettings.VRCodec.h264)
+                } label: {
+                    Label2(title: "Codec",
+                           detail: String(localized: "Automatic uses HEVC when the headset supports it (sharper at the same bitrate). H.264 can help a headset whose HEVC decoder struggles."),
+                           now: false, key: .vrCodec)
+                }
+                if let h = model.status?.headset, let rates = h.refresh_rates, rates.count > 1 {
+                    Picker(selection: Binding(get: { Int(h.refresh_hz.rounded()) }, set: { model.setRefresh(Double($0)) })) {
+                        ForEach(rates.map { Int($0.rounded()) }, id: \.self) { hz in Text("\(hz) Hz").tag(hz) }
+                    } label: {
+                        Label2(title: "Refresh rate",
+                               detail: String(localized: "Asks the headset to switch now (not saved: the WiVRn app on the headset keeps its own default). Lower rates leave the game more time per frame."),
+                               now: true)
+                    }
+                } else {
+                    row("Refresh rate", l.refresh ?? String(localized: "Chosen by the headset"),
+                        detail: String(localized: "Set in the WiVRn app on the headset, or here while it is connected; the host encodes at that rate."))
+                }
             } header: { Text("Encoder") }
+
+            Section {
+                HStack(alignment: .firstTextBaseline) {
+                    Label2(title: "Steam app ID",
+                           detail: String(localized: "The game “Start in VR” starts in its VR mode (steam://launch/ID/vr; a normal start may pick desktop mode). The headset's WiVRn app also lists it under its apps, from the next start. VRChat is 438100."),
+                           now: true, key: .vrGameAppID)
+                    Spacer()
+                    TextField("ID", value: $settings.vrGameAppID, format: .number.grouping(.never))
+                        .frame(width: 90).multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Button("Start in VR") { VRHost.launchInVR(settings.vrGameAppID) }
+                        .disabled(VRHost.guestSend == nil || !model.hostRunning || settings.vrGameAppID <= 0)
+                    if VRHost.guestSend == nil || !model.hostRunning {
+                        Text("Needs the VM running with VR on.").font(.caption).foregroundStyle(.secondary)
+                    } else if model.status?.headset == nil {
+                        Text("Connect the headset first, then start the game.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Toggle(isOn: $settings.vrHeadsetAudio) {
+                    Label2(title: "Game audio in the headset",
+                           detail: String(localized: "While a headset is connected, the guest's sound plays in the headset and its microphone is the guest's input (the microphone opens only while a game records). Off: sound stays on the Mac."),
+                           now: false, key: .vrHeadsetAudio)
+                }
+            } header: { Text("Game") }
 
             Section {
                 hint(.questPico, l.family, title: "Meta Quest and Pico",
@@ -433,6 +550,25 @@ enum VRPanelSelfTest {
         let rows = "{\"name\":\"Quest \\\"A\\\"\",\"last_connection\":1760000000}\n{\"name\":\"Pico\",\"last_connection\":0}\n"
         let list = rows.split(separator: "\n").compactMap { try? JSONDecoder().decode(VRPairedHeadset.self, from: Data($0.utf8)) }
         check(list.map(\.name) == ["Quest \"A\"", "Pico"] && list[0].last_connection == 1_760_000_000, "--list-headsets --json rows", &f)
+        // since vr-polish: codec, battery, a refused pairing request, grouped paired list
+        let polished = #"{"v":1,"state":"connected","port":9757,"bonjour":"","encryption":"enabled","pin":"","#
+            + #""headset":{"name":"Oculus Quest 3","eye_width":1832,"eye_height":1920,"refresh_hz":90.0,"refresh_rates":[72,90,120],"#
+            + #""codec":"h264","battery":{"charge":0.81,"charging":true}},"pairing_request":{"name":"Pico 4","at":1,"refused":true},"#
+            + #""app_request":{"id":"438100","seq":2},"stream":{"frames":1,"bitrate_mbps":1.0,"target_mbps":50.0,"encode_ms":1.0,"#
+            + #""decode_ms":1.0,"pipeline_ms":0}}"#
+        if let ps = try? JSONDecoder().decode(VRStatus.self, from: Data(polished.utf8)) {
+            let l = VRPanelModel.lines(ps, available: true)
+            check(l.codec == "H.264" && l.battery?.contains("81") == true && l.pairingRequest?.contains("Pico 4") == true
+                  && l.encryption != nil && ps.app_request?.seq == 2, "polished status: \(l)", &f)
+        } else {
+            check(false, "polished status does not decode", &f)
+        }
+        check(lc.codec == nil && lc.battery == nil && lc.pairingRequest == nil, "older host: no codec/battery/request lines", &f)
+        let dup = [VRPairedHeadset(name: "Unknown headset", last_connection: 5), VRPairedHeadset(name: "Oculus Quest 3", last_connection: 9),
+                   VRPairedHeadset(name: "Unknown headset", last_connection: 7)]
+        let g = VRPairedHeadset.grouped(dup)
+        check(g.map(\.name) == ["Oculus Quest 3", "Unknown headset"] && g.map(\.count) == [1, 2] && g[1].last_connection == 7,
+              "grouped paired list: \(g)", &f)
         return f
     }
 
@@ -466,6 +602,9 @@ enum VRPanelSelfTest {
               "round \(round): --show-pin differs from the socket's PIN", &f)
         let list = VRControl.request("headsets", path: socket).map { String(decoding: $0, as: UTF8.self) } ?? ""
         check(list.contains("\"headsets\":[]"), "round \(round): headsets: \(list)", &f)
+        let rate = status("bitrate 30")
+        check(rate?.stream.target_mbps == 30, "round \(round): bitrate 30: \(String(describing: rate))", &f)
+        check(status("bitrate 0") == nil, "round \(round): bitrate 0 accepted", &f) // an error reply, not a status
         let bad = VRControl.request("frobnicate", path: socket).map { String(decoding: $0, as: UTF8.self) } ?? ""
         check(bad.contains("\"error\""), "round \(round): unknown request: \(bad)", &f)
         log("selftest-vr: round \(round): control socket ok (port \(s.port), pairing off/on, PIN file, lists)")

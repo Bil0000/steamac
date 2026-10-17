@@ -368,6 +368,38 @@
         }
       }
     },
+    "%lld %%" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld %%"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld%%"
+          }
+        }
+      }
+    },
+    "%lld %%, charging" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld %%, заряжается"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld%%，正在充电"
+          }
+        }
+      }
+    },
     "%lld GB" : {
       "localizations" : {
         "ru" : {
@@ -498,6 +530,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "同名文件已存在，且不会被覆盖。请选择其他名称。"
+          }
+        }
+      }
+    },
+    "A headset that is not paired yet opens pairing when it connects: its PIN appears here and in the VM window's title. Off: new headsets are refused until you pair them here." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ещё не сопряжённый шлем при подключении открывает сопряжение: его PIN-код появляется здесь и в заголовке окна ВМ. Выключено: новые шлемы отклоняются, пока вы не сопряжёте их здесь."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未配对的头显连接时会开启配对：其 PIN 码显示在此处和虚拟机窗口标题中。关闭时：新头显会被拒绝，直到你在此处配对。"
           }
         }
       }
@@ -662,6 +710,22 @@
         }
       }
     },
+    "Asks the headset to switch now (not saved: the WiVRn app on the headset keeps its own default). Lower rates leave the game more time per frame." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Просит шлем переключиться сейчас (не сохраняется: приложение WiVRn на шлеме хранит своё значение по умолчанию). При меньшей частоте у игры больше времени на кадр."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即请求头显切换（不保存：头显上的 WiVRn 应用保留自己的默认值）。较低的刷新率让游戏每帧有更多时间。"
+          }
+        }
+      }
+    },
     "Auto" : {
       "localizations" : {
         "ru" : {
@@ -754,6 +818,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动（此 Mac 为 %lld）"
+          }
+        }
+      }
+    },
+    "Automatic uses HEVC when the headset supports it (sharper at the same bitrate). H.264 can help a headset whose HEVC decoder struggles." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Автоматически» использует HEVC, если шлем его поддерживает (чётче при том же битрейте). H.264 может помочь шлему, чей декодер HEVC не справляется."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“自动”在头显支持时使用 HEVC（相同码率下更清晰）。若头显的 HEVC 解码器吃力，H.264 可能有帮助。"
           }
         }
       }
@@ -1207,6 +1287,22 @@
         }
       }
     },
+    "Codec" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кодек"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编解码器"
+          }
+        }
+      }
+    },
     "Collecting launcher logs…" : {
       "localizations" : {
         "ru" : {
@@ -1251,6 +1347,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "命令"
+          }
+        }
+      }
+    },
+    "Connect the headset first, then start the game." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сначала подключите шлем, затем запустите игру."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先连接头显，再启动游戏。"
           }
         }
       }
@@ -1960,18 +2072,18 @@
         }
       }
     },
-    "DXMT path only: starts the bundled steamac-vrhost with the VM, which streams games' VR eye images to a standalone headset running the WiVRn v26.9 client on the same network. Games need an OpenVR runtime in the guest, which is not included yet. steamac-vrhost is GPL-3.0 software; see the licences in the app." : {
+    "DXMT path only: starts the bundled steamac-vrhost with the VM, which streams games' VR eye images to a standalone headset running the WiVRn v26.9 client on the same network. Games run with the guest's OpenVR runtime; start them in VR mode (below, or from the headset's app list). steamac-vrhost is GPL-3.0 software; see the licences in the app." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Только для пути DXMT: вместе с ВМ запускается встроенный steamac-vrhost, который передаёт изображения для глаз из VR-игр на автономную гарнитуру с клиентом WiVRn v26.9 в той же сети. Играм нужна среда OpenVR в гостевой системе, которая пока не входит в состав. steamac-vrhost распространяется по лицензии GPL-3.0; лицензии см. в приложении."
+            "value" : "Только для пути DXMT: вместе с ВМ запускается встроенный steamac-vrhost, который передаёт VR-изображения для глаз из игр на автономный шлем с клиентом WiVRn v26.9 в той же сети. Игры работают со средой OpenVR в гостевой системе; запускайте их в режиме VR (ниже или из списка приложений на шлеме). steamac-vrhost — ПО под GPL-3.0; см. лицензии в приложении."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仅限 DXMT 路径：随虚拟机启动内置的 steamac-vrhost，将游戏的 VR 双眼画面串流到同一网络中运行 WiVRn v26.9 客户端的一体机头显。游戏需要客户机中的 OpenVR 运行时，目前尚未包含。steamac-vrhost 为 GPL-3.0 软件；许可证见应用内。"
+            "value" : "仅限 DXMT 路径：随虚拟机启动内置的 steamac-vrhost，将游戏的 VR 双眼画面串流到同一网络中运行 WiVRn v26.9 客户端的一体机头显。游戏使用客户机中的 OpenVR 运行时；请以 VR 模式启动（在下方，或从头显的应用列表）。steamac-vrhost 为 GPL-3.0 软件；许可证见应用内。"
           }
         }
       }
@@ -2075,6 +2187,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "编码器"
+          }
+        }
+      }
+    },
+    "Encryption" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Шифрование"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加密"
           }
         }
       }
@@ -2475,6 +2603,38 @@
         }
       }
     },
+    "Game" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Игра"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏"
+          }
+        }
+      }
+    },
+    "Game audio in the headset" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Звук игры в шлеме"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "头显中的游戏声音"
+          }
+        }
+      }
+    },
     "game frame to network %@ ms, encode %@ ms, headset decode %@ ms" : {
       "localizations" : {
         "en" : {
@@ -2776,6 +2936,22 @@
         }
       }
     },
+    "Headset battery" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Батарея шлема"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "头显电量"
+          }
+        }
+      }
+    },
     "Headset default" : {
       "localizations" : {
         "ru" : {
@@ -2886,6 +3062,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "我接受 Valve 的 SteamOS 许可和 Steam 订户协议"
+          }
+        }
+      }
+    },
+    "ID" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID"
           }
         }
       }
@@ -3078,6 +3270,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "延迟"
+          }
+        }
+      }
+    },
+    "Let new headsets ask to pair" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новые шлемы могут запросить сопряжение"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许新头显请求配对"
           }
         }
       }
@@ -3571,6 +3779,22 @@
         }
       }
     },
+    "Needs the VM running with VR on." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нужна запущенная ВМ с включённым VR."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要在开启 VR 的情况下运行虚拟机。"
+          }
+        }
+      }
+    },
     "Network" : {
       "localizations" : {
         "ru" : {
@@ -3860,6 +4084,22 @@
         }
       }
     },
+    "Off (trusted network only)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выключено (только доверенная сеть)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭（仅限可信网络）"
+          }
+        }
+      }
+    },
     "OK" : {
       "localizations" : {
         "ru" : {
@@ -4004,6 +4244,22 @@
         }
       }
     },
+    "On (AES-128, paired headsets)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включено (AES-128, сопряжённые шлемы)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启（AES-128，已配对头显）"
+          }
+        }
+      }
+    },
     "On top of the guest's own volume." : {
       "localizations" : {
         "ru" : {
@@ -4096,6 +4352,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "配对新头显"
+          }
+        }
+      }
+    },
+    "Pair this headset" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сопрячь этот шлем"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对此头显"
+          }
+        }
+      }
+    },
+    "Paired %lld times (a reinstalled or test client); Unpair removes all of them." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сопряжён %lld раз (переустановленный или тестовый клиент); «Разорвать пару» удаляет все записи."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已配对 %lld 次（重装或测试客户端）；“取消配对”会全部移除。"
           }
         }
       }
@@ -4919,18 +5207,18 @@
         }
       }
     },
-    "Set in the WiVRn app on the headset; the host encodes at that rate." : {
+    "Set in the WiVRn app on the headset, or here while it is connected; the host encodes at that rate." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Задаётся в приложении WiVRn на гарнитуре; хост кодирует с этой частотой."
+            "value" : "Задаётся в приложении WiVRn на шлеме или здесь, пока он подключён; хост кодирует с этой частотой."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在头显的 WiVRn 应用中设置；主机按该刷新率编码。"
+            "value" : "在头显上的 WiVRn 应用中设置，或在连接时于此处设置；主机按该刷新率编码。"
           }
         }
       }
@@ -5422,6 +5710,22 @@
         }
       }
     },
+    "Start in VR" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запустить в VR"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以 VR 启动"
+          }
+        }
+      }
+    },
     "Start SteamOS to finish growing the home partition and filesystem." : {
       "localizations" : {
         "ru" : {
@@ -5546,6 +5850,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "状态"
+          }
+        }
+      }
+    },
+    "Steam app ID" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID приложения Steam"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steam 应用 ID"
           }
         }
       }
@@ -6337,6 +6657,22 @@
         }
       }
     },
+    "The game “Start in VR” starts in its VR mode (steam://launch/ID/vr; a normal start may pick desktop mode). The headset's WiVRn app also lists it under its apps, from the next start. VRChat is 438100." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Игра, которую «Запустить в VR» запускает в режиме VR (steam://launch/ID/vr; обычный запуск может выбрать режим рабочего стола). Приложение WiVRn на шлеме также показывает её в списке приложений, начиная со следующего запуска. VRChat — 438100."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“以 VR 启动”以 VR 模式启动的游戏（steam://launch/ID/vr；普通启动可能选择桌面模式）。从下次启动起，头显上的 WiVRn 应用也会在其应用列表中列出它。VRChat 为 438100。"
+          }
+        }
+      }
+    },
     "The Steam Deck client beta (steamdeck_publicbeta). Standard sign-in with an on-screen QR code." : {
       "localizations" : {
         "ru" : {
@@ -6711,18 +7047,18 @@
         }
       }
     },
-    "Total for both eyes. Higher is sharper and needs a faster Wi-Fi link; the headset can lower it while streaming." : {
+    "Total for both eyes. Higher is sharper and needs a faster Wi-Fi link; the headset can lower it while streaming. Applies at once to a running VR host." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Суммарно для обоих глаз. Чем выше, тем чётче изображение и тем быстрее нужен Wi-Fi; гарнитура может снижать его во время трансляции."
+            "value" : "Суммарно для обоих глаз. Чем выше, тем чётче, но нужна более быстрая сеть Wi-Fi; шлем может снизить его во время трансляции. Сразу применяется к работающему VR-хосту."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "双眼合计。越高越清晰，也需要更快的 Wi-Fi；头显可在串流过程中调低。"
+            "value" : "双眼合计。越高越清晰，但需要更快的 Wi-Fi 连接；头显可在串流时降低它。立即应用于正在运行的 VR 主机。"
           }
         }
       }
@@ -7192,6 +7528,22 @@
         }
       }
     },
+    "VR pairing PIN %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PIN-код сопряжения VR %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "VR 配对 PIN 码 %@"
+          }
+        }
+      }
+    },
     "Vulkan (classic)" : {
       "localizations" : {
         "ru" : {
@@ -7446,6 +7798,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "游戏获得焦点时，点按即可捕获指针（通过相对移动控制视角）。"
+          }
+        }
+      }
+    },
+    "While a headset is connected, the guest's sound plays in the headset and its microphone is the guest's input (the microphone opens only while a game records). Off: sound stays on the Mac." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пока шлем подключён, звук гостевой системы играет в шлеме, а его микрофон служит входом гостевой системы (микрофон открывается, только пока игра записывает). Выключено: звук остаётся на Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "头显连接期间，客户机声音在头显中播放，头显麦克风作为客户机输入（仅在游戏录音时开启麦克风）。关闭时：声音留在 Mac 上。"
           }
         }
       }
@@ -8352,6 +8720,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "you@example.com"
+          }
+        }
+      }
+    },
+    "“%@” tried to connect but is not paired, and pairing is off." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» пытался подключиться, но не сопряжён, а сопряжение выключено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”尝试连接，但尚未配对，且配对已关闭。"
           }
         }
       }

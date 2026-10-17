@@ -527,7 +527,17 @@ do {
     }
     console.start()
     vm.start()
-    withExtendedLifetime((presenter, gamepad, progressPort, supervisorWatch, perfSubscription, gamePause, suspender, clipboard)) {
+    // VR boots: "Start in VR" / the headset's app list reach the guest agent; the pairing PIN shows on the window.
+    var vrRelay: VRRelay?
+    if options.vr {
+        VRHost.guestSend = { progressPort.send($0) }
+        vrRelay = MainActor.assumeIsolated {
+            VRRelay { [weak wc] pin in
+                wc?.window.subtitle = pin.map { String(localized: "VR pairing PIN \($0)") } ?? ""
+            }
+        }
+    }
+    withExtendedLifetime((presenter, gamepad, progressPort, supervisorWatch, perfSubscription, gamePause, suspender, clipboard, vrRelay)) {
         app.run()
     }
 } catch {
