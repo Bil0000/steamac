@@ -306,8 +306,8 @@ int VrLinkServer::accept_one(const std::string & path, int timeout_ms)
 	return sv[0];
 }
 
-CompositorBridge::CompositorBridge(uint32_t out_w, uint32_t out_h, EyeEncoderSink & encoder) :
-        compositor(out_w, out_h), encoder(encoder)
+CompositorBridge::CompositorBridge(uint32_t out_w, uint32_t out_h, EyeEncoderSink & encoder, CompositorOptions opt) :
+        compositor(out_w, out_h, opt), encoder(encoder)
 {
 }
 

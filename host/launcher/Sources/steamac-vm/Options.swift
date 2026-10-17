@@ -94,6 +94,13 @@ struct Options {
     var vrHeadsetAudio = true
     /// Settings > VR "Game": Steam app id offered in the headset's app list (0 = none).
     var vrGameAppID = LauncherSettings.vrDefaultGameAppID
+    /// Settings > VR quality / codec / stream options (machine-side; see LauncherSettings).
+    var vrRenderScale = 1.0
+    var vrUpscaler = LauncherSettings.VRUpscaler.metalfx
+    var vrSharpness = 0.0
+    var vrForceSRGB = false
+    var vrKeyframeInterval = 0.0
+    var vrTCPOnly = false
     /// Its name as the guest agent reported it (`game <appid> <name>`), if seen before.
     var vrGameName: String?
     var selftestVR = false
@@ -652,6 +659,8 @@ struct Options {
         if given("--no-vr-audio") { ov[.vrHeadsetAudio] = "--no-vr-audio" } else { vrHeadsetAudio = s.vrHeadsetAudio }
         vrGameAppID = s.vrGameAppID
         vrGameName = s.gameName(vrGameAppID)
+        vrRenderScale = s.vrRenderScale; vrUpscaler = s.vrUpscaler; vrSharpness = s.vrSharpness; vrForceSRGB = s.vrForceSRGB
+        vrKeyframeInterval = s.vrKeyframeInterval; vrTCPOnly = s.vrTCPOnly
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }

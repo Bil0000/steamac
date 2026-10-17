@@ -23,6 +23,8 @@ public:
 	{
 		std::function<double()> pipeline_latency_ms;      // game frame submit → sent, p50 (0 = unknown)
 		std::function<void(const std::string &)> pin_changed; // new PIN ("" = pairing off), e.g. for --show-pin
+		// extra members of the status "stream" object (",\"key\":value..."), e.g. the game pipeline's counters
+		std::function<std::string()> stream_json;
 	};
 	ControlServer(std::string path, WivrnSession &, Hooks = {});
 	~ControlServer();

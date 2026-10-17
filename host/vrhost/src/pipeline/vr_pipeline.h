@@ -59,7 +59,8 @@ class VrPipeline final : public SessionListener
 {
 public:
 	// link_fd: AF_UNIX SOCK_DGRAM end (owned); mach_name: bootstrap name for the swapchain ports.
-	VrPipeline(VrSession & session, int link_fd, const std::string & mach_name);
+	// opt: Settings > VR quality options; the upscale size is taken from each connection's nominal render size.
+	VrPipeline(VrSession & session, int link_fd, const std::string & mach_name, CompositorOptions opt = {});
 	~VrPipeline() override;
 	bool peer_closed() const;
 	const PipelineStats & stats() const { return st; }
@@ -72,6 +73,7 @@ public:
 	void on_refresh_rate(float hz) override;
 
 	uint64_t timings_sent() const { return timings; }
+	const char * upscaler() const; // of the last composed frame ("" = none)
 	uint64_t haptics_routed() const { return haptics; }
 
 private:
@@ -83,10 +85,12 @@ private:
 	void frame_clock();
 	VrSession & session;
 	std::mutex m;
-	uint32_t w = 0, h = 0;
+	uint32_t w = 0, h = 0, up_w = 0;
 	std::array<uint32_t, 6> last_geometry{}; // eye image sizes, format, flags of the last frame (logged on change)
 	std::unique_ptr<SessionEncoderSink> sink;
 	std::unique_ptr<CompositorBridge> bridge;
+	CompositorOptions opt;
+	std::atomic<const char *> last_upscaler{""};
 	PipelineStats st;
 	std::mutex lat_mutex;
 	PipelineLatency lat;

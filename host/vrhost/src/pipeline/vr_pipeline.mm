@@ -67,12 +67,18 @@ void SessionEncoderSink::encode(int eye, CVPixelBufferRef buffer, const LinkFram
 	}
 }
 
-VrPipeline::VrPipeline(VrSession & session, int link_fd, const std::string & mach_name) : session(session)
+VrPipeline::VrPipeline(VrSession & session, int link_fd, const std::string & mach_name, CompositorOptions opt) :
+        session(session), opt(opt)
 {
 	server = std::make_unique<VrLinkServer>(
 	        link_fd, mach_name, [this](const LinkFrame & f) { on_frame(f); },
 	        [this](const void * m, size_t n) { on_message(m, n); }, [this] { on_frame_error(); });
 	clock = std::thread([this] { frame_clock(); });
+}
+
+const char * VrPipeline::upscaler() const
+{
+	return last_upscaler.load();
 }
 
 VrPipeline::~VrPipeline()
@@ -258,11 +264,18 @@ void VrPipeline::on_frame(const LinkFrame & f)
 		return; // VrLinkServer releases the images
 	}
 	std::lock_guard lock(m);
-	if (info->eye_width != w or info->eye_height != h)
+	CompositorOptions o = opt;
+	if (info->nominal_render_width > info->render_eye_width) // render scale < 1: upscale to the headset's size
+	{
+		o.upscale_w = info->nominal_render_width;
+		o.upscale_h = info->nominal_render_height;
+	}
+	if (info->eye_width != w or info->eye_height != h or not bridge or o.upscale_w != up_w)
 	{
 		bridge.reset();
 		sink = std::make_unique<SessionEncoderSink>(session, info->eye_width, info->eye_height);
-		bridge = std::make_unique<CompositorBridge>(info->eye_width, info->eye_height, *sink);
+		bridge = std::make_unique<CompositorBridge>(info->eye_width, info->eye_height, *sink, o);
+		up_w = o.upscale_w;
 		w = info->eye_width;
 		h = info->eye_height;
 	}
@@ -279,6 +292,7 @@ void VrPipeline::on_frame(const LinkFrame & f)
 		fflush(stdout);
 	}
 	(*bridge)(f);
+	last_upscaler = bridge->last_upscaler();
 	int64_t sent = now_ns();
 	st.submitted++;
 	st.last_compose_gpu_ns = bridge->last_timing().compose_gpu_ns;

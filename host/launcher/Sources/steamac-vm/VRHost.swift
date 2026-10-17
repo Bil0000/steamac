@@ -74,6 +74,14 @@ enum VRHost {
         if !o.vrEyeSize.isEmpty { a += ["--size", o.vrEyeSize] }
         if o.vrCodec != .automatic { a += ["--codec", o.vrCodec.rawValue] }
         if o.vrPairOnRequest { a.append("--pair-on-request") }
+        if o.vrRenderScale != 1 {
+            a += ["--render-scale", String(format: "%.2f", o.vrRenderScale)]
+            if o.vrUpscaler != .metalfx { a += ["--upscaler", o.vrUpscaler.rawValue] }
+        }
+        if o.vrSharpness > 0 { a += ["--sharpness", String(format: "%.2f", o.vrSharpness)] }
+        if o.vrForceSRGB { a.append("--force-srgb") }
+        if o.vrKeyframeInterval > 0 { a += ["--keyframe-interval", String(format: "%g", o.vrKeyframeInterval)] }
+        if o.vrTCPOnly { a.append("--tcp-only") }
         if o.vrGameAppID > 0 { a += ["--app", "\(o.vrGameAppID)=\(gameName(o.vrGameAppID, known: o.vrGameName))"] }
         return a
     }
@@ -257,6 +265,20 @@ enum VRSelfTest {
         check(VRHost.hostArgs(enc, controlSocket: "/s").suffix(8) == ["--bitrate", "80000000", "--size", "1440x1584",
                                                                       "--codec", "h264", "--app", "620=Portal 2"],
               "host arguments with bitrate, size, codec, game: \(VRHost.hostArgs(enc, controlSocket: "/s"))")
+        enc.vrRenderScale = 0.6
+        enc.vrUpscaler = .bilinear
+        enc.vrSharpness = 0.25
+        enc.vrForceSRGB = true
+        enc.vrKeyframeInterval = 2
+        enc.vrTCPOnly = true
+        let q = Array(VRHost.hostArgs(enc, controlSocket: "/s").drop { $0 != "--render-scale" })
+        check(q == ["--render-scale", "0.60", "--upscaler", "bilinear", "--sharpness", "0.25", "--force-srgb",
+                    "--keyframe-interval", "2", "--tcp-only", "--app", "620=Portal 2"],
+              "quality/codec/stream arguments: \(q)")
+        let presets = LauncherSettings.VRPreset.allCases
+        check(presets.map(\.renderScale) == [0.6, 0.8, 1.0, 1.25] && presets.map(\.bitrateMbps) == [30, 40, 50, 80] && LauncherSettings.VRPreset.high.bitrateMbps == LauncherSettings.vrDefaultBitrateMbps
+              && presets.allSatisfy { LauncherSettings.vrRenderScaleRange.contains($0.renderScale)
+                                      && LauncherSettings.vrBitrateRange.contains($0.bitrateMbps) }, "VR presets")
         enc.vrGameAppID = 0
         check(!VRHost.hostArgs(enc).contains("--app") && VRHost.gameName(7, known: nil) == "Steam app 7", "no game / unnamed game")
         check(VRHost.launchInVR(438100) == false, "launch in VR without a guest must be refused")

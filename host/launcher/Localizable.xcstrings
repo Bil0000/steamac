@@ -710,22 +710,6 @@
         }
       }
     },
-    "Asks the headset to switch now (not saved: the WiVRn app on the headset keeps its own default). Lower rates leave the game more time per frame." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Просит шлем переключиться сейчас (не сохраняется: приложение WiVRn на шлеме хранит своё значение по умолчанию). При меньшей частоте у игры больше времени на кадр."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "立即请求头显切换（不保存：头显上的 WiVRn 应用保留自己的默认值）。较低的刷新率让游戏每帧有更多时间。"
-          }
-        }
-      }
-    },
     "Auto" : {
       "localizations" : {
         "ru" : {
@@ -866,6 +850,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动：此 Mac 的每个性能核心分配一个（2 至 8 个）。"
+          }
+        }
+      }
+    },
+    "Bilinear" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Билинейный"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "双线性"
           }
         }
       }
@@ -1347,6 +1347,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "命令"
+          }
+        }
+      }
+    },
+    "Compose (Mac GPU)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Компоновка (GPU Mac)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合成（Mac GPU）"
           }
         }
       }
@@ -2153,6 +2169,22 @@
         }
       }
     },
+    "Encode" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кодирование"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编码"
+          }
+        }
+      }
+    },
     "encode %@ ms, headset decode %@ ms" : {
       "localizations" : {
         "en" : {
@@ -2171,22 +2203,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "编码 %1$@ ms，头显解码 %2$@ ms"
-          }
-        }
-      }
-    },
-    "Encoder" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Кодировщик"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "编码器"
           }
         }
       }
@@ -2239,6 +2255,22 @@
         }
       }
     },
+    "Every %lld s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Каждые %lld с"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每 %lld 秒"
+          }
+        }
+      }
+    },
     "Every 5 s: guest flush and on-screen frame intervals, latency, dropped frames." : {
       "localizations" : {
         "ru" : {
@@ -2267,6 +2299,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在解压 Steam 更新"
+          }
+        }
+      }
+    },
+    "For a game that looks washed out or too bright in the headset: its images hold sRGB colours without saying so. Leave off otherwise." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для игры, которая в шлеме выглядит блёклой или слишком светлой: её изображения содержат цвета sRGB, но не помечены так. В остальных случаях не включайте."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适用于在头显中显得发白或过亮的游戏：其图像包含 sRGB 颜色但未标明。其他情况请保持关闭。"
+          }
+        }
+      }
+    },
+    "Frames sent" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отправлено кадров"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发送帧"
           }
         }
       }
@@ -2635,6 +2699,54 @@
         }
       }
     },
+    "Game frame copy" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Копирование кадра игры"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏帧复制"
+          }
+        }
+      }
+    },
+    "Game frame rate" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Частота кадров игры"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏帧率"
+          }
+        }
+      }
+    },
+    "Game frame to network" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "От кадра игры до сети"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏帧到网络"
+          }
+        }
+      }
+    },
     "game frame to network %@ ms, encode %@ ms, headset decode %@ ms" : {
       "localizations" : {
         "en" : {
@@ -2952,6 +3064,22 @@
         }
       }
     },
+    "Headset decode" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Декодирование в шлеме"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "头显解码"
+          }
+        }
+      }
+    },
     "Headset default" : {
       "localizations" : {
         "ru" : {
@@ -3030,6 +3158,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "隐藏"
+          }
+        }
+      }
+    },
+    "High" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Высокое"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高"
           }
         }
       }
@@ -3222,6 +3366,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "钥匙串：%@"
+          }
+        }
+      }
+    },
+    "Keyframe interval" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Интервал ключевых кадров"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关键帧间隔"
           }
         }
       }
@@ -3466,6 +3626,38 @@
         }
       }
     },
+    "Lost frames (keyframes requested)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Потерянные кадры (запрошены ключевые)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "丢失帧（已请求关键帧）"
+          }
+        }
+      }
+    },
+    "Low" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Низкое"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "低"
+          }
+        }
+      }
+    },
     "Low (10 ms)" : {
       "localizations" : {
         "ru" : {
@@ -3494,6 +3686,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "越低则延迟越小；“稳定”可避免高负载下的爆音。"
+          }
+        }
+      }
+    },
+    "Medium" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Среднее"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "中"
           }
         }
       }
@@ -4612,6 +4820,38 @@
         }
       }
     },
+    "Preset" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预设"
+          }
+        }
+      }
+    },
+    "Quality" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Качество"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画质"
+          }
+        }
+      }
+    },
     "Quit" : {
       "localizations" : {
         "ru" : {
@@ -4800,6 +5040,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "稍后提醒"
+          }
+        }
+      }
+    },
+    "Render resolution" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешение рендеринга"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "渲染分辨率"
           }
         }
       }
@@ -5207,18 +5463,98 @@
         }
       }
     },
-    "Set in the WiVRn app on the headset, or here while it is connected; the host encodes at that rate." : {
+    "Sends the video over TCP instead of UDP, for networks that drop UDP. Adds latency when packets are lost." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Задаётся в приложении WiVRn на шлеме или здесь, пока он подключён; хост кодирует с этой частотой."
+            "value" : "Передаёт видео по TCP вместо UDP — для сетей, которые теряют UDP. При потере пакетов увеличивает задержку."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在头显上的 WiVRn 应用中设置，或在连接时于此处设置；主机按该刷新率编码。"
+            "value" : "通过 TCP 而非 UDP 发送视频，适用于丢弃 UDP 的网络。丢包时会增加延迟。"
+          }
+        }
+      }
+    },
+    "Set in the WiVRn app on the headset (as are its resolution scale and microphone); the host encodes at that rate." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Задаётся в приложении WiVRn на шлеме (как и масштаб разрешения и микрофон); хост кодирует с этой частотой."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在头显上的 WiVRn 应用中设置（分辨率缩放和麦克风也是）；主机按该刷新率编码。"
+          }
+        }
+      }
+    },
+    "Sets render resolution, sharpening and bitrate together. Low renders the game at 60 percent and upscales it with MetalFX (fastest game frames); Ultra supersamples at 125 percent. Refresh rate and stream size stay with the headset." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Задаёт разрешение рендеринга, резкость и битрейт вместе. «Низкое» рендерит игру в 60 % и масштабирует её через MetalFX (самые быстрые кадры игры); «Ультра» — суперсэмплинг 125 %. Частота обновления и размер потока остаются за шлемом."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时设置渲染分辨率、锐化和码率。“低”以 60% 渲染游戏并用 MetalFX 放大（游戏帧最快）；“超高”以 125% 超采样。刷新率和串流尺寸仍由头显决定。"
+          }
+        }
+      }
+    },
+    "Sharpening" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Резкость"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "锐化"
+          }
+        }
+      }
+    },
+    "Sharpens the image while it is prepared for encoding; helps an upscaled or softly encoded picture. No measurable cost." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Повышает резкость изображения при подготовке к кодированию; помогает масштабированной или мягко закодированной картинке. Затраты неизмеримо малы."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在准备编码时锐化图像；有助于放大后或编码偏软的画面。无可测开销。"
+          }
+        }
+      }
+    },
+    "Show live statistics" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показывать статистику"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示实时统计"
           }
         }
       }
@@ -5235,6 +5571,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "每只眼睛编码图像的尺寸。“头显默认”使用头显请求的尺寸；尺寸越小编码越快，高刷新率需要这样。"
+          }
+        }
+      }
+    },
+    "Size the game renders each eye at, relative to what the headset asks for. Below 100 percent the Mac upscales the image before encoding (the game draws fewer pixels); above 100 percent is supersampling." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Размер, в котором игра рендерит каждый глаз, относительно запрошенного шлемом. Ниже 100 % Mac масштабирует изображение перед кодированием (игра рисует меньше пикселей); выше 100 % — суперсэмплинг."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏渲染每只眼的尺寸，相对于头显请求的尺寸。低于 100% 时 Mac 在编码前放大图像（游戏绘制更少像素）；高于 100% 为超采样。"
           }
         }
       }
@@ -5834,6 +6186,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在启动…"
+          }
+        }
+      }
+    },
+    "Statistics" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Статистика"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "统计"
           }
         }
       }
@@ -6464,6 +6832,22 @@
         }
       }
     },
+    "Stream bitrate" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Битрейт потока"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "串流码率"
+          }
+        }
+      }
+    },
     "Suspend" : {
       "comment" : "App menu: freeze the VM in memory",
       "localizations" : {
@@ -6637,6 +7021,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在截取虚拟机窗口画面…"
+          }
+        }
+      }
+    },
+    "TCP only" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Только TCP"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅 TCP"
           }
         }
       }
@@ -7063,6 +7463,22 @@
         }
       }
     },
+    "Treat game images as sRGB" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Считать изображения игры sRGB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将游戏图像视为 sRGB"
+          }
+        }
+      }
+    },
     "Turn on VR above, then start the VM." : {
       "localizations" : {
         "ru" : {
@@ -7075,6 +7491,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请在上方开启 VR，然后启动虚拟机。"
+          }
+        }
+      }
+    },
+    "Ultra" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ультра"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超高"
           }
         }
       }
@@ -7191,6 +7623,22 @@
         }
       }
     },
+    "Upscaler" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Масштабирование"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放大器"
+          }
+        }
+      }
+    },
     "Use Default" : {
       "localizations" : {
         "ru" : {
@@ -7239,6 +7687,22 @@
         }
       }
     },
+    "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper and costs about 3 ms of Mac GPU time per frame at the Quest 3's size; bilinear about 0.5 ms. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Используется при разрешении рендеринга ниже 100 %. MetalFX (пространственный) сохраняет края чётче и стоит около 3 мс времени GPU Mac на кадр при размере Quest 3; билинейный — около 0,5 мс. Временному MetalFX нужны векторы движения и глубина, которые игры OpenVR не передают."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在渲染分辨率低于 100% 时使用。MetalFX（空间）边缘更锐利，在 Quest 3 尺寸下每帧约占 3 毫秒 Mac GPU 时间；双线性约 0.5 毫秒。时间性 MetalFX 需要运动矢量和深度，而 OpenVR 游戏不提供这些。"
+          }
+        }
+      }
+    },
     "User" : {
       "localizations" : {
         "ru" : {
@@ -7251,6 +7715,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "用户"
+          }
+        }
+      }
+    },
+    "Video codec" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Видеокодек"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频编解码器"
           }
         }
       }
@@ -7766,6 +8246,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "关闭窗口时"
+          }
+        }
+      }
+    },
+    "When needed" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По необходимости"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按需"
+          }
+        }
+      }
+    },
+    "When needed: a full frame only when the headset reports a lost one (lowest bitrate). A fixed interval recovers from damage the headset did not report, at the cost of a bitrate spike each time." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«По необходимости»: полный кадр, только когда шлем сообщает о потерянном (минимальный битрейт). Фиксированный интервал устраняет повреждения, о которых шлем не сообщил, ценой всплеска битрейта каждый раз."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“按需”：仅在头显报告丢帧时发送完整帧（码率最低）。固定间隔可修复头显未报告的损坏，代价是每次码率突增。"
           }
         }
       }

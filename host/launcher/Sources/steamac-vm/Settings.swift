@@ -36,6 +36,7 @@ final class LauncherSettings: ObservableObject {
              graphicsPath, frameLatency
         // VR
         case vrEnabled, vrBitrateMbps, vrEyeSize, vrCodec, vrPairOnRequest, vrHeadsetAudio, vrGameAppID
+        case vrRenderScale, vrUpscaler, vrSharpness, vrForceSRGB, vrKeyframeInterval, vrTCPOnly, vrShowStats
 
         var nextStart: Bool {
             switch self {
@@ -43,7 +44,8 @@ final class LauncherSettings: ObservableObject {
                  .windowWidth, .windowHeight, .windowSizePreset, .retinaResolution, .renderScale, .soundEnabled, .cpus, .memMiB, .sshEnabled,
                  .sshPort, .network, .lanRemotePlay,
                  .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath, .frameLatency, .vrEnabled,
-                 .vrEyeSize, .vrCodec, .vrPairOnRequest, .vrHeadsetAudio:
+                 .vrEyeSize, .vrCodec, .vrPairOnRequest, .vrHeadsetAudio, .vrRenderScale, .vrUpscaler, .vrSharpness,
+                 .vrForceSRGB, .vrKeyframeInterval, .vrTCPOnly:
                 return true
             default:
                 return false
@@ -417,6 +419,46 @@ final class LauncherSettings: ObservableObject {
     /// Steam app id that "Start in VR" and the headset's app list start (steam://launch/<id>/vr); 0 = none.
     @Published var vrGameAppID = LauncherSettings.vrDefaultGameAppID { didSet { save(.vrGameAppID, vrGameAppID) } }
     static let vrDefaultGameAppID = 438100 // VRChat
+    /// Settings > VR "Quality" (machine-side, next start): game render size relative to the headset's (steamac-vrhost
+    /// --render-scale; below 1 upscaled on the Mac), the upscaler, sharpening and the sRGB override.
+    @Published var vrRenderScale = 1.0 { didSet { save(.vrRenderScale, vrRenderScale) } }
+    @Published var vrUpscaler = VRUpscaler.metalfx { didSet { save(.vrUpscaler, vrUpscaler.rawValue) } }
+    @Published var vrSharpness = 0.0 { didSet { save(.vrSharpness, vrSharpness) } }
+    @Published var vrForceSRGB = false { didSet { save(.vrForceSRGB, vrForceSRGB) } }
+    /// Settings > VR "Video codec": periodic IDR (0 = only when the headset reports a loss).
+    @Published var vrKeyframeInterval = 0.0 { didSet { save(.vrKeyframeInterval, vrKeyframeInterval) } }
+    /// Settings > VR "Stream": everything over TCP (WiVRn's tcp_only; for networks that drop UDP).
+    @Published var vrTCPOnly = false { didSet { save(.vrTCPOnly, vrTCPOnly) } }
+    /// Settings > VR live statistics section (panel only, read while Settings is open).
+    @Published var vrShowStats = false { didSet { save(.vrShowStats, vrShowStats) } }
+    static let vrRenderScaleRange = 0.5...1.5
+    static let vrKeyframeIntervals = [0.0, 1, 2, 5]
+    enum VRUpscaler: String, CaseIterable, Identifiable {
+        case metalfx, bilinear
+        var id: String { rawValue }
+    }
+    /// Settings > VR quality presets: machine-side values only (the headset keeps its own refresh rate and size).
+    enum VRPreset: String, CaseIterable, Identifiable {
+        case low, medium, high, ultra
+        var id: String { rawValue }
+        var renderScale: Double { [0.6, 0.8, 1.0, 1.25][index] }
+        var sharpness: Double { [0.4, 0.25, 0.0, 0.0][index] }
+        var bitrateMbps: Int { [30, 40, 50, 80][index] } // High = the defaults
+        private var index: Int { VRPreset.allCases.firstIndex(of: self)! }
+    }
+    /// The preset the current values match, nil = custom.
+    var vrPreset: VRPreset? {
+        VRPreset.allCases.first {
+            abs($0.renderScale - vrRenderScale) < 0.001 && abs($0.sharpness - vrSharpness) < 0.001
+                && $0.bitrateMbps == vrBitrateMbps && vrUpscaler == .metalfx
+        }
+    }
+    func applyVRPreset(_ p: VRPreset) {
+        vrRenderScale = p.renderScale
+        vrSharpness = p.sharpness
+        vrBitrateMbps = p.bitrateMbps
+        vrUpscaler = .metalfx
+    }
     enum VRCodec: String, CaseIterable, Identifiable {
         case automatic = "auto", hevc, h264
         var id: String { rawValue }
@@ -527,6 +569,13 @@ final class LauncherSettings: ObservableObject {
         bool(.vrHeadsetAudio, &vrHeadsetAudio)
         int(.vrGameAppID, &vrGameAppID)
         if vrGameAppID < 0 { vrGameAppID = 0 }
+        if let v = d.object(forKey: Key.vrRenderScale.rawValue) as? Double, LauncherSettings.vrRenderScaleRange.contains(v) { vrRenderScale = v }
+        if let v = d.string(forKey: Key.vrUpscaler.rawValue).flatMap(VRUpscaler.init(rawValue:)) { vrUpscaler = v }
+        if let v = d.object(forKey: Key.vrSharpness.rawValue) as? Double, (0...1).contains(v) { vrSharpness = v }
+        bool(.vrForceSRGB, &vrForceSRGB)
+        if let v = d.object(forKey: Key.vrKeyframeInterval.rawValue) as? Double, (0...60).contains(v) { vrKeyframeInterval = v }
+        bool(.vrTCPOnly, &vrTCPOnly)
+        bool(.vrShowStats, &vrShowStats)
         reloadGames()
     }
 
@@ -612,6 +661,13 @@ final class LauncherSettings: ObservableObject {
         case .vrPairOnRequest: guard let b else { return false }; vrPairOnRequest = b
         case .vrHeadsetAudio: guard let b else { return false }; vrHeadsetAudio = b
         case .vrGameAppID: guard let i, i >= 0 else { return false }; vrGameAppID = i
+        case .vrRenderScale: guard let d, LauncherSettings.vrRenderScaleRange.contains(d) else { return false }; vrRenderScale = d
+        case .vrUpscaler: guard let v = VRUpscaler(rawValue: text) else { return false }; vrUpscaler = v
+        case .vrSharpness: guard let d, (0...1).contains(d) else { return false }; vrSharpness = d
+        case .vrForceSRGB: guard let b else { return false }; vrForceSRGB = b
+        case .vrKeyframeInterval: guard let d, (0...60).contains(d) else { return false }; vrKeyframeInterval = d
+        case .vrTCPOnly: guard let b else { return false }; vrTCPOnly = b
+        case .vrShowStats: guard let b else { return false }; vrShowStats = b
         }
         return true
     }
@@ -649,6 +705,9 @@ final class LauncherSettings: ObservableObject {
         vrEnabled = fresh.vrEnabled; vrBitrateMbps = fresh.vrBitrateMbps; vrEyeSize = fresh.vrEyeSize
         vrCodec = fresh.vrCodec; vrPairOnRequest = fresh.vrPairOnRequest; vrHeadsetAudio = fresh.vrHeadsetAudio
         vrGameAppID = fresh.vrGameAppID
+        vrRenderScale = fresh.vrRenderScale; vrUpscaler = fresh.vrUpscaler; vrSharpness = fresh.vrSharpness
+        vrForceSRGB = fresh.vrForceSRGB; vrKeyframeInterval = fresh.vrKeyframeInterval
+        vrTCPOnly = fresh.vrTCPOnly; vrShowStats = fresh.vrShowStats
         loading = false
         reloadGames()
         log("settings: reset to defaults")
@@ -684,7 +743,9 @@ final class LauncherSettings: ObservableObject {
             .diskImage: diskImage, .steamClient: steamClient.rawValue, .followMacTime: followMacTime,
             .vulkanDriver: vulkanDriver.rawValue, .graphicsPath: graphicsPath.rawValue, .frameLatency: frameLatency,
             .vrEnabled: vrEnabled, .vrEyeSize: vrEyeSize, .vrCodec: vrCodec.rawValue,
-            .vrPairOnRequest: vrPairOnRequest, .vrHeadsetAudio: vrHeadsetAudio,
+            .vrPairOnRequest: vrPairOnRequest, .vrHeadsetAudio: vrHeadsetAudio, .vrRenderScale: vrRenderScale,
+            .vrUpscaler: vrUpscaler.rawValue, .vrSharpness: vrSharpness, .vrForceSRGB: vrForceSRGB,
+            .vrKeyframeInterval: vrKeyframeInterval, .vrTCPOnly: vrTCPOnly,
         ]
         var s: [Key: String] = [:]
         for (k, v) in values where k.nextStart && overrides[k] == nil { s[k] = "\(v)" }

@@ -76,6 +76,14 @@ struct VRStatus: Decodable, Equatable {
         var encode_ms: Double
         var decode_ms: Double
         var pipeline_ms: Double
+        // since vr-polish (game path only for the first six)
+        var game_fps: Double?
+        var received: Int?
+        var no_headset: Int?
+        var compose_gpu_ms: Double?
+        var submit_copied_ms: Double?
+        var upscaler: String?
+        var idr_requests: Int?
     }
     var v: Int
     var state: String          // waiting | pairing | connected
@@ -195,9 +203,6 @@ final class VRPanelModel: ObservableObject {
     /// Total bitrate of the running host (Settings > VR "Bitrate" applies at once; the next start reads the setting).
     func setBitrate(_ mbps: Int) { if hostRunning { send("bitrate \(mbps)") } }
 
-    /// Asks the connected headset for another refresh rate (WiVRn's dashboard does the same; not saved).
-    func setRefresh(_ hz: Double) { send("refresh \(Int(hz.rounded()))") }
-
     /// Unpair one headset ("" = all): through the host when it runs, else the executable.
     func unpair(_ name: String) {
         if hostRunning {
@@ -256,6 +261,25 @@ final class VRPanelModel: ObservableObject {
         var battery: String?
         var encryption: String?
         var pairingRequest: String?   // an unpaired headset was refused (pairing off)
+    }
+
+    /// Settings > VR "Show live statistics": (title key, value) rows; empty without a connected headset.
+    nonisolated static func statLines(_ s: VRStatus?) -> [(String, String)] {
+        guard let s, s.headset != nil else { return [] }
+        let st = s.stream
+        func ms(_ v: Double) -> String { String(format: "%.1f ms", v) }
+        var r: [(String, String)] = []
+        if let fps = st.game_fps { r.append((String(localized: "Game frame rate"), String(format: "%.1f fps", fps))) }
+        if let c = st.submit_copied_ms { r.append((String(localized: "Game frame copy"), ms(c))) }
+        if let g = st.compose_gpu_ms { r.append((String(localized: "Compose (Mac GPU)"), ms(g))) }
+        r.append((String(localized: "Encode"), ms(st.encode_ms)))
+        r.append((String(localized: "Headset decode"), ms(st.decode_ms)))
+        if st.pipeline_ms > 0 { r.append((String(localized: "Game frame to network"), ms(st.pipeline_ms))) }
+        r.append((String(localized: "Stream bitrate"), String(format: "%.1f / %.0f Mbit/s", st.bitrate_mbps, st.target_mbps)))
+        r.append((String(localized: "Frames sent"), String(st.frames)))
+        if let i = st.idr_requests { r.append((String(localized: "Lost frames (keyframes requested)"), String(i))) }
+        if let u = st.upscaler, !u.isEmpty { r.append((String(localized: "Upscaler"), u == "metalfx" ? "MetalFX" : u)) }
+        return r
     }
 
     nonisolated static func lines(_ s: VRStatus?, available: Bool) -> Lines {
@@ -392,15 +416,62 @@ struct VRTab: View {
             } header: { Text("Pairing") }
 
             Section {
-                Picker(selection: $settings.vrEyeSize) {
-                    Text("Headset default").tag("")
-                    ForEach(eyeSizes, id: \.self) { s in
-                        Text(verbatim: s.replacingOccurrences(of: "x", with: " × ")).tag(s)
-                    }
+                Picker(selection: Binding(get: { settings.vrPreset }, set: { if let p = $0 { settings.applyVRPreset(p) } })) {
+                    Text("Low").tag(LauncherSettings.VRPreset?.some(.low))
+                    Text("Medium").tag(LauncherSettings.VRPreset?.some(.medium))
+                    Text("High").tag(LauncherSettings.VRPreset?.some(.high))
+                    Text("Ultra").tag(LauncherSettings.VRPreset?.some(.ultra))
+                    Text("Custom").tag(LauncherSettings.VRPreset?.none)
                 } label: {
-                    Label2(title: "Resolution per eye",
-                           detail: String(localized: "Size of the encoded image for each eye. Headset default uses what the headset asks for; a smaller size encodes faster, which high refresh rates need."),
-                           now: false, key: .vrEyeSize)
+                    Label2(title: "Preset",
+                           detail: String(localized: "Sets render resolution, sharpening and bitrate together. Low renders the game at 60 percent and upscales it with MetalFX (fastest game frames); Ultra supersamples at 125 percent. Refresh rate and stream size stay with the headset."),
+                           now: false)
+                }
+                VStack(alignment: .leading) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label2(title: "Render resolution",
+                               detail: String(localized: "Size the game renders each eye at, relative to what the headset asks for. Below 100 percent the Mac upscales the image before encoding (the game draws fewer pixels); above 100 percent is supersampling."),
+                               now: false, key: .vrRenderScale)
+                        Spacer()
+                        Text(verbatim: "\(Int((settings.vrRenderScale * 100).rounded())) %").foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    Slider(value: $settings.vrRenderScale, in: LauncherSettings.vrRenderScaleRange, step: 0.05)
+                }
+                Picker(selection: $settings.vrUpscaler) {
+                    Text(verbatim: "MetalFX").tag(LauncherSettings.VRUpscaler.metalfx)
+                    Text("Bilinear").tag(LauncherSettings.VRUpscaler.bilinear)
+                } label: {
+                    Label2(title: "Upscaler",
+                           detail: String(localized: "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper and costs about 3 ms of Mac GPU time per frame at the Quest 3's size; bilinear about 0.5 ms. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over."),
+                           now: false, key: .vrUpscaler)
+                }
+                .disabled(settings.vrRenderScale >= 1)
+                VStack(alignment: .leading) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label2(title: "Sharpening",
+                               detail: String(localized: "Sharpens the image while it is prepared for encoding; helps an upscaled or softly encoded picture. No measurable cost."),
+                               now: false, key: .vrSharpness)
+                        Spacer()
+                        Text(verbatim: "\(Int((settings.vrSharpness * 100).rounded())) %").foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    Slider(value: $settings.vrSharpness, in: 0...1, step: 0.05)
+                }
+                Toggle(isOn: $settings.vrForceSRGB) {
+                    Label2(title: "Treat game images as sRGB",
+                           detail: String(localized: "For a game that looks washed out or too bright in the headset: its images hold sRGB colours without saying so. Leave off otherwise."),
+                           now: false, key: .vrForceSRGB)
+                }
+            } header: { Text("Quality") }
+
+            Section {
+                Picker(selection: $settings.vrCodec) {
+                    Text("Automatic").tag(LauncherSettings.VRCodec.automatic)
+                    Text(verbatim: "HEVC").tag(LauncherSettings.VRCodec.hevc)
+                    Text(verbatim: "H.264").tag(LauncherSettings.VRCodec.h264)
+                } label: {
+                    Label2(title: "Codec",
+                           detail: String(localized: "Automatic uses HEVC when the headset supports it (sharper at the same bitrate). H.264 can help a headset whose HEVC decoder struggles."),
+                           now: false, key: .vrCodec)
                 }
                 Stepper(value: $settings.vrBitrateMbps, in: LauncherSettings.vrBitrateRange, step: 5) {
                     HStack(alignment: .firstTextBaseline) {
@@ -412,28 +483,37 @@ struct VRTab: View {
                     }
                 }
                 .onChange(of: settings.vrBitrateMbps) { _, mbps in model.setBitrate(mbps) }
-                Picker(selection: $settings.vrCodec) {
-                    Text("Automatic").tag(LauncherSettings.VRCodec.automatic)
-                    Text(verbatim: "HEVC").tag(LauncherSettings.VRCodec.hevc)
-                    Text(verbatim: "H.264").tag(LauncherSettings.VRCodec.h264)
-                } label: {
-                    Label2(title: "Codec",
-                           detail: String(localized: "Automatic uses HEVC when the headset supports it (sharper at the same bitrate). H.264 can help a headset whose HEVC decoder struggles."),
-                           now: false, key: .vrCodec)
-                }
-                if let h = model.status?.headset, let rates = h.refresh_rates, rates.count > 1 {
-                    Picker(selection: Binding(get: { Int(h.refresh_hz.rounded()) }, set: { model.setRefresh(Double($0)) })) {
-                        ForEach(rates.map { Int($0.rounded()) }, id: \.self) { hz in Text("\(hz) Hz").tag(hz) }
-                    } label: {
-                        Label2(title: "Refresh rate",
-                               detail: String(localized: "Asks the headset to switch now (not saved: the WiVRn app on the headset keeps its own default). Lower rates leave the game more time per frame."),
-                               now: true)
+                Picker(selection: $settings.vrKeyframeInterval) {
+                    Text("When needed").tag(0.0)
+                    ForEach(LauncherSettings.vrKeyframeIntervals.dropFirst(), id: \.self) { s in
+                        Text("Every \(Int(s)) s").tag(s)
                     }
-                } else {
-                    row("Refresh rate", l.refresh ?? String(localized: "Chosen by the headset"),
-                        detail: String(localized: "Set in the WiVRn app on the headset, or here while it is connected; the host encodes at that rate."))
+                } label: {
+                    Label2(title: "Keyframe interval",
+                           detail: String(localized: "When needed: a full frame only when the headset reports a lost one (lowest bitrate). A fixed interval recovers from damage the headset did not report, at the cost of a bitrate spike each time."),
+                           now: false, key: .vrKeyframeInterval)
                 }
-            } header: { Text("Encoder") }
+            } header: { Text("Video codec") }
+
+            Section {
+                Picker(selection: $settings.vrEyeSize) {
+                    Text("Headset default").tag("")
+                    ForEach(eyeSizes, id: \.self) { s in
+                        Text(verbatim: s.replacingOccurrences(of: "x", with: " × ")).tag(s)
+                    }
+                } label: {
+                    Label2(title: "Resolution per eye",
+                           detail: String(localized: "Size of the encoded image for each eye. Headset default uses what the headset asks for; a smaller size encodes faster, which high refresh rates need."),
+                           now: false, key: .vrEyeSize)
+                }
+                row("Refresh rate", l.refresh ?? String(localized: "Chosen by the headset"),
+                    detail: String(localized: "Set in the WiVRn app on the headset (as are its resolution scale and microphone); the host encodes at that rate."))
+                Toggle(isOn: $settings.vrTCPOnly) {
+                    Label2(title: "TCP only",
+                           detail: String(localized: "Sends the video over TCP instead of UDP, for networks that drop UDP. Adds latency when packets are lost."),
+                           now: false, key: .vrTCPOnly)
+                }
+            } header: { Text("Stream") }
 
             Section {
                 HStack(alignment: .firstTextBaseline) {
@@ -459,6 +539,19 @@ struct VRTab: View {
                            now: false, key: .vrHeadsetAudio)
                 }
             } header: { Text("Game") }
+
+            Section {
+                Toggle("Show live statistics", isOn: $settings.vrShowStats)
+                if settings.vrShowStats {
+                    ForEach(VRPanelModel.statLines(model.status), id: \.0) { title, value in
+                        HStack {
+                            Text(verbatim: title)
+                            Spacer()
+                            Text(verbatim: value).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }
+                }
+            } header: { Text("Statistics") }
 
             Section {
                 hint(.questPico, l.family, title: "Meta Quest and Pico",
@@ -564,6 +657,8 @@ enum VRPanelSelfTest {
             check(false, "polished status does not decode", &f)
         }
         check(lc.codec == nil && lc.battery == nil && lc.pairingRequest == nil, "older host: no codec/battery/request lines", &f)
+        let stats = VRPanelModel.statLines(c).map(\.1)
+        check(stats.contains("11.4 ms") && stats.contains("900") && VRPanelModel.statLines(p).isEmpty, "statistics rows: \(stats)", &f)
         let dup = [VRPairedHeadset(name: "Unknown headset", last_connection: 5), VRPairedHeadset(name: "Oculus Quest 3", last_connection: 9),
                    VRPairedHeadset(name: "Unknown headset", last_connection: 7)]
         let g = VRPairedHeadset.grouped(dup)
@@ -602,6 +697,9 @@ enum VRPanelSelfTest {
               "round \(round): --show-pin differs from the socket's PIN", &f)
         let list = VRControl.request("headsets", path: socket).map { String(decoding: $0, as: UTF8.self) } ?? ""
         check(list.contains("\"headsets\":[]"), "round \(round): headsets: \(list)", &f)
+        // the link host's live statistics (Settings > VR "Show live statistics")
+        check(s.stream.game_fps != nil && s.stream.compose_gpu_ms != nil && s.stream.upscaler == "" && s.stream.idr_requests == 0,
+              "round \(round): stream statistics \(s.stream)", &f)
         let rate = status("bitrate 30")
         check(rate?.stream.target_mbps == 30, "round \(round): bitrate 30: \(String(describing: rate))", &f)
         check(status("bitrate 0") == nil, "round \(round): bitrate 0 accepted", &f) // an error reply, not a status

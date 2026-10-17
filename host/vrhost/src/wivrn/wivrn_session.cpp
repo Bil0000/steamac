@@ -273,6 +273,7 @@ struct WivrnSession::impl
 	std::array<std::unique_ptr<VtEncoder>, 2> encoders;
 	std::array<IdrState, 2> idr;
 	EncoderConfig::Codec codec = EncoderConfig::Codec::hevc;
+	std::array<ns, 2> last_idr_ns{}; // keyframe_interval_s (under eye_mutex)
 
 	// pacing: WiVRn's pacer, fed by the headset's feedback packets
 	wivrn::pacer pacer{1'000'000'000 / 72};
@@ -601,8 +602,11 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 {
 	HeadsetInfo h;
-	h.render_eye_width = hi.render_eye_width;
-	h.render_eye_height = hi.render_eye_height;
+	h.nominal_render_width = hi.render_eye_width;
+	h.nominal_render_height = hi.render_eye_height;
+	auto scaled = [&](uint32_t v) { return std::clamp(uint32_t(std::lround(v * cfg.render_scale)) & ~1u, 256u, 8192u); };
+	h.render_eye_width = cfg.render_scale == 1 or not hi.render_eye_width ? hi.render_eye_width : scaled(hi.render_eye_width);
+	h.render_eye_height = cfg.render_scale == 1 or not hi.render_eye_height ? hi.render_eye_height : scaled(hi.render_eye_height);
 	h.eye_width = (cfg.width ? cfg.width : hi.stream_eye_width) & ~1u;
 	h.eye_height = (cfg.height ? cfg.height : hi.stream_eye_height) & ~1u;
 	h.refresh_rates = hi.available_refresh_rates;
@@ -659,6 +663,7 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 			        .height = h.eye_height,
 			        .fps = h.preferred_refresh_rate,
 			        .bitrate_bps = cfg.bitrate_bps / 2,
+			        .prioritize_speed = cfg.prioritize_speed,
 			});
 			idr[i].reset();
 		}
@@ -718,8 +723,9 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 			control->send(th::feature_control{th::feature_control::microphone, h.microphone and mic_wanted.load()});
 	}
 	char buf[160];
-	snprintf(buf, sizeof buf, "headset '%s': stream %ux%u per eye, %.0f Hz, %s", h.name.c_str(), h.eye_width,
-	         h.eye_height, h.preferred_refresh_rate, hevc ? "HEVC" : "H.264");
+	snprintf(buf, sizeof buf, "headset '%s': stream %ux%u per eye, render %ux%u (headset %ux%u), %.0f Hz, %s",
+	         h.name.c_str(), h.eye_width, h.eye_height, h.render_eye_width, h.render_eye_height, h.nominal_render_width,
+	         h.nominal_render_height, h.preferred_refresh_rate, hevc ? "HEVC" : "H.264");
 	log(buf);
 }
 
@@ -965,7 +971,14 @@ void WivrnSession::impl::send_frame_eye(int eye, const Frame & f, uint64_t wire,
 		width = uint16_t(enc->config().width);
 		height = uint16_t(enc->config().height);
 		idr_frame = idr[eye].frame_is_idr(wire);
+		// periodic refresh (keyframe interval): VideoToolbox's low-latency rate control ignores
+		// MaxKeyFrameIntervalDuration, so the IDR is forced here
+		ns now = now_ns();
+		if (cfg.keyframe_interval_s > 0 and now - last_idr_ns[eye] >= ns(cfg.keyframe_interval_s * 1e9))
+			idr_frame = true;
 		out = enc->encode(buf, f.display_time, idr_frame);
+		if (out.idr)
+			last_idr_ns[eye] = now;
 	}
 	if (out.annexb.empty())
 		return; // dropped by the encoder

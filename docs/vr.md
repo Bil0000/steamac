@@ -14,9 +14,22 @@ M4 guest/FEX and host-launcher integration remain open.
    closes again once it has paired. With the option off, new headsets are refused (the panel names the refused headset
    and offers **Pair this headset**). Paired headsets reconnect with encryption enabled; the paired list groups entries
    of the same name (a reinstalled or test client), and **Unpair** removes them all.
-4. Encoder: **Bitrate** applies at once to a running host (control socket `bitrate`); **Resolution per eye** and
-   **Codec** (Automatic = HEVC when the headset has it, or H.264) on the next start. While a headset is connected, the
-   **Refresh rate** picker asks it to switch among the rates it offers (WiVRn `refresh_rate_change`, not saved).
+4. Options follow WiVRn's split between headset and machine. On the headset (WiVRn app): refresh rate, resolution
+   scale and microphone; the panel shows the current values only. In the panel (next start unless noted):
+   * **Quality**: preset (Low/Medium/High/Ultra, or Custom), **Render resolution** 50-150 % of the headset's render
+     size (`--render-scale`; below 100 % the Mac upscales before encoding with **MetalFX** spatial or bilinear,
+     `--upscaler`), **Sharpening** (`--sharpness`), **Treat game images as sRGB** (`--force-srgb`, for games whose
+     8-bit images hold sRGB data without the sRGB format).
+   * **Video codec**: Automatic/HEVC/H.264, **Bitrate** (applies at once to a running host; the headset can still
+     lower it), **Keyframe interval** (`--keyframe-interval`; default only when the headset reports a loss).
+   * **Stream**: resolution per eye (stream size), **TCP only** (`--tcp-only`).
+   * **Statistics**: live game fps, copy/compose/encode/decode times, bitrate, lost frames, upscaler.
+   Measured on an M2 (`test_foveation_geometry`, Quest 3 sizes, both eyes): MetalFX upscale from 50 % adds about
+   2.8 ms of compositor GPU time per frame, bilinear about 0.55 ms; sharpening has no measurable cost. Not offered:
+   temporal MetalFX (OpenVR submits no motion vectors or depth), AV1 (no hardware AV1 encoder on these Macs), HEVC
+   10-bit (the WiVRn v26.9 stream description carries no bit depth; untested with real clients), constant bitrate
+   (VideoToolbox rejects it with low-latency rate control), encoder speed priority (no measurable gain: 19.5 vs
+   19.9 ms p50 per eye pair), reprojection/frame pacing modes (done by the WiVRn client itself).
 5. Game: **Start in VR** runs `steam -ifrunning steam://launch/<id>/vr` in the guest (fx-progress-agent `launch-vr`;
    a plain launch may pick a game's desktop mode). The same game (Steam app ID, default VRChat 438100) is listed in the
    WiVRn app's app list on the headset; picking it there starts it the same way. **Game audio in the headset** (default

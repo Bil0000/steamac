@@ -142,6 +142,9 @@ int main()
 		            .pin = "424242",
 		            .known_keys_file = keys2,
 		            .pair_on_request = true,
+		            .render_scale = 0.5f,
+		            .keyframe_interval_s = 0.25f,
+		            .prioritize_speed = true,
 		            .codec = WivrnConfig::Codec::h264,
 		            .applications = {{"438100", "VRChat"}},
 		            .on_pin = [&](const std::string & p) {
@@ -190,6 +193,10 @@ int main()
 		CHECK(not has(refresh_reply, "\"error\"") and has(bitrate_reply, "\"target_mbps\":30.0"));
 		CHECK(has(connected_status, "\"codec\":\"h264\"") and has(connected_status, "\"battery\":{\"charge\":0.50,\"charging\":true}"));
 		CHECK(has(connected_status, "\"refresh_hz\":90.0"));
+		CHECK(has(connected_status, "\"idr_requests\":"));
+		CHECK(has(connected_status, "\"render_width\":320,\"render_height\":352")); // render scale 0.5 of 640x704
+		printf("keyframe interval 0.25 s: %d IDR on eye 0 for %d frames\n", r.idr[0], r.decoded[0]);
+		CHECK(r.idr[0] >= 4);                                                         // ~2 s of frames, IDR every 0.25 s
 		CHECK(has(connected_status, "\"app_request\":{\"id\":\"438100\",\"seq\":1}"));
 		srv.wait_disconnect();
 		{

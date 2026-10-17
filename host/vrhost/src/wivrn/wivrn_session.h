@@ -43,6 +43,12 @@ struct WivrnConfig
 	// it, instead of being refused (WiVRn refuses; its dashboard then offers "enable pairing"). The PIN is still
 	// checked by WiVRn's SMP exchange, so nothing pairs without it.
 	bool pair_on_request = false;
+	// Render scale (Settings > VR "Render resolution"): the game is asked for the headset's render size times this;
+	// below 1 the compositor upscales (CompositorOptions), above 1 is supersampling. 1 = the headset's size.
+	float render_scale = 1;
+	// Encoder options (Settings > VR "Video codec"): see EncoderConfig.
+	float keyframe_interval_s = 0; // > 0: an IDR at least this often (else only when the headset reports a loss)
+	bool prioritize_speed = false;
 	// Video codec: automatic = HEVC when the headset lists it, else H.264 (WiVRn's default choice for these clients).
 	enum class Codec
 	{

@@ -223,9 +223,12 @@ std::string ControlServer::status()
 	double pipeline = hooks.pipeline_latency_ms ? hooks.pipeline_latency_ms() : 0;
 	snprintf(num, sizeof num,
 	         ",\"stream\":{\"frames\":%" PRIu64 ",\"bitrate_mbps\":%.1f,\"target_mbps\":%.1f,\"encode_ms\":%.2f,"
-	         "\"decode_ms\":%.2f,\"pipeline_ms\":%.2f}}",
+	         "\"decode_ms\":%.2f,\"pipeline_ms\":%.2f",
 	         s.frames_sent.load(), last_mbps, session.bitrate_bps() / 1e6, s.last_encode_ns / 1e6,
 	         s.last_feedback_decode_ns / 1e6, pipeline);
-	return out + num;
+	out += num;
+	snprintf(num, sizeof num, ",\"idr_requests\":%" PRIu64 "}", s.idr_requests.load());
+	out += (hooks.stream_json ? hooks.stream_json() : std::string()) + num;
+	return out + "}";
 }
 } // namespace vrhost
