@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // vrhost-test-headset: the loopback test headset (fake_headset.cpp, WiVRn v26.9 client sequence + VideoToolbox decode)
 // as a tool, for checking a running steamac-vrhost on this Mac without a real headset (docs/vr.md):
-//   vrhost-test-headset [--host ADDR] [--port N] [--pin NNNNNN] [--pin-delay MS] [--frames N] [--size WxH]
+//   vrhost-test-headset [--host ADDR] [--port N] [--pin NNNNNN] [--pin-delay MS] [--frames N] [--size WxH] [--start-app ID]
 // Reports decoded frames per eye, frame numbers read from the image (d3d11bench --vr / test pattern blocks; readable
 // when the stream size equals the eye size, i.e. no foveation), the eyes' colour difference (d3d11bench --vr: left
 // red, right green), the foveation parameters received, and frame arrival intervals. Exit 0 when frames decoded,
@@ -321,6 +321,8 @@ int main(int argc, char ** argv)
 			o.pin = v;
 		else if (a == "--frames")
 			o.frames = std::stoi(v);
+		else if (a == "--start-app") // the WiVRn app list's "start": the launcher starts that game in the guest
+			o.start_app = v;
 		else if (a == "--size")
 		{
 			parse_wh(v, o.eye_width, o.eye_height);
