@@ -5495,18 +5495,18 @@
         }
       }
     },
-    "Sets render resolution, sharpening and bitrate together. Low renders the game at 60 percent and upscales it with MetalFX (fastest game frames); Ultra supersamples at 125 percent. Refresh rate and stream size stay with the headset." : {
+    "Sets bitrate and sharpening together: Low for a weak Wi-Fi link, Ultra for a strong one. Refresh rate and stream size stay with the headset." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Задаёт разрешение рендеринга, резкость и битрейт вместе. «Низкое» рендерит игру в 60 % и масштабирует её через MetalFX (самые быстрые кадры игры); «Ультра» — суперсэмплинг 125 %. Частота обновления и размер потока остаются за шлемом."
+            "value" : "Задаёт битрейт и резкость вместе: «Низкое» — для слабой сети Wi-Fi, «Ультра» — для сильной. Частота обновления и размер потока остаются за шлемом."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同时设置渲染分辨率、锐化和码率。“低”以 60% 渲染游戏并用 MetalFX 放大（游戏帧最快）；“超高”以 125% 超采样。刷新率和串流尺寸仍由头显决定。"
+            "value" : "同时设置码率和锐化：“低”适合较弱的 Wi-Fi，“超高”适合较强的 Wi-Fi。刷新率和串流尺寸仍由头显决定。"
           }
         }
       }
@@ -7687,18 +7687,18 @@
         }
       }
     },
-    "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper and costs about 3 ms of Mac GPU time per frame at the Quest 3's size; bilinear about 0.5 ms. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over." : {
+    "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper but competes with the game for the Mac's GPU (12-15 ms per frame while VRChat ran, against 4-5 ms for bilinear). Only for games limited by GPU pixels; VRChat was not faster at a lower render resolution. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Используется при разрешении рендеринга ниже 100 %. MetalFX (пространственный) сохраняет края чётче и стоит около 3 мс времени GPU Mac на кадр при размере Quest 3; билинейный — около 0,5 мс. Временному MetalFX нужны векторы движения и глубина, которые игры OpenVR не передают."
+            "value" : "Используется при разрешении рендеринга ниже 100 процентов. MetalFX (пространственный) сохраняет края чётче, но конкурирует с игрой за GPU Mac (12–15 мс на кадр при работе VRChat против 4–5 мс у билинейного). Только для игр, упирающихся в пиксели GPU; VRChat при меньшем разрешении рендеринга быстрее не стал. Временному MetalFX нужны векторы движения и глубина, которые игры OpenVR не передают."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在渲染分辨率低于 100% 时使用。MetalFX（空间）边缘更锐利，在 Quest 3 尺寸下每帧约占 3 毫秒 Mac GPU 时间；双线性约 0.5 毫秒。时间性 MetalFX 需要运动矢量和深度，而 OpenVR 游戏不提供这些。"
+            "value" : "在渲染分辨率低于 100% 时使用。MetalFX（空间）边缘更锐利，但会与游戏争用 Mac GPU（VRChat 运行时每帧 12–15 毫秒，双线性为 4–5 毫秒）。仅适用于受 GPU 像素限制的游戏；降低渲染分辨率后 VRChat 并未变快。时间性 MetalFX 需要运动矢量和深度，而 OpenVR 游戏不提供这些。"
           }
         }
       }

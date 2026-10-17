@@ -424,7 +424,7 @@ struct VRTab: View {
                     Text("Custom").tag(LauncherSettings.VRPreset?.none)
                 } label: {
                     Label2(title: "Preset",
-                           detail: String(localized: "Sets render resolution, sharpening and bitrate together. Low renders the game at 60 percent and upscales it with MetalFX (fastest game frames); Ultra supersamples at 125 percent. Refresh rate and stream size stay with the headset."),
+                           detail: String(localized: "Sets bitrate and sharpening together: Low for a weak Wi-Fi link, Ultra for a strong one. Refresh rate and stream size stay with the headset."),
                            now: false)
                 }
                 VStack(alignment: .leading) {
@@ -442,7 +442,7 @@ struct VRTab: View {
                     Text("Bilinear").tag(LauncherSettings.VRUpscaler.bilinear)
                 } label: {
                     Label2(title: "Upscaler",
-                           detail: String(localized: "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper and costs about 3 ms of Mac GPU time per frame at the Quest 3's size; bilinear about 0.5 ms. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over."),
+                           detail: String(localized: "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper but competes with the game for the Mac's GPU (12-15 ms per frame while VRChat ran, against 4-5 ms for bilinear). Only for games limited by GPU pixels; VRChat was not faster at a lower render resolution. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over."),
                            now: false, key: .vrUpscaler)
                 }
                 .disabled(settings.vrRenderScale >= 1)

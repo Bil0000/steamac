@@ -24,8 +24,12 @@ M4 guest/FEX and host-launcher integration remain open.
      lower it), **Keyframe interval** (`--keyframe-interval`; default only when the headset reports a loss).
    * **Stream**: resolution per eye (stream size), **TCP only** (`--tcp-only`).
    * **Statistics**: live game fps, copy/compose/encode/decode times, bitrate, lost frames, upscaler.
-   Measured on an M2 (`test_foveation_geometry`, Quest 3 sizes, both eyes): MetalFX upscale from 50 % adds about
-   2.8 ms of compositor GPU time per frame, bilinear about 0.55 ms; sharpening has no measurable cost. Not offered:
+   Presets set bitrate and sharpening only; render resolution stays 100 %. Measured on an M2: offline
+   (`test_foveation_geometry`, Quest 3 sizes) MetalFX upscale from 50 % adds 2.8 ms of compositor GPU time, bilinear
+   0.55 ms, sharpening nothing measurable. Live with VRChat and the synthetic Quest 3 client (candidate6 smoke): at
+   60 % render size the game frame copy fell from 81-94 to 42-53 ms, but the game did not run faster (16.4 fps at
+   100 %, 15.2 with bilinear, 6.7 with MetalFX, whose compose took 12-15 ms GPU under game load), so the lower
+   render size is a manual option for GPU-pixel-bound games, not a general uplift. Not offered:
    temporal MetalFX (OpenVR submits no motion vectors or depth), AV1 (no hardware AV1 encoder on these Macs), HEVC
    10-bit (the WiVRn v26.9 stream description carries no bit depth; untested with real clients), constant bitrate
    (VideoToolbox rejects it with low-latency rate control), encoder speed priority (no measurable gain: 19.5 vs

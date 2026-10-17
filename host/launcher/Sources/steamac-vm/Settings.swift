@@ -441,8 +441,10 @@ final class LauncherSettings: ObservableObject {
     enum VRPreset: String, CaseIterable, Identifiable {
         case low, medium, high, ultra
         var id: String { rawValue }
-        var renderScale: Double { [0.6, 0.8, 1.0, 1.25][index] }
-        var sharpness: Double { [0.4, 0.25, 0.0, 0.0][index] }
+        // Render scale stays 100 %: below it the game (VRChat, M2) did not get faster in the candidate6 smoke and
+        // MetalFX under game load cost 12-15 ms GPU per frame; it is a manual option for GPU-bound games.
+        var renderScale: Double { 1.0 }
+        var sharpness: Double { [0.3, 0.2, 0.0, 0.0][index] }
         var bitrateMbps: Int { [30, 40, 50, 80][index] } // High = the defaults
         private var index: Int { VRPreset.allCases.firstIndex(of: self)! }
     }
