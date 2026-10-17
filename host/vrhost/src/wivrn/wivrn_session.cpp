@@ -28,6 +28,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <ctime>
 #include <map>
 #include <poll.h>
 #include <random>
@@ -267,7 +268,7 @@ struct WivrnSession::impl
 	std::array<Fov, 2> view_fov{};
 
 	// encoder state
-	std::mutex encode_mutex;          // encoder (re)creation
+	mutable std::mutex encode_mutex;          // encoder (re)creation
 	std::array<std::mutex, 2> eye_mutex; // per-eye encode
 	std::array<std::unique_ptr<VtEncoder>, 2> encoders;
 	std::array<IdrState, 2> idr;
@@ -317,6 +318,11 @@ struct WivrnSession::impl
 	mutable std::mutex crypto_mutex; // cfg.encryption + pin: WivrnSession::set_pairing() changes them at run time
 	std::string pin;
 	std::string advertised_name;
+	std::optional<PairingRequest> pairing_request; // under crypto_mutex
+
+	// headset state for the control socket (cnx_mutex)
+	std::optional<Battery> battery;
+	AppRequest app_request;
 
 	void log(const std::string & s)
 	{
@@ -465,6 +471,32 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 		pin = this->pin;
 	}
 	bool is_public_key_known = encryption != Enc::disabled and keys->contains(headset_public_key);
+	if (not is_public_key_known and encryption != Enc::disabled)
+	{
+		std::string new_pin;
+		{
+			std::lock_guard lock(crypto_mutex);
+			bool open = encryption == Enc::enabled and cfg.pair_on_request;
+			if (open and cfg.encryption == Enc::enabled) // still off (the control socket may have opened it meanwhile)
+			{
+				this->pin = cfg.pin.empty() ? KnownKeys::random_pin() : cfg.pin;
+				cfg.encryption = Enc::pairing;
+				new_pin = this->pin;
+			}
+			if (open)
+			{
+				encryption = Enc::pairing;
+				pin = this->pin;
+			}
+			pairing_request = PairingRequest{hs.name, int64_t(time(nullptr)), encryption == Enc::enabled};
+		}
+		if (not new_pin.empty())
+		{
+			log("headset '" + hs.name + "' is not paired: pairing opened on request");
+			if (cfg.on_pin)
+				cfg.on_pin(new_pin);
+		}
+	}
 	switch (encryption)
 	{
 		case Enc::disabled:
@@ -545,6 +577,21 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 		keys->add({.public_key = headset_public_key, .name = hs.name});
 		stats.paired++;
 		log("headset '" + hs.name + "' paired (" + keys->file().string() + ")");
+		bool close_pairing = false;
+		{
+			std::lock_guard lock(crypto_mutex);
+			pairing_request.reset();
+			// pairing opened for this headset (pair_on_request): closed again once it has paired, as WiVRn's
+			// dashboard does after a successful pairing
+			close_pairing = cfg.pair_on_request and cfg.encryption == Enc::pairing;
+			if (close_pairing)
+			{
+				cfg.encryption = Enc::enabled;
+				this->pin.clear();
+			}
+		}
+		if (close_pairing and cfg.on_pin)
+			cfg.on_pin("");
 	}
 	else if (encryption != Enc::disabled)
 		keys->touch(headset_public_key);
@@ -599,6 +646,8 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	bool h264 = std::ranges::contains(h.codecs, Codec::h264);
 	if (not hevc and not h264)
 		throw std::runtime_error("headset supports neither HEVC nor H.264");
+	if (cfg.codec == WivrnConfig::Codec::h264 and h264)
+		hevc = false; // asked for H.264 (a headset without it keeps HEVC: better than no stream)
 	codec = hevc ? EncoderConfig::Codec::hevc : EncoderConfig::Codec::h264;
 	{
 		std::scoped_lock lock(encode_mutex, eye_mutex[0], eye_mutex[1]);
@@ -651,11 +700,20 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	if (ad.speaker or ad.microphone)
 		control->send(std::move(ad));
 
+	if (not cfg.applications.empty())
+	{
+		th::application_list apps{};
+		for (auto & [id, name]: cfg.applications)
+			apps.applications.push_back({id, name});
+		control->send(std::move(apps));
+	}
+
 	{
 		// with info, under the lock set_microphone takes: a switch while this runs is either read here or sent by
 		// set_microphone, never lost in between
 		std::lock_guard lock(cnx_mutex);
 		info = h;
+		battery.reset();
 		if (ad.speaker or ad.microphone)
 			control->send(th::feature_control{th::feature_control::microphone, h.microphone and mic_wanted.load()});
 	}
@@ -762,6 +820,31 @@ void WivrnSession::impl::handle(fh::packets && packet)
 				        listener->on_microphone(
 				                std::span(reinterpret_cast<const int16_t *>(pkt.payload.data()), pkt.payload.size() / 2),
 				                clock.from_headset(pkt.timestamp));
+		        }
+		        else if constexpr (std::is_same_v<T, fh::battery>)
+		        {
+			        std::lock_guard lock(cnx_mutex);
+			        if (pkt.present)
+				        battery = Battery{pkt.charge, pkt.charging};
+			        else
+				        battery.reset();
+		        }
+		        else if constexpr (std::is_same_v<T, fh::get_application_list>)
+		        {
+			        th::application_list apps{.language = pkt.language, .country = pkt.country, .variant = pkt.variant};
+			        for (auto & [id, name]: cfg.applications)
+				        apps.applications.push_back({id, name});
+			        control->send(std::move(apps));
+		        }
+		        else if constexpr (std::is_same_v<T, fh::start_app>)
+		        {
+			        bool known = std::ranges::any_of(cfg.applications, [&](auto & a) { return a.first == pkt.app_id; });
+			        if (known)
+			        {
+				        std::lock_guard lock(cnx_mutex);
+				        app_request = AppRequest{pkt.app_id, app_request.seq + 1};
+			        }
+			        log("headset asks to start app '" + pkt.app_id + "'" + (known ? "" : " (not offered, ignored)"));
 		        }
 		        else
 		        {
@@ -1061,7 +1144,64 @@ std::string WivrnSession::advertised_name() const
 
 uint32_t WivrnSession::bitrate_bps() const
 {
+	std::lock_guard lock(p->encode_mutex);
 	return p->cfg.bitrate_bps;
+}
+
+void WivrnSession::set_bitrate(uint32_t bps)
+{
+	std::scoped_lock lock(p->encode_mutex, p->eye_mutex[0], p->eye_mutex[1]);
+	p->cfg.bitrate_bps = bps;
+	for (auto & e: p->encoders)
+		if (e)
+			e->set_bitrate(bps / 2);
+}
+
+bool WivrnSession::request_refresh_rate(float hz)
+{
+	std::lock_guard lock(p->cnx_mutex);
+	if (not p->info or not p->control or not std::ranges::any_of(p->info->refresh_rates, [&](float r) { return std::abs(r - hz) < 0.5f; }))
+		return false;
+	try
+	{
+		p->control->send(th::refresh_rate_change{.hz = hz});
+	}
+	catch (...)
+	{
+		return false; // the receive loop handles the disconnect
+	}
+	return true;
+}
+
+float WivrnSession::refresh_rate() const
+{
+	return p->is_connected ? p->refresh.load() : 0;
+}
+
+std::string WivrnSession::codec_name() const
+{
+	if (not p->is_connected)
+		return "";
+	std::lock_guard lock(p->encode_mutex);
+	return p->codec == EncoderConfig::Codec::hevc ? "hevc" : "h264";
+}
+
+std::optional<WivrnSession::Battery> WivrnSession::battery() const
+{
+	std::lock_guard lock(p->cnx_mutex);
+	return p->is_connected ? p->battery : std::nullopt;
+}
+
+std::optional<WivrnSession::PairingRequest> WivrnSession::pairing_request() const
+{
+	std::lock_guard lock(p->crypto_mutex);
+	return p->pairing_request;
+}
+
+WivrnSession::AppRequest WivrnSession::app_request() const
+{
+	std::lock_guard lock(p->cnx_mutex);
+	return p->app_request;
 }
 
 std::string WivrnSession::known_keys_file() const

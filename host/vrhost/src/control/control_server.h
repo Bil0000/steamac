@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Status/pairing control socket of steamac-vrhost (`--control-socket PATH`), for the launcher's VR panel.
 // Contract: docs/vr-interfaces.md section 5. AF_UNIX SOCK_STREAM, one request line per connection, one JSON
-// object line back, then close. Requests: "status", "headsets", "pair on", "pair off", "unpair NAME", "unpair-all".
+// object line back, then close. Requests: "status", "headsets", "pair on", "pair off", "unpair NAME", "unpair-all",
+// "bitrate MBPS", "refresh HZ".
 #pragma once
 
 #include <atomic>

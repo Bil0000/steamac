@@ -189,8 +189,15 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 		if (o.mic_channels)
 			info.microphone = fh::headset_info_packet::audio_description{o.mic_channels, o.mic_rate};
 		control.send(std::move(info));
+		if (o.battery_charge >= 0)
+			control.send(fh::battery{.charge = o.battery_charge, .present = true, .charging = true});
+		if (not o.start_app.empty())
+		{
+			control.send(fh::get_application_list{.language = "en"});
+			control.send(fh::start_app{.app_id = o.start_app});
+		}
 
-		std::array<VtDecoder, 2> dec{VtDecoder(true), VtDecoder(true)};
+		std::array<VtDecoder, 2> dec{VtDecoder(not o.expect_h264), VtDecoder(not o.expect_h264)};
 		std::array<std::map<uint64_t, pending_frame>, 2> frames;
 		std::array<bool, 2> need_idr{true, true};
 		bool dropped = false;
@@ -330,7 +337,8 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 			else if (std::holds_alternative<th::video_stream_description>(pkt))
 			{
 				auto & d = std::get<th::video_stream_description>(pkt);
-				res.got_stream_description = d.width == o.eye_width and d.height == o.eye_height and d.codec[0] == wivrn::video_codec::h265;
+				res.got_stream_description = d.width == o.eye_width and d.height == o.eye_height and
+				                             d.codec[0] == (o.expect_h264 ? wivrn::video_codec::h264 : wivrn::video_codec::h265);
 			}
 			else if (auto * ad = std::get_if<th::audio_stream_description>(&pkt))
 			{
@@ -363,6 +371,17 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 					res.max_speaker_packet_frames = std::max(res.max_speaker_packet_frames, int(samples / o.speaker_channels));
 					res.speaker_arrivals.emplace_back(vrhost::now_ns(), res.speaker.size() / o.speaker_channels);
 				}
+			}
+			else if (auto * al = std::get_if<th::application_list>(&pkt))
+			{
+				res.app_ids.clear();
+				for (auto & a: al->applications)
+					res.app_ids.push_back(a.id);
+			}
+			else if (auto * rc = std::get_if<th::refresh_rate_change>(&pkt))
+			{
+				res.refresh_changes.push_back(rc->hz);
+				control.send(fh::refresh_rate_changed{.from = o.refresh_hz, .to = rc->hz});
 			}
 			else if (auto * hp = std::get_if<th::haptics>(&pkt))
 				res.haptics.push_back({int(hp->id), int64_t(hp->duration.count()), hp->frequency, hp->amplitude});
@@ -418,7 +437,7 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 
 				bool is_idr = false;
 				for (auto n: vrhost::annexb::split(au))
-					is_idr |= vrhost::annexb::hevc_nal_type(n) == vrhost::annexb::hevc_vps;
+					is_idr |= o.expect_h264 ? (n[0] & 0x1f) == 7 : vrhost::annexb::hevc_nal_type(n) == vrhost::annexb::hevc_vps; // VPS / SPS
 				if (is_idr)
 				{
 					res.idr[idx]++;

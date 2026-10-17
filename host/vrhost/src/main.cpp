@@ -57,6 +57,7 @@ static void usage()
 	        "  --audio-fd N        VR audio region fd from steamac-vm (game audio to the headset, its microphone back)\n"
 	        "  --pair              accept new headsets (PIN pairing); default only when no headset is paired yet\n"
 	        "  --pin NNNNNN        pairing PIN (default: random, printed and readable with --show-pin)\n"
+	        "  --pair-on-request   an unpaired headset opens pairing (fresh PIN) instead of being refused\n"
 	        "  --no-encryption     WiVRn's 'encryption disabled' mode (trusted LAN only)\n"
 	        "  --port N            TCP/UDP port (default 9757)\n"
 	        "  --no-advertise      do not publish _wivrn._tcp via Bonjour\n"
@@ -64,7 +65,8 @@ static void usage()
 	        "  --size WxH          stream size per eye (default: headset's; self-test 1832x1920)\n"
 	        "  --frames N          self-test frames (default 600)\n"
 	        "  --fps F             self-test frame rate (default 90)\n"
-	        "  --codec hevc|h264   self-test codec (default hevc)\n"
+	        "  --codec auto|hevc|h264  video codec (default auto: HEVC when the headset has it; self-test hevc)\n"
+	        "  --app ID=NAME       offer an app in the headset's app list; start requests show in the control status\n"
 	        "  --bitrate BPS       total bitrate (default 50000000)\n"
 	        "  self-test tuning:   --layout eyes|serial|sbs  --prioritize-speed  --max-frame-delay N  --qp N\n"
 	        "                      --no-low-latency-rc  --csv (one summary line)\n");
@@ -596,7 +598,29 @@ int main(int argc, char ** argv)
 		else if (a == "--bitrate")
 			cfg.bitrate_bps = std::stoul(next());
 		else if (a == "--codec")
-			st.enc.codec = next() == "h264" ? EncoderConfig::Codec::h264 : EncoderConfig::Codec::hevc;
+		{
+			auto c = next();
+			if (c != "auto" and c != "hevc" and c != "h264")
+			{
+				usage();
+				return 2;
+			}
+			st.enc.codec = c == "h264" ? EncoderConfig::Codec::h264 : EncoderConfig::Codec::hevc;
+			cfg.codec = c == "h264" ? WivrnConfig::Codec::h264 : c == "hevc" ? WivrnConfig::Codec::hevc : WivrnConfig::Codec::automatic;
+		}
+		else if (a == "--pair-on-request")
+			cfg.pair_on_request = true;
+		else if (a == "--app")
+		{
+			auto v = next();
+			auto eq = v.find('=');
+			if (eq == std::string::npos or eq == 0 or eq + 1 == v.size())
+			{
+				usage();
+				return 2;
+			}
+			cfg.applications.emplace_back(v.substr(0, eq), v.substr(eq + 1));
+		}
 		else
 		{
 			usage();
@@ -663,6 +687,7 @@ int main(int argc, char ** argv)
 					                         : WivrnConfig::Encryption::enabled;
 				cfg.width = w;
 				cfg.height = h;
+				cfg.on_pin = write_pin; // pairing opened by a headset (--pair-on-request): --show-pin follows
 				return mode == link ? serve_link(cfg, link_fd, link_socket, mach_name, g_audio_fd) : testpattern(cfg);
 			case none:
 				usage();

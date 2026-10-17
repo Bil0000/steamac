@@ -60,6 +60,9 @@ struct FakeHeadsetOptions
 	uint32_t mic_rate = 48000;
 	double mic_tone_hz = 440;
 	int mic_marker_ms = 300;
+	bool expect_h264 = false;   // the server was told to use H.264 (both codecs are offered either way)
+	float battery_charge = -1;  // >= 0: send one battery packet (charging) after the headset info
+	std::string start_app;      // non-empty: ask for the app list, then to start this app id
 };
 
 struct FakeHeadsetResult
@@ -98,6 +101,8 @@ struct FakeHeadsetResult
 		float frequency, amplitude;
 	};
 	std::vector<Haptic> haptics;
+	std::vector<std::string> app_ids;      // last application_list received
+	std::vector<float> refresh_changes;    // refresh_rate_change requests received (answered with refresh_rate_changed)
 };
 
 FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions &);

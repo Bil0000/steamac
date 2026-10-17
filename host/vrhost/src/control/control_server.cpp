@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <poll.h>
 #include <stdexcept>
@@ -120,6 +121,26 @@ std::string ControlServer::handle(const std::string & req)
 			hooks.pin_changed(session.pin());
 		return status();
 	}
+	if (req.starts_with("bitrate "))
+	{
+		// total Mbit/s, the range Settings > VR offers
+		char * end = nullptr;
+		long mbps = strtol(req.c_str() + 8, &end, 10);
+		if (*end or mbps < 1 or mbps > 400)
+			return error("bitrate: Mbit/s, 1 to 400");
+		session.set_bitrate(uint32_t(mbps) * 1'000'000u);
+		return status();
+	}
+	if (req.starts_with("refresh "))
+	{
+		char * end = nullptr;
+		float hz = strtof(req.c_str() + 8, &end);
+		if (*end or not (hz > 0))
+			return error("refresh: rate in Hz");
+		if (not session.request_refresh_rate(hz))
+			return error("refresh: no headset connected, or it does not offer this rate");
+		return status();
+	}
 	if (req == "unpair-all" or req.starts_with("unpair "))
 	{
 		std::string name = req == "unpair-all" ? "" : req.substr(7);
@@ -175,15 +196,30 @@ std::string ControlServer::status()
 			snprintf(num, sizeof num, "%s%.0f", rates.empty() ? "" : ",", r);
 			rates += num;
 		}
+		float current = session.refresh_rate();
 		snprintf(num, sizeof num,
 		         ",\"headset\":{\"name\":%s,\"eye_width\":%u,\"eye_height\":%u,\"render_width\":%u,\"render_height\":%u,"
-		         "\"refresh_hz\":%.1f,\"refresh_rates\":[%s]}",
+		         "\"refresh_hz\":%.1f,\"refresh_rates\":[%s],\"codec\":\"%s\"",
 		         json_string(info->name).c_str(), info->eye_width, info->eye_height, info->render_eye_width,
-		         info->render_eye_height, info->preferred_refresh_rate, rates.c_str());
+		         info->render_eye_height, current > 0 ? current : info->preferred_refresh_rate, rates.c_str(),
+		         session.codec_name().c_str());
 		out += num;
+		if (auto b = session.battery())
+		{
+			snprintf(num, sizeof num, ",\"battery\":{\"charge\":%.2f,\"charging\":%s}", b->charge, b->charging ? "true" : "false");
+			out += num;
+		}
+		out += "}";
 	}
 	else
 		out += ",\"headset\":null";
+	if (auto r = session.pairing_request())
+		out += ",\"pairing_request\":{\"name\":" + json_string(r->name) + ",\"at\":" + std::to_string(r->at) +
+		       ",\"refused\":" + (r->refused ? "true" : "false") + "}";
+	else
+		out += ",\"pairing_request\":null";
+	auto app = session.app_request();
+	out += ",\"app_request\":{\"id\":" + json_string(app.id) + ",\"seq\":" + std::to_string(app.seq) + "}";
 	double pipeline = hooks.pipeline_latency_ms ? hooks.pipeline_latency_ms() : 0;
 	snprintf(num, sizeof num,
 	         ",\"stream\":{\"frames\":%" PRIu64 ",\"bitrate_mbps\":%.1f,\"target_mbps\":%.1f,\"encode_ms\":%.2f,"
