@@ -124,7 +124,9 @@ static NTSTATUS f_signal(void *p) { /* encodeSignalEvent, as DXMT's unix side */
   [(id<MTLCommandBuffer>)a->handle encodeSignalEvent:(id<MTLSharedEvent>)a->arg0 value:a->arg1];
   return 0;
 }
-const void *wmtr_impl_funcs[WMTR_NCALLS] = {[1] = f_release, [17] = f_signal, [25] = f_newlibrary, [76] = f_sm50compile, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
+static NTSTATUS f_rce(void *a) { ((struct unixcall_generic_obj_uint64_obj_ret *)a)->ret = 0; return 0; } /* pass profile only */
+static NTSTATUS f_commit(void *a) { [(id<MTLCommandBuffer>)((struct unixcall_generic_obj_noret *)a)->handle commit]; return 0; }
+const void *wmtr_impl_funcs[WMTR_NCALLS] = {[32] = f_rce, [12] = f_commit, [1] = f_release, [17] = f_signal, [25] = f_newlibrary, [76] = f_sm50compile, [8] = f_getcstring, [26] = f_newfunction, [38] = f_render_encode,
                                     [39] = f_pixelformat, [47] = f_noop, [53] = f_autoreleased, [5] = f_fault, [88] = f_argsinfo, [45] = f_replace, [145] = f_getbytes};
 
 /* ---------------- loopback transport ---------------- */
@@ -730,6 +732,27 @@ int main(void) {
       remote(73, &r1); /* a second release of the same view is ignored */
       struct unixcall_generic_obj_uint64_ret pf = {0}; remote(39, &pf); /* sync call: the releases above are done */
       CHECK(n_released == 1 && released[0] == v1.ret_view, "ReleaseMetalView: %d releases", n_released);
+      /* render-pass profile (rows 220-239, with the statistics): a 4x MSAA pass that stores its samples and
+       * resolves, and the GPU time of its committed command buffer */
+      id<MTLDevice> pdev = MTLCreateSystemDefaultDevice();
+      MTLTextureDescriptor *md = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:64 height:64 mipmapped:NO];
+      md.textureType = MTLTextureType2DMultisample; md.sampleCount = 4; md.usage = MTLTextureUsageRenderTarget; md.storageMode = MTLStorageModePrivate;
+      id<MTLTexture> msaa = [pdev newTextureWithDescriptor:md];
+      MTLTextureDescriptor *rd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:64 height:64 mipmapped:NO];
+      rd.usage = MTLTextureUsageRenderTarget; rd.storageMode = MTLStorageModePrivate;
+      id<MTLTexture> res = [pdev newTextureWithDescriptor:rd];
+      id<MTLCommandQueue> pq = [pdev newCommandQueue];
+      id<MTLCommandBuffer> pcb = [pq commandBuffer];
+      struct WMTRenderPassInfo pinfo; memset(&pinfo, 0, sizeof pinfo);
+      pinfo.colors[0].texture = (obj_handle_t)msaa; pinfo.colors[0].load_action = WMTLoadActionClear;
+      pinfo.colors[0].store_action = WMTStoreActionStoreAndMultisampleResolve; pinfo.colors[0].resolve_texture = (obj_handle_t)res;
+      struct unixcall_generic_obj_uint64_obj_ret rce = {.handle = (obj_handle_t)pcb, .arg = (uint64_t)(uintptr_t)&pinfo};
+      remote(32, &rce);
+      struct unixcall_generic_obj_noret cm = {.handle = (obj_handle_t)pcb};
+      remote(12, &cm);
+      { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); }
+      [pcb waitUntilCompleted];
+      usleep(20000); /* the completion handler runs after waitUntilCompleted returns */
       /* a call that faults (bad handle) fails, the process lives, and the client is refused from then on */
       struct unixcall_generic_obj_uint64_ret fz = {0};
       NTSTATUS fs = remote(5, &fz);
@@ -767,6 +790,18 @@ int main(void) {
       while (sf && fgets(sl, sizeof sl, sf)) if (strstr(sl, ",200,_executor_sleeps,9,")) found = 1;
       if (sf) fclose(sf);
       CHECK(found, "WMTR_CALLSTATS: no executor sleep row");
+      int msaa_row = 0, gpu_row = 0, sig_row = 0;
+      sf = fopen(stats_path, "r");
+      while (sf && fgets(sl, sizeof sl, sf)) {
+        unsigned long long t, n, sy, ns; int call; char name[96]; unsigned cls;
+        if (sscanf(sl, "%llu,%d,%95[^,],%u,%llu,%llu,%llu", &t, &call, name, &cls, &n, &sy, &ns) != 7) continue;
+        if (call == 224 && n >= 1 && ns >= 64ull * 64 * 4 * 4) msaa_row = 1;
+        if (call == 220 && n >= 1 && ns > 0) gpu_row = 1;
+        if (call >= 230 && strstr(name, "c64x64/f70/s4/L2/S3")) sig_row = 1;
+      }
+      if (sf) fclose(sf);
+      CHECK(msaa_row && gpu_row && sig_row, "pass profile rows: msaa store %d, command buffer GPU time %d, signature %d",
+            msaa_row, gpu_row, sig_row);
       unlink(stats_path);
       unlink(trigger_path);
     }

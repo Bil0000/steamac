@@ -151,6 +151,12 @@ static _Atomic uint64_t cs_sleeps, cs_kicks;
 /* the process's VR link, for rows 210-213 (class 9): frames in count, the stage's cumulative time in exec_ns */
 static _Atomic(struct wmtr_vr *) cs_vr;
 static const char *const cs_vr_stage[WMTR_VR_STAGES] = {"_vr_submit_to_encoded", "_vr_encoded_to_rendered", "_vr_copy", "_vr_copied_to_sent"};
+/* render-pass profile counters (pp_pass / pp_commit below) */
+static _Atomic uint64_t pp_cb_count, pp_cb_gpu_ns, pp_passes, pp_load_bytes, pp_store_bytes, pp_resolve_bytes,
+    pp_msaa_store_bytes, pp_msaa_passes;
+#define PP_SIGS 64
+static struct pp_sig { char name[96]; uint64_t count, bytes; } pp_sig[PP_SIGS];
+static pthread_mutex_t pp_lock = PTHREAD_MUTEX_INITIALIZER;
 static FILE *cs_file;
 static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -177,6 +183,21 @@ callstats_dump(void) {
               (unsigned long long)v.stage_frames, (unsigned long long)v.stage_ns[i]);
     fprintf(cs_file, "%llu,214,_vr_dropped,9,%llu,0,0\n", (unsigned long long)t, (unsigned long long)v.dropped);
   }
+  fprintf(cs_file, "%llu,220,_gpu_cmdbuf,9,%llu,0,%llu\n", (unsigned long long)t, (unsigned long long)atomic_load(&pp_cb_count),
+          (unsigned long long)atomic_load(&pp_cb_gpu_ns));
+  fprintf(cs_file, "%llu,221,_pass_load_bytes,9,%llu,0,%llu\n%llu,222,_pass_store_bytes,9,%llu,0,%llu\n"
+                   "%llu,223,_pass_resolve_bytes,9,%llu,0,%llu\n%llu,224,_pass_msaa_store_bytes,9,%llu,0,%llu\n",
+          (unsigned long long)t, (unsigned long long)atomic_load(&pp_passes), (unsigned long long)atomic_load(&pp_load_bytes),
+          (unsigned long long)t, (unsigned long long)atomic_load(&pp_passes), (unsigned long long)atomic_load(&pp_store_bytes),
+          (unsigned long long)t, (unsigned long long)atomic_load(&pp_passes), (unsigned long long)atomic_load(&pp_resolve_bytes),
+          (unsigned long long)t, (unsigned long long)atomic_load(&pp_msaa_passes),
+          (unsigned long long)atomic_load(&pp_msaa_store_bytes));
+  pthread_mutex_lock(&pp_lock);
+  for (int i = 0; i < PP_SIGS; i++)
+    if (pp_sig[i].count)
+      fprintf(cs_file, "%llu,%d,_sig %s,9,%llu,0,%llu\n", (unsigned long long)t, 230 + i, pp_sig[i].name,
+              (unsigned long long)pp_sig[i].count, (unsigned long long)pp_sig[i].bytes);
+  pthread_mutex_unlock(&pp_lock);
   fflush(cs_file);
   pthread_mutex_unlock(&cs_lock);
 }
@@ -269,6 +290,87 @@ callstats_add(uint16_t call, int sync, uint64_t ns) {
   atomic_fetch_add_explicit(&cs_count[call], 1, memory_order_relaxed);
   if (sync) atomic_fetch_add_explicit(&cs_sync[call], 1, memory_order_relaxed);
   atomic_fetch_add_explicit(&cs_ns[call], ns, memory_order_relaxed);
+}
+
+/* Render-pass profile (with the call statistics only, rows 220-239): GPU time of every committed command
+ * buffer, and per render pass the attachments' estimated memory traffic (load / store / MSAA resolve bytes from
+ * the attachment sizes and actions) plus the most expensive pass signatures. Shows what a frame's passes cost
+ * on a tile GPU (stored MSAA attachments, redundant loads) without a frame capture of the game. */
+
+static uint64_t
+pp_tex_bytes(id<MTLTexture> t) {
+  if (!t) return 0;
+  NSUInteger bpp;
+  switch (t.pixelFormat) {
+  case MTLPixelFormatRGBA16Float: case MTLPixelFormatRG32Float: case MTLPixelFormatRGBA16Unorm: bpp = 8; break;
+  case MTLPixelFormatRGBA32Float: bpp = 16; break;
+  case MTLPixelFormatR8Unorm: bpp = 1; break;
+  case MTLPixelFormatRG8Unorm: case MTLPixelFormatR16Float: case MTLPixelFormatDepth16Unorm: bpp = 2; break;
+  case MTLPixelFormatDepth32Float_Stencil8: bpp = 5; break;
+  default: bpp = 4; break;
+  }
+  return (uint64_t)t.width * t.height * bpp * (t.sampleCount ? t.sampleCount : 1);
+}
+
+static void
+pp_pass(const struct WMTRenderPassInfo *info) {
+  uint64_t load = 0, store = 0, resolve = 0, msaa_store = 0;
+  int msaa = 0;
+  char sig[96];
+  int n = 0;
+  for (int i = 0; i < 8; i++) {
+    id<MTLTexture> t = (id<MTLTexture>)info->colors[i].texture;
+    if (!t) continue;
+    uint64_t b = pp_tex_bytes(t);
+    int st = info->colors[i].store_action;
+    if (info->colors[i].load_action == WMTLoadActionLoad) load += b;
+    if (st == WMTStoreActionStore || st == WMTStoreActionStoreAndMultisampleResolve) store += b;
+    if (t.sampleCount > 1) {
+      msaa = 1;
+      if (st == WMTStoreActionStore || st == WMTStoreActionStoreAndMultisampleResolve) msaa_store += b;
+    }
+    if (info->colors[i].resolve_texture) resolve += pp_tex_bytes((id<MTLTexture>)info->colors[i].resolve_texture);
+    if (n < 70)
+      n += snprintf(sig + n, sizeof sig - n, "c%lux%lu/f%lu/s%lu/L%d/S%d ", (unsigned long)t.width, (unsigned long)t.height,
+                    (unsigned long)t.pixelFormat, (unsigned long)t.sampleCount, info->colors[i].load_action, st);
+  }
+  id<MTLTexture> d = (id<MTLTexture>)info->depth.texture;
+  if (d) {
+    uint64_t b = pp_tex_bytes(d);
+    if (info->depth.load_action == WMTLoadActionLoad) load += b;
+    if (info->depth.store_action == WMTStoreActionStore) store += b;
+    if (d.sampleCount > 1 && info->depth.store_action == WMTStoreActionStore) msaa_store += b;
+    if (n < 80) n += snprintf(sig + n, sizeof sig - n, "d/s%lu/L%d/S%d", (unsigned long)d.sampleCount, info->depth.load_action,
+                              info->depth.store_action);
+  }
+  if (!n) snprintf(sig, sizeof sig, "no attachments %ux%u", info->render_target_width, info->render_target_height);
+  atomic_fetch_add_explicit(&pp_passes, 1, memory_order_relaxed);
+  atomic_fetch_add_explicit(&pp_load_bytes, load, memory_order_relaxed);
+  atomic_fetch_add_explicit(&pp_store_bytes, store, memory_order_relaxed);
+  atomic_fetch_add_explicit(&pp_resolve_bytes, resolve, memory_order_relaxed);
+  atomic_fetch_add_explicit(&pp_msaa_store_bytes, msaa_store, memory_order_relaxed);
+  if (msaa) atomic_fetch_add_explicit(&pp_msaa_passes, 1, memory_order_relaxed);
+  pthread_mutex_lock(&pp_lock);
+  int slot = -1;
+  for (int i = 0; i < PP_SIGS; i++) {
+    if (!pp_sig[i].count) { if (slot < 0) slot = i; continue; }
+    if (!strcmp(pp_sig[i].name, sig)) { slot = i; break; }
+  }
+  if (slot >= 0) {
+    if (!pp_sig[slot].count) snprintf(pp_sig[slot].name, sizeof pp_sig[slot].name, "%s", sig);
+    pp_sig[slot].count++;
+    pp_sig[slot].bytes += load + store + resolve;
+  }
+  pthread_mutex_unlock(&pp_lock);
+}
+
+static void
+pp_commit(id<MTLCommandBuffer> cb) {
+  [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+    double g = done.GPUEndTime - done.GPUStartTime;
+    if (g > 0 && g < 10) atomic_fetch_add_explicit(&pp_cb_gpu_ns, (uint64_t)(g * 1e9), memory_order_relaxed);
+    atomic_fetch_add_explicit(&pp_cb_count, 1, memory_order_relaxed);
+  }];
 }
 
 /* The launcher's layer policy (VMView: game layer visibility, Metal HUD placement) acts on a layer's Metal
@@ -625,6 +727,10 @@ host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr
   }
   impl_fn f = (impl_fn)wmtr_impl_funcs[call];
   if (!f) return STATUS_UNSUCCESSFUL;
+  if (__builtin_expect(cs_state == 1, 0)) { /* render-pass profile (rows 220-239) */
+    if (call == 32) pp_pass((const struct WMTRenderPassInfo *)((struct unixcall_generic_obj_uint64_obj_ret *)params)->arg);
+    else if (call == 12) pp_commit((id<MTLCommandBuffer>)((struct unixcall_generic_obj_noret *)params)->handle);
+  }
   if (call == 47 || call == 48) { /* presentDrawable (both param structs start with buffer, drawable) */
     id<MTLCommandBuffer> cb = (id<MTLCommandBuffer>)((struct unixcall_generic_obj_obj_noret *)params)->handle;
     if (frames_out()) frame_record_on_completion(cb); /* record when the frame is done */
