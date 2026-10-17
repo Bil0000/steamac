@@ -13,7 +13,10 @@
 #include "wivrn_sockets.h"
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <chrono>
+#include <deque>
+#include <random>
 #include <cmath>
 #include <magic_enum.hpp>
 #include <map>
@@ -58,18 +61,71 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 
 		auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(o.timeout_ms);
 		bool from_control = false; // the last packet receive() returned came over TCP
+		// Network shaping of video shards (FakeHeadsetOptions::Network): queued with their release time
+		using clk = std::chrono::steady_clock;
+		std::deque<std::pair<clk::time_point, th::packets>> delayed;
+		clk::time_point last_release{}, rate_free{}, net_start = clk::now();
+		std::mt19937 rng(12345);
+		std::uniform_real_distribution<float> uni(0, 1);
+		const bool shaping = o.net.delay_ms > 0 or o.net.jitter_ms > 0 or o.net.loss_pct > 0 or o.net.mbps > 0 or o.net.burst_ms > 0;
+		// a stream packet through the shaper: false = dropped (or queued for later)
+		auto shape = [&](th::packets && p) -> bool {
+			auto * shard = std::get_if<th::video_stream_data_shard>(&p);
+			if (not shaping or not shard)
+				return true;
+			auto now = clk::now();
+			double since = std::chrono::duration<double>(now - net_start).count();
+			if (o.net.burst_ms > 0 and o.net.burst_every_s > 0 and
+			    std::fmod(since, o.net.burst_every_s) < o.net.burst_ms / 1000.0)
+			{
+				res.net_dropped++;
+				return false;
+			}
+			if (uni(rng) * 100 < o.net.loss_pct)
+			{
+				res.net_dropped++;
+				return false;
+			}
+			auto at = now + std::chrono::microseconds(int64_t((o.net.delay_ms + o.net.jitter_ms * uni(rng)) * 1000));
+			if (o.net.mbps > 0)
+			{
+				// serialisation behind the rate cap: each shard occupies the link for its bytes / rate
+				auto start = std::max(rate_free, now);
+				rate_free = start + std::chrono::nanoseconds(int64_t((shard->payload.size() + 60) * 8 * 1000 / o.net.mbps));
+				at = std::max(at, rate_free);
+			}
+			at = std::max(at, last_release); // a Wi-Fi link does not reorder
+			last_release = at;
+			delayed.emplace_back(at, std::move(p));
+			return false;
+		};
 		auto receive = [&](stream_socket * stream) -> th::packets {
 			while (std::chrono::steady_clock::now() < deadline)
 			{
+				if (not delayed.empty() and delayed.front().first <= clk::now())
+				{
+					from_control = false;
+					auto p = std::move(delayed.front().second);
+					delayed.pop_front();
+					return p;
+				}
 				from_control = true;
 				if (auto p = control.receive_pending())
 					return std::move(*p);
 				from_control = false;
 				if (stream)
 					if (auto p = stream->receive_pending())
-						return std::move(*p);
+					{
+						if (shape(std::move(*p)))
+							return std::move(*p);
+						continue;
+					}
 				pollfd fds[2] = {{.fd = control.get_fd(), .events = POLLIN}, {.fd = stream ? stream->get_fd() : -1, .events = POLLIN}};
-				if (::poll(fds, 2, 50) <= 0)
+				int wait_ms = 50;
+				if (not delayed.empty())
+					wait_ms = int(std::clamp<int64_t>(
+					        std::chrono::duration_cast<std::chrono::milliseconds>(delayed.front().first - clk::now()).count(), 0, 50));
+				if (::poll(fds, 2, wait_ms) <= 0)
 					continue;
 				if (fds[0].revents & POLLIN)
 				{
@@ -91,7 +147,11 @@ FakeHeadsetResult run_fake_headset(const FakeHeadsetOptions & o)
 					throw std::runtime_error("server closed the connection");
 				if (stream and (fds[1].revents & POLLIN))
 					if (auto p = stream->receive())
-						return std::move(*p);
+					{
+						if (shape(std::move(*p)))
+							return std::move(*p);
+						continue;
+					}
 			}
 			throw std::runtime_error("timeout");
 		};

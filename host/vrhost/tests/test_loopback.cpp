@@ -202,6 +202,17 @@ int main()
 {
 	signal(SIGPIPE, SIG_IGN);
 	{
+		// Wi-Fi-like link (fake_headset Network): 8 ms + up to 10 ms jitter, 1 % loss, 100 Mbit/s, a 50 ms loss burst
+		// every second: every loss is answered with an IDR and decoding carries on.
+		Server srv({.encryption = WivrnConfig::Encryption::disabled});
+		auto r = run_fake_headset({.port = srv.session.port(), .frames = 150,
+		                           .net = {.delay_ms = 8, .jitter_ms = 10, .loss_pct = 1, .mbps = 100, .burst_every_s = 1, .burst_ms = 50}});
+		print("wifi-like", r);
+		CHECK(r.error.empty() and r.decoded[0] >= 150 and r.decoded[1] >= 150);
+		CHECK(r.net_dropped > 0 and r.idr[0] > 1); // losses happened and were recovered by IDRs
+		srv.wait_disconnect();
+	}
+	{
 		// 1. encryption disabled, a lost frame on stream 0
 		Server srv({.encryption = WivrnConfig::Encryption::disabled});
 		int port = srv.session.port();
