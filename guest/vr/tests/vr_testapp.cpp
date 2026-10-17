@@ -268,7 +268,10 @@ int main(int argc, char **argv) {
       proj_always &= r - l > 1;
       vr::VREvent_t ev;
       while (sys->PollNextEvent(&ev, sizeof(ev))) {
-        if (ev.eventType == vr::VREvent_TrackedDeviceDeactivated) CHECK(ev.trackedDeviceIndex != 0, "HMD deactivated"), deact++;
+        if (ev.eventType == vr::VREvent_TrackedDeviceDeactivated) {
+          CHECK(ev.trackedDeviceIndex != 0, "HMD deactivated");
+          deact++;
+        }
         if (ev.eventType == vr::VREvent_TrackedDeviceActivated && ev.trackedDeviceIndex != 0) act++;
       }
     }
