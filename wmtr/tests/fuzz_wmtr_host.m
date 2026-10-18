@@ -1,13 +1,14 @@
 /* libFuzzer target: the host executor's request decoding (wmtr_host.m execute/reply: record framing, relocations,
  * WMTR_REF_EXTRA/ARENA references, output ranges, reply slot, control requests incl. WMTR_CTL_VR_QUERY) with a
  * request the guest wrote itself. The implementations are stubs that read and write their whole params struct;
- * calls that dereference guest handles by design (raw Metal object pointers, see docs/wmtr.md) are mapped to a
- * plain call, so a report here is a decoding bug, not the handle model.
+ * calls that dereference guest handles by design (raw Metal object pointers: the trust boundary of
+ * fxgl/steamac#14) are mapped to a plain call, so a report here is a decoding bug, not the handle model.
  * Build (Homebrew LLVM; Apple clang has no libFuzzer), from wmtr/:
  *   clang -g -O1 -fsanitize=fuzzer,address,undefined -ObjC -Iinclude -Isrc -I../host/vrhost/include \
  *     -I../guest/vr/include -I$DXMT/src/winemetal -I$DXMT/src/airconv tests/fuzz_wmtr_host.m src/wmtr_host.m \
- *     src/wmtr_vr.m -framework Foundation -framework Metal -framework Cocoa -framework QuartzCore \
+ *     [src/wmtr_vr.m] -framework Foundation -framework Metal -framework Cocoa -framework QuartzCore \
  *     -framework IOSurface -o fuzz_wmtr_host
+ * (Homebrew LLVM 23 with lld: add -fno-objc-msgsend-class-selector-stubs.)
  * Run with ASAN_OPTIONS=allow_user_segv_handler=0 (the executor's fault containment would hide ASan's reports). */
 #import <Foundation/Foundation.h>
 #include <sched.h>
@@ -21,6 +22,12 @@
 #include "wmtr_host.h"
 
 typedef int NTSTATUS;
+#ifndef WMTR_NCALLS
+#define WMTR_NCALLS 146 /* DXMT's table only (no WMTVRSubmit) */
+#endif
+#ifndef WMTR_F_CLIENT_HANDLE
+#define WMTR_F_CLIENT_HANDLE 0
+#endif
 
 /* stubs: read every byte of the call's params struct, then write all of it (results; object results 0, as the
  * host keeps returned objects alive) */
@@ -82,7 +89,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   memcpy(&in, data, sizeof in);
   data += sizeof in; size -= sizeof in;
   struct wmtr_req_ext hdr = {0};
-  hdr.h.flags = WMTR_F_SYNC | (in.flags & WMTR_F_CONTROL);
+  hdr.h.flags = WMTR_F_SYNC | (in.flags & (WMTR_F_CONTROL | WMTR_F_CLIENT_HANDLE));
   hdr.h.call = hdr.h.flags & WMTR_F_CONTROL ? in.call % 6 : in.call % (WMTR_NCALLS + 2);
   if (!(hdr.h.flags & WMTR_F_CONTROL) && hdr.h.call < WMTR_NCALLS && handle_call(hdr.h.call)) hdr.h.call = 39;
   hdr.h.slot = 0;
