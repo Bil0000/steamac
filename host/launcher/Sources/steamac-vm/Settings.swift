@@ -434,7 +434,7 @@ final class LauncherSettings: ObservableObject {
     static let vrRenderScaleRange = 0.5...1.5
     static let vrKeyframeIntervals = [0.0, 1, 2, 5]
     enum VRUpscaler: String, CaseIterable, Identifiable {
-        case metalfx, bilinear
+        case metalfx, bilinear, off
         var id: String { rawValue }
     }
     /// Settings > VR quality presets: machine-side values only (the headset keeps its own refresh rate and size).

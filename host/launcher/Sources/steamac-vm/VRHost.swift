@@ -275,6 +275,8 @@ enum VRSelfTest {
         check(q == ["--render-scale", "0.60", "--upscaler", "bilinear", "--sharpness", "0.25", "--force-srgb",
                     "--keyframe-interval", "2", "--tcp-only", "--app", "620=Portal 2"],
               "quality/codec/stream arguments: \(q)")
+        enc.vrUpscaler = .off
+        check(VRHost.hostArgs(enc, controlSocket: "/s").contains("off"), "--upscaler off passed to the host")
         let presets = LauncherSettings.VRPreset.allCases
         check(presets.allSatisfy { $0.renderScale == 1 } && presets.map(\.bitrateMbps) == [30, 40, 50, 80] && LauncherSettings.VRPreset.high.bitrateMbps == LauncherSettings.vrDefaultBitrateMbps
               && presets.allSatisfy { LauncherSettings.vrRenderScaleRange.contains($0.renderScale)

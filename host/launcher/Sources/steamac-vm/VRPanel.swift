@@ -440,9 +440,10 @@ struct VRTab: View {
                 Picker(selection: $settings.vrUpscaler) {
                     Text(verbatim: "MetalFX").tag(LauncherSettings.VRUpscaler.metalfx)
                     Text("Bilinear").tag(LauncherSettings.VRUpscaler.bilinear)
+                    Text("Off").tag(LauncherSettings.VRUpscaler.off)
                 } label: {
                     Label2(title: "Upscaler",
-                           detail: String(localized: "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper but competes with the game for the Mac's GPU (12-15 ms per frame while VRChat ran, against 4-5 ms for bilinear). Only for games limited by GPU pixels; VRChat was not faster at a lower render resolution. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over."),
+                           detail: String(localized: "Used when the render resolution is below 100 percent. Off builds the stream from the smaller game image directly and adds no GPU work. Bilinear and MetalFX (spatial) first scale the image up to the headset's render size; MetalFX keeps edges sharper but competes with the game for the Mac's GPU. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over."),
                            now: false, key: .vrUpscaler)
                 }
                 .disabled(settings.vrRenderScale >= 1)

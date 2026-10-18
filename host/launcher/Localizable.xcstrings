@@ -7687,18 +7687,18 @@
         }
       }
     },
-    "Used when the render resolution is below 100 percent. MetalFX (spatial) keeps edges sharper but competes with the game for the Mac's GPU (12-15 ms per frame while VRChat ran, against 4-5 ms for bilinear). Only for games limited by GPU pixels; VRChat was not faster at a lower render resolution. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over." : {
+    "Used when the render resolution is below 100 percent. Off builds the stream from the smaller game image directly and adds no GPU work. Bilinear and MetalFX (spatial) first scale the image up to the headset's render size; MetalFX keeps edges sharper but competes with the game for the Mac's GPU. Temporal MetalFX needs motion vectors and depth, which OpenVR games do not hand over." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Используется при разрешении рендеринга ниже 100 процентов. MetalFX (пространственный) сохраняет края чётче, но конкурирует с игрой за GPU Mac (12–15 мс на кадр при работе VRChat против 4–5 мс у билинейного). Только для игр, упирающихся в пиксели GPU; VRChat при меньшем разрешении рендеринга быстрее не стал. Временному MetalFX нужны векторы движения и глубина, которые игры OpenVR не передают."
+            "value" : "Используется при разрешении рендеринга ниже 100 процентов. «Выкл.» собирает поток прямо из уменьшенного изображения игры и не добавляет работы GPU. Билинейный и MetalFX (пространственный) сначала увеличивают изображение до разрешения рендеринга гарнитуры; MetalFX сохраняет края чётче, но конкурирует с игрой за GPU Mac. Временному MetalFX нужны векторы движения и глубина, которые игры OpenVR не передают."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在渲染分辨率低于 100% 时使用。MetalFX（空间）边缘更锐利，但会与游戏争用 Mac GPU（VRChat 运行时每帧 12–15 毫秒，双线性为 4–5 毫秒）。仅适用于受 GPU 像素限制的游戏；降低渲染分辨率后 VRChat 并未变快。时间性 MetalFX 需要运动矢量和深度，而 OpenVR 游戏不提供这些。"
+            "value" : "在渲染分辨率低于 100% 时使用。“关闭”直接用较小的游戏图像生成串流，不增加 GPU 工作。双线性和 MetalFX（空间）会先把图像放大到头显的渲染分辨率；MetalFX 边缘更锐利，但会与游戏争用 Mac GPU。时间性 MetalFX 需要运动矢量和深度，而 OpenVR 游戏不提供这些。"
           }
         }
       }
