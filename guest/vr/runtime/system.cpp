@@ -155,7 +155,9 @@ class System : public StubIVRSystem {
     if (i >= kTrackerBase) {
       // a table device keeps its class while present (SteamVR keeps an index's class for the session)
       svr_trk_device d;
-      return Runtime::get().tracker(i, &d) ? (ETrackedDeviceClass)d.device_class : TrackedDeviceClass_Invalid;
+      if (!Runtime::get().tracker(i, &d)) return TrackedDeviceClass_Invalid;
+      Runtime::get().pose_stats().tracker_class++;  // shows in the 5 s pose line whether the title looks at trackers
+      return (ETrackedDeviceClass)d.device_class;
     }
     return i == kHmd ? TrackedDeviceClass_HMD : (i == kLeft || i == kRight) ? TrackedDeviceClass_Controller
                                                                             : TrackedDeviceClass_Invalid;
@@ -286,6 +288,7 @@ class System : public StubIVRSystem {
     if (i >= kTrackerBase) {
       svr_trk_device d;
       if (!Runtime::get().tracker(i, &d)) return prop_result(e, TrackedProp_InvalidDevice, 0u);
+      Runtime::get().pose_stats().tracker_props++;
       return tracker_string(d, p, buf, size, e);
     }
     if (i >= kDeviceCount) return prop_result(e, TrackedProp_InvalidDevice, 0u);

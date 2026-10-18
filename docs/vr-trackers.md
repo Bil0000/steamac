@@ -100,7 +100,8 @@ Helpers in C++: `guest/vr/runtime/trackers.{h,cpp}`. They need only the C librar
    has its own origin, transform into the space of the mirror's head pose (a one-time calibration on your side).
 4. On exit, `release(slot)`.
 5. Check with `svr-tracker-feed --list`, which shows the mirror, the slots, their sequence numbers and poses. In the
-   game, the runtime logs `steamac-vr: tracker <index> connected: serial ... role ...` (`STEAMAC_VR_LOG=1`).
+   game, the runtime logs `steamac-vr: tracker <index> connected: serial ... role ...` (`STEAMAC_VR_LOG=1`), and
+   its 5-second pose line counts how often the title asked for a tracker's class and properties.
 
 `svr-tracker-feed --count 1..8` itself is a usable test source. It places waist, feet, chest, knees and elbows around
 the headset in a standing layout, which is enough to see trackers in a title's calibration screen.
@@ -196,6 +197,9 @@ Steps 3 and 4 are manual for now. A launcher entry is future work, see Limits.
 3. `svr-driverhost` with `tests/sample_driver` (a tracker driver written only against `openvr_driver.h`, with a
    non-identity world-from-driver transform, a role from its `trackers` setting, and a refused HMD).
 4. A background app without a host link gets the headset pose and the feed's trackers through the mirror.
+
+The Windows build (`make driverhost-win`) was checked under Wine 5.0 (Ubuntu 20.04 x86-64) with the sample driver
+built as a DLL. The devices it published were read by the native `svr-tracker-feed --list` from the same table file.
 
 `tests/unit_tests.cpp` covers roles, slot claim, takeover and release, a full table, seqlock reads, stale and
 first-sight rules, the mirror, and refusal of an incompatible file.

@@ -68,7 +68,8 @@ class Runtime {
   // whether e.g. the head pose the app reads is valid and moving). Relaxed counters: no cost beyond an increment.
   struct PoseStats {
     std::atomic<uint32_t> wait{0}, wait_fail{0}, last_poses{0}, last_pose_index{0}, abs_pose{0}, abs_seated{0},
-        pose_action{0}, pose_action_inactive{0}, connected_query{0}, connected_false_hmd{0};
+        pose_action{0}, pose_action_inactive{0}, connected_query{0}, connected_false_hmd{0}, tracker_class{0},
+        tracker_props{0};
   };
   PoseStats &pose_stats() { return pose_stats_; }
   void note_render_head(const vr::TrackedDevicePose_t &p);

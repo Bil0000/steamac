@@ -298,10 +298,12 @@ void Runtime::note_render_head(const vr::TrackedDevicePose_t &p) {
   PoseStats &s = pose_stats_;
   SVR_INFO("poses 5s: WaitGetPoses %u (failed %u), GetLastPoses %u, GetLastPoseForTrackedDeviceIndex %u, "
            "GetDeviceToAbsoluteTrackingPose %u (seated %u), pose actions %u (inactive %u), IsTrackedDeviceConnected %u "
-           "(HMD false %u); render head invalid %u, forward x %.2f..%.2f y %.2f..%.2f, height %.2f..%.2f m",
+           "(HMD false %u); tracker class queries %u, property queries %u; render head invalid %u, forward x %.2f..%.2f "
+           "y %.2f..%.2f, height %.2f..%.2f m",
            s.wait.exchange(0), s.wait_fail.exchange(0), s.last_poses.exchange(0), s.last_pose_index.exchange(0),
            s.abs_pose.exchange(0), s.abs_seated.exchange(0), s.pose_action.exchange(0), s.pose_action_inactive.exchange(0),
-           s.connected_query.exchange(0), s.connected_false_hmd.exchange(0), stats_head_invalid_, stats_head_min_[0],
+           s.connected_query.exchange(0), s.connected_false_hmd.exchange(0), s.tracker_class.exchange(0),
+           s.tracker_props.exchange(0), stats_head_invalid_, stats_head_min_[0],
            stats_head_max_[0], stats_head_min_[1], stats_head_max_[1], stats_head_min_[2], stats_head_max_[2]);
   stats_head_invalid_ = 0;
   for (int i = 0; i < 3; i++) stats_head_min_[i] = 1e9f, stats_head_max_[i] = -1e9f;
