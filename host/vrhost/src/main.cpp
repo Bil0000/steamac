@@ -61,7 +61,8 @@ static void usage()
 	        "  --pin NNNNNN        pairing PIN (default: random, printed and readable with --show-pin)\n"
 	        "  --pair-on-request   an unpaired headset opens pairing (fresh PIN) instead of being refused\n"
 	        "  --render-scale F    game render size = headset render size x F (0.5-2; below 1 upscaled on the Mac)\n"
-	        "  --upscaler metalfx|bilinear  upscaler for --render-scale below 1 (default metalfx)\n"
+	        "  --upscaler metalfx|bilinear|off  upscaler for --render-scale below 1 (default metalfx; off = none, the\n"
+	        "                      stream is made from the smaller game image directly)\n"
 	        "  --sharpness F       sharpening in the compositor, 0-1 (default 0)\n"
 	        "  --force-srgb        decode 8-bit eye images as sRGB even when the format is not marked sRGB\n"
 	        "  --keyframe-interval S  an IDR at least every S seconds (default: only when the headset asks)\n"
@@ -640,7 +641,12 @@ int main(int argc, char ** argv)
 			}
 		}
 		else if (a == "--upscaler")
-			g_quality.upscaler = next() == "bilinear" ? CompositorOptions::Upscaler::bilinear : CompositorOptions::Upscaler::metalfx;
+		{
+			std::string u = next();
+			g_quality.upscaler = u == "bilinear" ? CompositorOptions::Upscaler::bilinear
+			                     : u == "off"    ? CompositorOptions::Upscaler::off
+			                                     : CompositorOptions::Upscaler::metalfx;
+		}
 		else if (a == "--sharpness")
 			g_quality.sharpness = std::clamp(std::stof(next()), 0.0f, 1.0f);
 		else if (a == "--force-srgb")

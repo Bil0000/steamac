@@ -233,7 +233,8 @@ bool EyeCompositor::compose(const EyeSource src_in[2], const EyeFov fov[2], cons
 			in[e] = [p->dev newTextureWithDescriptor:d iosurface:src[e].surface plane:0];
 			ok = in[e] != nil;
 			// render scale below the headset's size: crop the eye rect, upscale it, foveate the upscaled image
-			if (ok && p->opt.upscale_w > src[e].w && p->opt.upscale_h > src[e].h)
+			if (ok && p->opt.upscaler != CompositorOptions::Upscaler::off && p->opt.upscale_w > src[e].w &&
+			    p->opt.upscale_h > src[e].h)
 			{
 				ok = p->prepare_upscale(fmt, src[e].w, src[e].h);
 				if (!ok)

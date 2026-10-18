@@ -144,8 +144,10 @@ int64_t run(const char * label, bool wide, bool flip, const CompositorOptions * 
 		CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &b);
 	FoveationParams params[2];
 	REQUIRE(comp.compose(src, fov, eye_x, out, params));
+	const bool off = upscale && opt.upscaler == CompositorOptions::Upscaler::off;
 	if (upscale)
-		CHECK(std::string(comp.last_upscaler()) == (opt.upscaler == CompositorOptions::Upscaler::metalfx ? "metalfx" : "bilinear"));
+		CHECK(std::string(comp.last_upscaler()) ==
+		      (off ? "" : opt.upscaler == CompositorOptions::Upscaler::metalfx ? "metalfx" : "bilinear"));
 	else
 		CHECK(std::string(comp.last_upscaler()).empty());
 	// GPU cost: median of 20 more frames (the first one includes pipeline/scaler setup)
@@ -162,6 +164,13 @@ int64_t run(const char * label, bool wide, bool flip, const CompositorOptions * 
 		auto img = test::defoveate(out[e], params[e].x, params[e].y);
 		printf("[%s] eye %d: params x %zu y %zu, defoveated %ux%u\n", label, e, params[e].x.size(), params[e].y.size(), img.w,
 		       img.h);
+		if (off)
+		{
+			// no upscale pass: the stream carries the smaller game image itself (identity foveation when it is not
+			// larger than the stream); the client still maps it over the same FOV
+			CHECK(img.w == rw and img.h == rh);
+			continue;
+		}
 		CHECK(img.w == eye_w and img.h == eye_h); // the client's image has the game's size, so the FOV maps 1:1
 		char what[64];
 		// rows / columns between grid lines: centre, and near the edges (strongest compression)
@@ -293,12 +302,15 @@ int main()
 	{
 		check_eye_x_stable();
 		int64_t base = run("separate", false, false);
-		CompositorOptions fx, bl;
+		CompositorOptions fx, bl, off;
 		bl.upscaler = CompositorOptions::Upscaler::bilinear;
+		off.upscaler = CompositorOptions::Upscaler::off;
 		int64_t t_fx = run("scale 0.5 metalfx", false, false, &fx);
 		int64_t t_bl = run("scale 0.5 bilinear", true, true, &bl);
-		printf("upscale cost over the plain compose: metalfx +%.3f ms, bilinear +%.3f ms (both eyes)\n",
-		       (t_fx - base) / 1e6, (t_bl - base) / 1e6);
+		int64_t t_off = run("scale 0.5 off", false, false, &off);
+		printf("upscale cost over the plain compose: metalfx +%.3f ms, bilinear +%.3f ms, off %+.3f ms (both eyes)\n",
+		       (t_fx - base) / 1e6, (t_bl - base) / 1e6, (t_off - base) / 1e6);
+		CHECK(t_off <= t_bl); // off skips the upscale pass: never dearer than the cheapest scaler
 		check_sharpness_and_srgb();
 		run("double-wide", true, false);
 		run("bottom-up", false, true);

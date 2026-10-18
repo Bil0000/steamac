@@ -29,6 +29,7 @@ struct CompositorOptions
 	{
 		metalfx,  // MetalFX spatial scaler (MTLFXSpatialScaler)
 		bilinear, // MPSImageBilinearScale
+		off,      // no upscale pass: the foveation pass samples the smaller game image directly (cheapest)
 	} upscaler = Upscaler::metalfx;
 	uint32_t upscale_w = 0, upscale_h = 0; // 0 = never upscale (eyes larger than this are not touched)
 	float sharpness = 0;                   // 0..1, unsharp mask strength in the foveation pass
