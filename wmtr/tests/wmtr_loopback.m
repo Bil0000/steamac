@@ -415,10 +415,14 @@ static void test_vr(id<MTLDevice> dev) {
  * VRL_HELLO) shared by every context: a second context (the game after Proton's steam.exe did VR_Init) uses the
  * same link instead of being refused; the last context closes its dup, leaving the launcher's end open. */
 static void *pages(uint64_t n);
+/* an idle context: its own ring blob (ctx), nothing else */
+static void *idle_blob_ptr(void *c, uint32_t b, uint64_t *s) { if (b) return NULL; *s = WMTR_RING_BLOB_BYTES; return c; }
+static void t_wake(void *c, uint32_t s);
+static const struct wmtr_host_ops idle_ops = {idle_blob_ptr, t_wake, NULL, NULL, NULL};
 static struct wmtr_host *idle_host(void) {
-  struct wmtr_ring *R = pages(1 << 20);
+  struct wmtr_ring *R = pages(WMTR_RING_BLOB_BYTES);
   R->magic = WMTR_RING_MAGIC; R->version = WMTR_VERSION;
-  return wmtr_host_create(R, &host_ops, NULL);
+  return wmtr_host_create(R, &idle_ops, R);
 }
 static void test_vr_fd(void) {
   char name[64]; snprintf(name, sizeof name, "com.steamac.vrhost.fdtest.%d", (int)getpid());
@@ -560,6 +564,18 @@ raw_request(uint16_t call, uint32_t params_size, uint32_t payload_size, const ui
  * host memory outside the request (32-bit wrap-around, or sizes larger than the reply slot / the arena blob). */
 static void
 test_hostile_requests(id<MTLDevice> dev) {
+  { /* a ring blob smaller than the ring layout: the executor would read and write past it */
+    uint64_t sz = WMTR_RING_BLOB_BYTES;
+    void *small = pages(sz);
+    ((struct wmtr_ring *)small)->magic = WMTR_RING_MAGIC; ((struct wmtr_ring *)small)->version = WMTR_VERSION;
+    void *save_b = blob_base[0]; uint64_t save_s = blob_size[0];
+    blob_base[0] = small; blob_size[0] = WMTR_PAGE;
+    struct wmtr_host *hs = wmtr_host_create(small, &host_ops, NULL);
+    CHECK(hs == NULL, "executor started on a %u-byte ring blob", WMTR_PAGE);
+    if (hs) wmtr_host_destroy(hs);
+    blob_base[0] = save_b; blob_size[0] = save_s;
+    free(small);
+  }
   const uint32_t inval = 0xC000000D;
   struct wmtr_slot *slots = (struct wmtr_slot *)((uint8_t *)blob_base[0] + WMTR_SLOTS_OFFSET);
   uint64_t payload[64] = {0};
