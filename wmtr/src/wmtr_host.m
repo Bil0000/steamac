@@ -154,9 +154,12 @@ static const char *const cs_vr_stage[WMTR_VR_STAGES] = {"_vr_submit_to_encoded",
 /* render-pass profile counters (pp_pass / pp_commit below) */
 static _Atomic uint64_t pp_cb_count, pp_cb_gpu_ns, pp_passes, pp_load_bytes, pp_store_bytes, pp_resolve_bytes,
     pp_msaa_store_bytes, pp_msaa_passes;
-#define PP_SIGS 64
+#define PP_SIGS 512
 static struct pp_sig { char name[96]; uint64_t count, bytes; } pp_sig[PP_SIGS];
 static pthread_mutex_t pp_lock = PTHREAD_MUTEX_INITIALIZER;
+/* the order of the last frame's encoders (row 250, one line): R<sig index> render pass, C compute, B blit, | present */
+static char pp_seq[2][4096];
+static int pp_seq_len, pp_seq_done; /* pp_seq[0] being filled, pp_seq[1] the last complete frame */
 static FILE *cs_file;
 static pthread_mutex_t cs_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -197,6 +200,10 @@ callstats_dump(void) {
     if (pp_sig[i].count)
       fprintf(cs_file, "%llu,%d,_sig %s,9,%llu,0,%llu\n", (unsigned long long)t, 230 + i, pp_sig[i].name,
               (unsigned long long)pp_sig[i].count, (unsigned long long)pp_sig[i].bytes);
+  if (pp_seq_done) {
+    for (char *c = pp_seq[1]; *c; c++) if (*c == ',') *c = ';';
+    fprintf(cs_file, "%llu,250,_seq %s,9,1,0,0\n", (unsigned long long)t, pp_seq[1]);
+  }
   pthread_mutex_unlock(&pp_lock);
   fflush(cs_file);
   pthread_mutex_unlock(&cs_lock);
@@ -356,11 +363,24 @@ pp_pass(const struct WMTRenderPassInfo *info) {
     if (!pp_sig[i].count) { if (slot < 0) slot = i; continue; }
     if (!strcmp(pp_sig[i].name, sig)) { slot = i; break; }
   }
+  if (pp_seq_len < (int)sizeof pp_seq[0] - 8) pp_seq_len += snprintf(pp_seq[0] + pp_seq_len, sizeof pp_seq[0] - pp_seq_len, "R%d ", slot);
   if (slot >= 0) {
     if (!pp_sig[slot].count) snprintf(pp_sig[slot].name, sizeof pp_sig[slot].name, "%s", sig);
     pp_sig[slot].count++;
     pp_sig[slot].bytes += load + store + resolve;
   }
+  pthread_mutex_unlock(&pp_lock);
+}
+
+static void
+pp_event(const char *e) {
+  pthread_mutex_lock(&pp_lock);
+  if (e[0] == '|') {
+    if (pp_seq_len) { memcpy(pp_seq[1], pp_seq[0], sizeof pp_seq[0]); pp_seq_done = 1; }
+    pp_seq_len = 0;
+    pp_seq[0][0] = 0;
+  } else if (pp_seq_len < (int)sizeof pp_seq[0] - 8)
+    pp_seq_len += snprintf(pp_seq[0] + pp_seq_len, sizeof pp_seq[0] - pp_seq_len, "%s ", e);
   pthread_mutex_unlock(&pp_lock);
 }
 
@@ -730,6 +750,9 @@ host_call(struct wmtr_host *h, uint16_t call, uint8_t *params, const struct wmtr
   if (__builtin_expect(cs_state == 1, 0)) { /* render-pass profile (rows 220-239) */
     if (call == 32) pp_pass((const struct WMTRenderPassInfo *)((struct unixcall_generic_obj_uint64_obj_ret *)params)->arg);
     else if (call == 12) pp_commit((id<MTLCommandBuffer>)((struct unixcall_generic_obj_noret *)params)->handle);
+    else if (call == 31) pp_event("C");
+    else if (call == 30 || call == 129) pp_event("B");
+    else if (call == 47 || call == 48 || call == 146) pp_event(call == 146 ? "V" : "|");
   }
   if (call == 47 || call == 48) { /* presentDrawable (both param structs start with buffer, drawable) */
     id<MTLCommandBuffer> cb = (id<MTLCommandBuffer>)((struct unixcall_generic_obj_obj_noret *)params)->handle;
