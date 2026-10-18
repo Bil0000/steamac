@@ -222,9 +222,24 @@ final class VRPanelModel: ObservableObject {
             let reply = VRControl.request(line, path: path)
             let error = reply.flatMap { try? JSONDecoder().decode(VRError.self, from: $0) }?.error
             await MainActor.run {
-                self.lastError = reply == nil ? String(localized: "The VR host did not answer.") : error
+                self.lastError = reply == nil ? String(localized: "The VR host did not answer.") : error.map(Self.hostError)
                 self.refresh()
             }
+        }
+    }
+
+    /// The host's control-socket errors (host/vrhost src/control/control_server.cpp) in the user's language;
+    /// an error this launcher does not know is shown as the host sent it.
+    nonisolated static func hostError(_ error: String) -> String {
+        switch error {
+        case "encryption is disabled: no pairing": String(localized: "Pairing needs encryption, which is off.")
+        case "bitrate: Mbit/s, 1 to 400": String(localized: "The bitrate must be 1 to 400 Mbit/s.")
+        case "refresh: rate in Hz": String(localized: "The refresh rate must be given in Hz.")
+        case "refresh: no headset connected, or it does not offer this rate":
+            String(localized: "No headset is connected, or it does not offer this refresh rate.")
+        case "unpair: no name": String(localized: "No headset name given to unpair.")
+        case "unknown request": String(localized: "The VR host did not understand the request (a different version?).")
+        default: error
         }
     }
 
@@ -636,6 +651,8 @@ enum VRPanelSelfTest {
         let lp = VRPanelModel.lines(p, available: true)
         check(lp.pin == "123456" && lp.stream == nil && lp.refresh == nil && lp.family == nil && lp.headset != nil,
               "pairing: PIN shown, no stream lines", &f)
+        check(VRPanelModel.hostError("unknown request") != "unknown request" && VRPanelModel.hostError("x y") == "x y",
+              "host errors: known ones replaced, others kept", &f)
         let off = VRPanelModel.lines(nil, available: true), absent = VRPanelModel.lines(nil, available: false)
         check(off.pin == nil && off.headset == nil && off.host != absent.host, "no host: running and not-built differ", &f)
         check(VRHeadsetFamily(name: "PICO 4 Ultra") == .questPico && VRHeadsetFamily(name: "Steam Frame") == .steamFrame
