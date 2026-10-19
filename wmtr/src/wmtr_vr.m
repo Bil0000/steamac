@@ -419,7 +419,7 @@ wmtr_vr_submit(struct wmtr_vr *vr, const struct WMTVRSubmitInfo *info) {
     rx[e] = in->x; ry[e] = in->y;
     rw[e] = in->w ? in->w : (uint32_t)src[e].width;
     rh[e] = in->w ? in->h : (uint32_t)src[e].height;
-    if (!rw[e] || !rh[e] || rx[e] + rw[e] > src[e].width || ry[e] + rh[e] > src[e].height) {
+    if (!rw[e] || !rh[e] || (uint64_t)rx[e] + rw[e] > src[e].width || (uint64_t)ry[e] + rh[e] > src[e].height) {
       atomic_fetch_add(&vr->errors, 1); vr_log(vr, "eye rect out of bounds"); return STATUS_INVALID_PARAMETER;
     }
     if (!vr->device) { vr->device = [src[e].device retain]; vr->queue = [vr->device newCommandQueue]; }

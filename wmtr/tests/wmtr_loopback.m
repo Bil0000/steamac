@@ -16,7 +16,7 @@
 #define WINEMETAL_API
 #include "winemetal_thunks.h"
 #include "airconv_thunks.h"
-#include "wmtr_proto.h"
+#include "wmtr_wire.h"
 #include "wmtr_transport.h"
 #include "wmtr_host.h"
 #include "wmtr_vr.h"
@@ -132,7 +132,7 @@ const void *wmtr_impl_funcs[WMTR_NCALLS] = {[32] = f_rce, [12] = f_commit, [1] =
 /* ---------------- loopback transport ---------------- */
 static struct wmtr_host *H;
 static void *blob_base[WMTR_MAX_BLOBS]; static uint64_t blob_size[WMTR_MAX_BLOBS];
-static void *t_blob_ptr(void *c, uint32_t b, uint64_t *s) { *s = blob_size[b]; return blob_base[b]; }
+static void *t_blob_ptr(void *c, uint32_t b, uint64_t *s) { if (b >= WMTR_MAX_BLOBS) return NULL; *s = blob_size[b]; return blob_base[b]; }
 static void t_wake(void *c, uint32_t s) {}
 static uint64_t next_view = 0x1000, released[8]; static int n_released;
 static uint64_t t_create_view(void *c, uint64_t hwnd, void *dev, uint64_t *layer) { *layer = 0x77; return next_view++; }
@@ -415,10 +415,14 @@ static void test_vr(id<MTLDevice> dev) {
  * VRL_HELLO) shared by every context: a second context (the game after Proton's steam.exe did VR_Init) uses the
  * same link instead of being refused; the last context closes its dup, leaving the launcher's end open. */
 static void *pages(uint64_t n);
+/* an idle context: its own ring blob (ctx), nothing else */
+static void *idle_blob_ptr(void *c, uint32_t b, uint64_t *s) { if (b) return NULL; *s = WMTR_RING_BLOB_BYTES; return c; }
+static void t_wake(void *c, uint32_t s);
+static const struct wmtr_host_ops idle_ops = {idle_blob_ptr, t_wake, NULL, NULL, NULL};
 static struct wmtr_host *idle_host(void) {
-  struct wmtr_ring *R = pages(1 << 20);
+  struct wmtr_ring *R = pages(WMTR_RING_BLOB_BYTES);
   R->magic = WMTR_RING_MAGIC; R->version = WMTR_VERSION;
-  return wmtr_host_create(R, &host_ops, NULL);
+  return wmtr_host_create(R, &idle_ops, R);
 }
 static void test_vr_fd(void) {
   char name[64]; snprintf(name, sizeof name, "com.steamac.vrhost.fdtest.%d", (int)getpid());
@@ -516,6 +520,104 @@ static void test_vr_cadence(void) {
   CHECK(bad == 0, "far-ahead timing: wake %lld ms ahead", (long long)((wake - now + P) / 1000000));
 #undef STEP
   printf("vr cadence: no headset / connect / disconnect / reconnect / far-ahead ok\n");
+}
+
+/* ---------------- hostile requests (a guest that writes the ring itself) ---------------- */
+/* One raw record built here, not by the client: header fields, relocs, outs and payload exactly as given. Sent
+ * on reply slot 60 (no client thread uses it); returns the reply status, *out_size the reply's size. */
+#define RAW_SLOT 60
+static uint32_t
+raw_request(uint16_t call, uint32_t params_size, uint32_t payload_size, const uint32_t *relocs, uint16_t n_reloc,
+            const struct wmtr_out *outs, uint16_t n_out, const void *payload, uint32_t payload_bytes, uint32_t *out_size) {
+  struct wmtr_ring *R = blob_base[0];
+  uint8_t *data = (uint8_t *)R + WMTR_RING_DATA_OFFSET;
+  struct wmtr_slot *slot = (struct wmtr_slot *)((uint8_t *)R + WMTR_SLOTS_OFFSET) + RAW_SLOT;
+  struct wmtr_req_ext hdr = {0};
+  hdr.h.call = call; hdr.h.flags = WMTR_F_SYNC; hdr.h.slot = RAW_SLOT; hdr.h.params_size = params_size;
+  hdr.h.seq = slot->done_seq + 1;
+  hdr.n_reloc = n_reloc; hdr.n_out = n_out; hdr.payload_size = payload_size;
+  uint32_t poff = wmtr_req_payload_offset(&hdr);
+  uint32_t total = WMTR_ALIGN8(poff + payload_bytes);
+  hdr.h.size = total;
+  while (R->tail != R->head) sched_yield(); /* the client's own requests are consumed */
+  uint64_t head = R->head;
+  uint32_t pos = (uint32_t)(head % WMTR_RING_BYTES), to_end = WMTR_RING_BYTES - pos;
+  if (to_end < total) {
+    struct wmtr_req w = {0}; w.size = to_end; w.flags = WMTR_F_WRAP;
+    if (to_end >= sizeof w) memcpy(data + pos, &w, sizeof w);
+    head += to_end; pos = 0;
+  }
+  uint8_t *dst = data + pos;
+  memset(dst, 0, total);
+  memcpy(dst, &hdr, sizeof hdr);
+  memcpy(dst + sizeof hdr, relocs, 4u * n_reloc);
+  memcpy(dst + sizeof hdr + 4u * n_reloc, outs, sizeof *outs * n_out);
+  memcpy(dst + poff, payload, payload_bytes);
+  __atomic_store_n(&R->head, head + total, __ATOMIC_RELEASE);
+  wmtr_host_kick(H);
+  while (__atomic_load_n(&slot->done_seq, __ATOMIC_ACQUIRE) < hdr.h.seq) sched_yield();
+  if (out_size) *out_size = slot->out_size;
+  return slot->status;
+}
+
+/* Every size, offset and reference in a request is the guest's. Before the checks each of these wrote or read
+ * host memory outside the request (32-bit wrap-around, or sizes larger than the reply slot / the arena blob). */
+static void
+test_hostile_requests(id<MTLDevice> dev) {
+  { /* a ring blob smaller than the ring layout: the executor would read and write past it */
+    uint64_t sz = WMTR_RING_BLOB_BYTES;
+    void *small = pages(sz);
+    ((struct wmtr_ring *)small)->magic = WMTR_RING_MAGIC; ((struct wmtr_ring *)small)->version = WMTR_VERSION;
+    void *save_b = blob_base[0]; uint64_t save_s = blob_size[0];
+    blob_base[0] = small; blob_size[0] = WMTR_PAGE;
+    struct wmtr_host *hs = wmtr_host_create(small, &host_ops, NULL);
+    CHECK(hs == NULL, "executor started on a %u-byte ring blob", WMTR_PAGE);
+    if (hs) wmtr_host_destroy(hs);
+    blob_base[0] = save_b; blob_size[0] = save_s;
+    free(small);
+  }
+  const uint32_t inval = 0xC000000D;
+  struct wmtr_slot *slots = (struct wmtr_slot *)((uint8_t *)blob_base[0] + WMTR_SLOTS_OFFSET);
+  uint64_t payload[64] = {0};
+  uint32_t out = 0;
+  /* reloc offset near 4 GiB: offset + 8 wrapped below payload_size, the host rewrote 8 bytes 4 GiB away */
+  uint32_t far = 0xfffffffcu;
+  CHECK(raw_request(39, 16, 64, &far, 1, NULL, 0, payload, 64, NULL) == inval, "reloc offset wrap accepted");
+  /* payload_size near 4 GiB: poff + payload_size wrapped below the record size */
+  uint32_t r0 = 0;
+  CHECK(raw_request(39, 16, 0xfffffff8u, &r0, 1, NULL, 0, payload, 64, NULL) == inval, "payload size wrap accepted");
+  /* output range near 4 GiB: off + size wrapped, the reply copied from 4 GiB past the payload */
+  struct wmtr_out wrap = {0xffffff00u, 0x200};
+  uint32_t st = raw_request(39, 16, 64, NULL, 0, &wrap, 1, payload, 64, &out);
+  CHECK(out <= 16, "wrapped output range copied (%u bytes, status %x)", out, st);
+  /* params larger than a reply slot: the reply overwrote the next slot (and past the ring blob for the last) */
+  static uint8_t big[WMTR_SLOT_BYTES + 4096];
+  memset(slots[RAW_SLOT + 1].data, 0x5a, 64);
+  st = raw_request(39, sizeof big, sizeof big, NULL, 0, NULL, 0, big, sizeof big, &out);
+  CHECK(st == inval && out == 0, "params past the reply slot: status %x, %u bytes", st, out);
+  CHECK(slots[RAW_SLOT + 1].data[0] == 0x5a && slots[RAW_SLOT + 1].data[63] == 0x5a, "next reply slot overwritten");
+  /* params shorter than the call's struct: the implementation read and wrote past the request */
+  CHECK(raw_request(8, 0, 0, NULL, 0, NULL, 0, NULL, 0, NULL) == inval, "short params accepted");
+  /* newBuffer over arena memory longer than the blob: the NoCopy MTLBuffer reached host memory past it */
+  uint32_t blob = 0;
+  for (uint32_t b = 1; b < WMTR_MAX_BLOBS && !blob; b++) if (blob_base[b]) blob = b;
+  CHECK(blob != 0, "no arena blob to test with");
+  if (blob) {
+    struct { struct unixcall_mtldevice_newbuffer p; struct WMTBufferInfo info; } nb;
+    memset(&nb, 0, sizeof nb);
+    nb.p.device = (obj_handle_t)dev;
+    nb.p.info.ptr = (void *)(uintptr_t)(WMTR_REF_EXTRA | sizeof nb.p);
+    nb.info.length = blob_size[blob] + WMTR_PAGE;
+    nb.info.options = WMTResourceStorageModeShared;
+    nb.info.memory.ptr = (void *)(uintptr_t)(WMTR_REF_ARENA | (uint64_t)blob << 32);
+    uint32_t rel[2] = {offsetof(struct unixcall_mtldevice_newbuffer, info), sizeof nb.p + offsetof(struct WMTBufferInfo, memory)};
+    st = raw_request(18, sizeof nb.p, sizeof nb, rel, 2, NULL, 0, &nb, sizeof nb, NULL);
+    CHECK(st == inval, "newBuffer past its arena blob: status %x", st);
+    nb.info.length = WMTR_PAGE; /* the same request inside the blob still works */
+    st = raw_request(18, sizeof nb.p, sizeof nb, rel, 2, NULL, 0, &nb, sizeof nb, &out);
+    CHECK(st == 0, "newBuffer inside its arena blob: status %x", st);
+    /* kept alive: its deallocator would hand the client a free range the client never allocated */
+  }
 }
 
 int main(void) {
@@ -753,6 +855,7 @@ int main(void) {
       { struct unixcall_generic_obj_uint64_ret q = {0}; remote(39, &q); }
       [pcb waitUntilCompleted];
       usleep(20000); /* the completion handler runs after waitUntilCompleted returns */
+      test_hostile_requests(dev);
       /* a call that faults (bad handle) fails, the process lives, and the client is refused from then on */
       struct unixcall_generic_obj_uint64_ret fz = {0};
       NTSTATUS fs = remote(5, &fz);
