@@ -9,9 +9,9 @@ process forwards DXMT's winemetal unix calls through a shared-memory
 ring to a host executor that runs them against Metal. The executor is a
 separate library (libwmtr_host.dylib, STEAMAC_WMTR_LIB or the default
 name) loaded with dlopen and used only if its wmtr_host_abi_version() is
-the one this patch implements (1: create, kick, progress and destroy,
-and two callbacks, blob_ptr and wake); this patch only carries the
-transport:
+the one this patch implements (1: create, kick, progress, destroy and
+wmtr_layout, and two callbacks, blob_ptr and wake); this patch only
+carries the transport:
 
 - blobs (blob_id = ring/buffer number below 1024, checked before
   narrowing to u32; each id created once, as blobs live as long as the
@@ -19,7 +19,10 @@ transport:
   into the guest by the existing SHM blob path and into the VMM for the
   executor;
 - EXECBUFFER carries 24-byte commands: RING (blob 0 is initialised:
-  start the executor), KICK (wake it), WAIT (the next fence on this ring
+  start the executor; refused when blob 0, sized by the guest, is
+  smaller than the ring layout the library reports through wmtr_layout,
+  as the executor uses fixed offsets up to it), KICK (wake it), WAIT
+  (the next fence on this ring
   completes when the executor's reply slot reaches the sequence number;
   progress is checked and the waiter queued under one lock, so a reply
   cannot slip between them); each (context, ring) is an in-order
@@ -51,8 +54,10 @@ blobs and commands are rejected; on a shared ring (slots 0 and 62,
 events and slot 70) later fences wait for an earlier pending one and
 complete with it, in order; reused blob ids, ids at or above 1024 (1 <<
 32, u64::MAX) and blobs over max_blob are rejected and leave the
-existing blob in place; a library without wmtr_host_abi_version, with
-another version or with part of the API is refused; a wake delivered
+existing blob in place; RING on a blob 0 smaller than the ring layout
+is refused before the executor starts; a library without
+wmtr_host_abi_version, with another version, with part of the API or
+without wmtr_layout is refused; a wake delivered
 while the executor is destroyed does not call into it. virtio::gpu:
 num_capsets stays 5 without STEAMAC_WMTR.
 ---
@@ -60,8 +65,8 @@ num_capsets stays 5 without STEAMAC_WMTR.
  src/rutabaga_gfx/src/lib.rs            |   9 +
  src/rutabaga_gfx/src/rutabaga_core.rs  |  18 +-
  src/rutabaga_gfx/src/rutabaga_utils.rs |   3 +
- src/rutabaga_gfx/src/wmtr.rs           | 731 +++++++++++++++++++++++++
- 5 files changed, 781 insertions(+), 3 deletions(-)
+ src/rutabaga_gfx/src/wmtr.rs           | 763 +++++++++++++++++++++++++
+ 5 files changed, 813 insertions(+), 3 deletions(-)
  create mode 100644 src/rutabaga_gfx/src/wmtr.rs
 
 diff --git a/src/devices/src/virtio/gpu/device.rs b/src/devices/src/virtio/gpu/device.rs
@@ -207,10 +212,10 @@ index 085912c..3ccfd93 100644
  /// Rutabaga handle types (memory and sync in same namespace)
 diff --git a/src/rutabaga_gfx/src/wmtr.rs b/src/rutabaga_gfx/src/wmtr.rs
 new file mode 100644
-index 0000000..048ca1f
+index 0000000..b35a574
 --- /dev/null
 +++ b/src/rutabaga_gfx/src/wmtr.rs
-@@ -0,0 +1,731 @@
+@@ -0,0 +1,763 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
 +//! wmtr: a virtio-gpu context type that carries DXMT's winemetal unix calls from a guest process
@@ -281,6 +286,8 @@ index 0000000..048ca1f
 +type HostCreate = unsafe extern "C" fn(*mut c_void, *const WmtrHostOps, *mut c_void) -> *mut c_void;
 +type HostVoid = unsafe extern "C" fn(*mut c_void);
 +type HostProgress = unsafe extern "C" fn(*mut c_void, u32) -> u64;
++/// `wmtr_layout(ring_bytes, data_offset, slots_offset, slot_size)`: the ring layout in blob 0.
++type HostLayout = unsafe extern "C" fn(*mut u64, *mut u64, *mut u64, *mut u64);
 +
 +#[derive(Clone, Copy)]
 +struct HostLib {
@@ -288,6 +295,8 @@ index 0000000..048ca1f
 +    kick: HostVoid,
 +    destroy: HostVoid,
 +    progress: HostProgress,
++    /// Smallest blob 0 the executor accepts (its ring layout, from `wmtr_layout`).
++    ring_bytes: u64,
 +}
 +
 +unsafe impl Send for HostLib {}
@@ -309,17 +318,21 @@ index 0000000..048ca1f
 +        error!("wmtr: {name} has host ABI {version}, expected {WMTR_HOST_ABI_VERSION}");
 +        return None;
 +    }
-+    let (c, k, d, p) = (
++    let (c, k, d, p, l) = (
 +        sym("wmtr_host_create"),
 +        sym("wmtr_host_kick"),
 +        sym("wmtr_host_destroy"),
 +        sym("wmtr_host_progress"),
++        sym("wmtr_layout"),
 +    );
-+    if c.is_null() || k.is_null() || d.is_null() || p.is_null() {
++    if c.is_null() || k.is_null() || d.is_null() || p.is_null() || l.is_null() {
 +        error!("wmtr: {name} lacks the host API");
 +        return None;
 +    }
++    let (mut ring_bytes, mut data, mut slots, mut slot) = (0, 0, 0, 0);
++    std::mem::transmute::<*mut c_void, HostLayout>(l)(&mut ring_bytes, &mut data, &mut slots, &mut slot);
 +    Some(HostLib {
++        ring_bytes,
 +        create: std::mem::transmute::<*mut c_void, HostCreate>(c),
 +        kick: std::mem::transmute::<*mut c_void, HostVoid>(k),
 +        destroy: std::mem::transmute::<*mut c_void, HostVoid>(d),
@@ -532,7 +545,10 @@ index 0000000..048ca1f
 +                        return Err(RutabagaError::SpecViolation("wmtr: ring already started"));
 +                    }
 +                    let ring = match self.shared.blobs.lock().unwrap().get(&0) {
-+                        Some(&(p, _)) => p,
++                        Some(&(p, n)) if n >= self.shared.lib.ring_bytes => p,
++                        // the guest sizes blob 0; the executor reads and writes the ring at fixed
++                        // offsets up to its layout, so a shorter blob never reaches it
++                        Some(_) => return Err(RutabagaError::SpecViolation("wmtr: ring blob too small")),
 +                        None => return Err(RutabagaError::SpecViolation("wmtr: no ring blob")),
 +                    };
 +                    let ctx = Arc::as_ptr(&self.shared) as *mut c_void;
@@ -748,6 +764,7 @@ index 0000000..048ca1f
 +            kick,
 +            destroy,
 +            progress,
++            ring_bytes: 65536,
 +        };
 +        (Wmtr { lib, fence_handler: handler.clone() }, handler)
 +    }
@@ -833,6 +850,10 @@ index 0000000..048ca1f
 +        ctx.submit_cmd(&mut cmd(WMTR_VGPU_KICK, 0, 0), &[]).unwrap();
 +    }
 +
++    unsafe extern "C" fn layout(ring: *mut u64, data: *mut u64, slots: *mut u64, slot: *mut u64) {
++        (*ring, *data, *slots, *slot) = (65536, 4096, 32768, 512);
++    }
++
 +    unsafe extern "C" fn abi_current() -> u32 {
 +        WMTR_HOST_ABI_VERSION
 +    }
@@ -862,7 +883,7 @@ index 0000000..048ca1f
 +    /// The library is used only if it reports this ABI version and exports the whole API.
 +    #[test]
 +    fn host_lib_abi_version_checked() {
-+        let table = |abi: Option<HostAbiVersion>, with_progress: bool| {
++        let table = |abi: Option<HostAbiVersion>, with_progress: bool, with_layout: bool| {
 +            move |s: &str| -> *mut c_void {
 +                match s {
 +                    "wmtr_host_abi_version" => abi.map_or(std::ptr::null_mut(), |f| f as *mut c_void),
@@ -870,16 +891,19 @@ index 0000000..048ca1f
 +                    "wmtr_host_kick" => kick as *mut c_void,
 +                    "wmtr_host_destroy" => destroy as *mut c_void,
 +                    "wmtr_host_progress" if with_progress => progress as *mut c_void,
++                    "wmtr_layout" if with_layout => layout as *mut c_void,
 +                    _ => std::ptr::null_mut(),
 +                }
 +            }
 +        };
 +        // SAFETY: the table holds this module's stand-in functions with the right signatures.
 +        unsafe {
-+            assert!(bind_host_lib("test", table(Some(abi_current), true)).is_some());
-+            assert!(bind_host_lib("test", table(None, true)).is_none(), "unversioned library");
-+            assert!(bind_host_lib("test", table(Some(abi_next), true)).is_none(), "other ABI");
-+            assert!(bind_host_lib("test", table(Some(abi_current), false)).is_none(), "partial API");
++            let lib = bind_host_lib("test", table(Some(abi_current), true, true));
++            assert_eq!(lib.map(|l| l.ring_bytes), Some(65536));
++            assert!(bind_host_lib("test", table(None, true, true)).is_none(), "unversioned library");
++            assert!(bind_host_lib("test", table(Some(abi_next), true, true)).is_none(), "other ABI");
++            assert!(bind_host_lib("test", table(Some(abi_current), false, true)).is_none(), "partial API");
++            assert!(bind_host_lib("test", table(Some(abi_current), true, false)).is_none(), "no ring layout");
 +        }
 +        // the ops struct carries exactly the two callbacks of ABI 1
 +        assert_eq!(std::mem::size_of::<WmtrHostOps>(), 2 * std::mem::size_of::<usize>());
@@ -903,6 +927,19 @@ index 0000000..048ca1f
 +        ctx.context_create_blob(15, blob(MAX_BLOBS - 1, 4096), None).unwrap();
 +        let caps = comp.get_capset(RUTABAGA_CAPSET_WMTR, 1);
 +        assert_eq!(u64::from_le_bytes(caps[8..16].try_into().unwrap()), MAX_BLOB_SIZE);
++    }
++
++    /// RING on a blob 0 smaller than the executor's ring layout is refused before the executor is
++    /// created: it reads and writes the ring at fixed offsets up to that size.
++    #[test]
++    fn short_ring_is_refused() {
++        let _serial = serial();
++        let (comp, handler) = component(Arc::new(Mutex::new(Vec::new())));
++        let mut ctx = comp.create_context(5, RUTABAGA_CAPSET_WMTR, None, handler).unwrap();
++        ctx.context_create_blob(51, blob(0, 16384), None).unwrap();
++        assert!(ctx.submit_cmd(&mut cmd(WMTR_VGPU_RING, 0, 0), &[]).is_err());
++        assert!(FAKE.lock().unwrap().is_none(), "executor started on a short ring");
++        drop(ctx);
 +    }
 +
 +    /// Slots 0 and 62 share ring 1. A ring is an in-order timeline, so a satisfied WAIT (and a
