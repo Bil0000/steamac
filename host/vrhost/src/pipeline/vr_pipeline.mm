@@ -105,14 +105,16 @@ static vrl_pose to_vrl(const std::optional<TrackedPose> & t)
 
 vrl_state VrPipeline::default_view()
 {
-	// Meta Quest 3 under WiVRn v26.9 (live 2026-10-16/17): 1836x1924 per eye, 90 Hz, its asymmetric FOV
+	// Meta Quest 3 under WiVRn v26.9 (live 2026-10-16/17/19): 1836x1924 per eye, 90 Hz, its asymmetric FOV as the
+	// headset reports it (left eye -54/+40 deg horizontal, +44/-55 deg vertical; right eye mirrored). A game that
+	// starts before the headset keeps this projection, so it has to be the real headset's.
 	vrl_state s{};
 	s.h = {VRL_STATE, sizeof s};
 	s.eye_width = 1836;
 	s.eye_height = 1924;
 	s.refresh_hz = 90;
 	s.ipd_m = 0.064f;
-	const float fov[2][4] = {{-0.96f, 0.79f, 0.87f, -0.91f}, {-0.79f, 0.96f, 0.87f, -0.91f}};
+	const float fov[2][4] = {{-0.94f, 0.70f, 0.77f, -0.96f}, {-0.70f, 0.94f, 0.77f, -0.96f}};
 	memcpy(s.fov, fov, sizeof fov);
 	s.profile = VRL_PROFILE_TOUCH;
 	snprintf(s.name, sizeof s.name, "Meta Quest 3");

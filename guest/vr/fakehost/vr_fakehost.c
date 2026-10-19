@@ -4,7 +4,7 @@
  * socket transport. It paces frames at a fixed refresh rate, serves poses and inputs from a synthetic motion
  * model plus an optional script (recorded or hand-written), and checks and logs every submit and haptic event.
  *
- *   vr-fakehost --socket PATH [--script FILE] [--log FILE] [--hz 90] [--profile touch|index] [--once]
+ *   vr-fakehost --socket PATH [--script FILE] [--log FILE] [--hz 90] [--profile touch|index] [--once] [--live-view]
  *
  * Script lines (frame-keyed, so a replay is deterministic whatever the client's frame rate):
  *   <frame> in <L|R> <input-name> <value>          e.g.  20 in R TRIGGER_VALUE 1
@@ -197,6 +197,22 @@ static void fill_view(float fov[2][4], float *ipd) {
   *ipd = 0.064f;
 }
 
+/* --live-view: the frames carry a different view than the hello did (a game that started on the host's standby
+ * view, then a headset with its own FOV and IPD connected). The game renders with what the hello reported
+ * (GetProjectionRaw, GetEyeToHeadTransform), so its submits must still carry the hello's view. */
+static int live_view;
+static void fill_frame_view(float fov[2][4], float *ipd) {
+  fill_view(fov, ipd);
+  if (!live_view) return;
+  for (int e = 0; e < 2; e++) {
+    fov[e][0] = e ? -0.698f : -0.942f; /* Meta Quest 3 under WiVRn v26.9 */
+    fov[e][1] = e ? 0.942f : 0.698f;
+    fov[e][2] = 0.768f;
+    fov[e][3] = -0.960f;
+  }
+  *ipd = 0.068f;
+}
+
 static int handle(int fd, const void *buf, size_t n) {
   const struct svr_hdr *h = buf;
   if (n < sizeof(*h) || h->size != n) return -1;
@@ -231,7 +247,7 @@ static int handle(int fd, const void *buf, size_t n) {
       r.host_now = now;
       r.refresh_hz = (float)hz;
       r.profile = profile;
-      fill_view(r.fov, &r.ipd_m);
+      fill_frame_view(r.fov, &r.ipd_m);
       state_at(f, (r.predicted_display - t0) * 1e-9, &r);
       hist[f % HIST].frame = f;
       hist[f % HIST].display = r.predicted_display;
@@ -259,7 +275,12 @@ static int handle(int fd, const void *buf, size_t n) {
           if (q->pose[0][i] != hp->orientation[i] || q->pose[1][i] != hp->orientation[i]) why = "eye orientation differs from the frame's head";
         for (int i = 0; i < 3 && !why; i++)
           if (fabsf(mid[i] - hp->position[i]) > 1e-5f) why = "eye positions not centred on the frame's head";
-        if (!why && fabsf(sqrtf(ipd2) - 0.064f) > 1e-5f) why = "eye separation is not the IPD";
+        float hello_fov[2][4], hello_ipd;
+        fill_view(hello_fov, &hello_ipd);
+        if (!why && fabsf(sqrtf(ipd2) - hello_ipd) > 1e-5f) why = "eye separation is not the reported IPD";
+        for (int e = 0; e < 2 && !why; e++)
+          for (int i = 0; i < 4; i++)
+            if (q->fov[e][i] != hello_fov[e][i]) why = "eye FOV is not the reported projection";
       }
       stats.submits++;
       if (why) stats.submit_errors++;
@@ -308,8 +329,9 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--hz") && i + 1 < argc) hz = atof(argv[++i]);
     else if (!strcmp(argv[i], "--profile") && i + 1 < argc) profile = !strcmp(argv[++i], "index") ? SVR_PROFILE_INDEX : SVR_PROFILE_TOUCH;
     else if (!strcmp(argv[i], "--once")) once = 1;
+    else if (!strcmp(argv[i], "--live-view")) live_view = 1;
     else {
-      fprintf(stderr, "usage: vr-fakehost --socket PATH [--script FILE] [--log FILE] [--hz N] [--profile touch|index] [--once]\n");
+      fprintf(stderr, "usage: vr-fakehost --socket PATH [--script FILE] [--log FILE] [--hz N] [--profile touch|index] [--once] [--live-view]\n");
       return 2;
     }
   }

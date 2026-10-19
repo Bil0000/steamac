@@ -59,4 +59,16 @@ while [ ! -S "$sock" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
 STEAMAC_VR_SOCKET=$sock "$out/vr-testapp" "$out/runtime" "$here/data" --standby 2>"$tmp/app-standby.err" || {
   cat "$tmp/app-standby.err"; echo "FAIL e2e (standby)"; exit 1; }
 wait $fh
+# the frames carry another view than the hello (game started on the standby view, then the headset connected):
+# every submit must carry the projection and IPD the game was given, or the headset reprojects it distorted
+sock=$tmp/vr-live.sock log=$tmp/host-live.log
+"$out/vr-fakehost" --socket "$sock" --script "$here/data/script.txt" --log "$log" --once --live-view &
+fh=$!
+i=0
+while [ ! -S "$sock" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+STEAMAC_VR_SOCKET=$sock "$out/vr-testapp" "$out/runtime" "$here/data" 2>"$tmp/app-live.err" || {
+  cat "$tmp/app-live.err"; echo "FAIL e2e (live view)"; exit 1; }
+wait $fh
+grep -q '"ok":false' "$log" && { grep '"ok":false' "$log" | head -3; echo "FAIL e2e (live view): bad submit"; exit 1; }
+echo "e2e (live view): $(grep '"ev":"summary"' "$log")"
 echo "PASS e2e"

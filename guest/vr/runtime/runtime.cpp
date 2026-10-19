@@ -281,16 +281,19 @@ vr::EVRCompositorError Runtime::submit(vr::EVREye eye, const vr::Texture_t *tex,
     pending_eye_[0] = pending_eye_[1] = false;
     pending_.frame_id = frame_.frame_id;
     pending_.display_time = (uint64_t)frame_.predicted_display;
-    // per-eye render poses: the frame's head pose moved by half the IPD along the head's x axis
+    // per-eye render poses: the frame's head pose moved by half the IPD along the head's x axis. FOV and IPD are
+    // the ones the game rendered with (GetProjectionRaw, GetEyeToHeadTransform: the hello's view), not the frame's:
+    // a game that started on the standby view keeps that projection when the headset connects with its own, and
+    // the headset reprojects the image with the FOV sent here (a mismatch stretches the picture).
     const svr_pose &head = frame_.pose[SVR_DEV_HEAD];
-    float ipd = frame_.ipd_m > 0 ? frame_.ipd_m : hello_.ipd_m > 0 ? hello_.ipd_m : 0.063f;
+    float ipd = hello_.ipd_m > 0 ? hello_.ipd_m : 0.063f;
     Quat q{head.orientation[0], head.orientation[1], head.orientation[2], head.orientation[3]};
     for (int e = 0; e < 2; e++) {
       float off[3] = {(e ? 0.5f : -0.5f) * ipd, 0, 0}, w[3];
       qrot(q, off, w);
       memcpy(pending_.pose[e], head.orientation, 4 * sizeof(float));
       for (int i = 0; i < 3; i++) pending_.pose[e][4 + i] = head.position[i] + w[i];
-      memcpy(pending_.fov[e], frame_.fov[e], sizeof(pending_.fov[e]));
+      memcpy(pending_.fov[e], hello_.fov[e], sizeof(pending_.fov[e]));
     }
     pending_valid_ = true;
   }

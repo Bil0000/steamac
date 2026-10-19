@@ -132,7 +132,7 @@ int64_t run(const char * label, bool wide, bool flip, const CompositorOptions * 
 			src[e] = {surf[e], uint32_t(MTLPixelFormatBGRA8Unorm), false, 0, 0, rw, rh, flip};
 		}
 	// Quest 3-like asymmetric per-eye FOV (radians: left, right, up, down)
-	EyeFov fov[2] = {{-0.96f, 0.79f, 0.87f, -0.91f}, {-0.79f, 0.96f, 0.87f, -0.91f}};
+	EyeFov fov[2] = {{-0.94f, 0.70f, 0.77f, -0.96f}, {-0.70f, 0.94f, 0.77f, -0.96f}};
 	float eye_x[2] = {-0.032f, 0.032f};
 	CompositorOptions opt = upscale ? *upscale : CompositorOptions{};
 	if (upscale)

@@ -253,7 +253,7 @@ int main(int argc, char ** argv)
 		if (f == "--quest3")
 		{
 			o.render_width = 1836, o.render_height = 1924, o.eye_width = 918, o.eye_height = 962, o.refresh_hz = 90;
-			o.fov = {{{-0.96f, 0.79f, 0.87f, -0.91f}, {-0.79f, 0.96f, 0.87f, -0.91f}}};
+			o.fov = {{{-0.94f, 0.70f, 0.77f, -0.96f}, {-0.70f, 0.94f, 0.77f, -0.96f}}};
 			o.identity_foveation = false;
 			continue;
 		}
