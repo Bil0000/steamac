@@ -65,7 +65,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size)
 	a.sin6_family = AF_INET6;
 	a.sin6_port = htons(port);
 	a.sin6_addr = in6addr_loopback;
-	// thousands of short connections: close with a reset (no TIME_WAIT), and wait if the ephemeral ports run out
+	// thousands of short connections: close with a reset, and wait (up to 30 s) while the ephemeral ports are held in
+	// TIME_WAIT by the session's side (it closes first)
 	int fd = -1;
 	for (int tries = 0;; ++tries)
 	{
@@ -74,7 +75,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size)
 		setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof lg);
 		if (connect(fd, (sockaddr *)&a, sizeof a) == 0)
 			break;
-		if (errno != EAGAIN or tries == 500)
+		if (errno != EAGAIN or tries == 3000)
 		{
 			perror("fuzz_session: connect");
 			abort();
