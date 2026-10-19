@@ -176,6 +176,29 @@ public:
 	}
 };
 
+// PIN guessing limit (impl::pin_failed): the first failure is free (a typo), then 2, 4, ... 60 s between attempts.
+constexpr int pin_max_failures = 10;
+static std::chrono::seconds pin_backoff(int failures)
+{
+	if (failures <= 1)
+		return std::chrono::seconds(0);
+	return std::chrono::seconds(std::min(60, 1 << std::min(failures - 1, 6)));
+}
+
+// A refresh rate from the headset (headset_info, refresh_rate_changed): the pacer divides by it and converts the
+// period to an integer, so 0, negative, NaN or a denormal would be undefined behaviour or a zero frame duration.
+static bool valid_refresh_rate(float hz)
+{
+	return std::isfinite(hz) and hz >= 1 and hz <= 1000;
+}
+
+// An audio format from the headset: the bridge resamples the game audio to it and cuts packets of rate * 10 ms, so a
+// rate below 100 Hz made empty packets (an endless loop) and a huge rate or channel count a multi-GiB buffer.
+static bool valid_audio(const fh::headset_info_packet::audio_description & a)
+{
+	return a.num_channels >= 1 and a.num_channels <= 8 and a.sample_rate >= 8000 and a.sample_rate <= 192000;
+}
+
 static Device to_device(wivrn::device_id id, bool & ok)
 {
 	ok = true;
@@ -320,6 +343,10 @@ struct WivrnSession::impl
 	std::string pin;
 	std::string advertised_name;
 	std::optional<PairingRequest> pairing_request; // under crypto_mutex
+	// Online PIN guessing (WiVRn has no limit; the PIN is 6 digits): after a failed PIN check the next one waits
+	// pin_backoff(failures), and a random PIN is replaced after pin_max_failures (under crypto_mutex).
+	int pin_failures = 0;
+	std::chrono::steady_clock::time_point pin_retry_after{};
 
 	// headset state for the control socket (cnx_mutex)
 	std::optional<Battery> battery;
@@ -329,6 +356,28 @@ struct WivrnSession::impl
 	{
 		if (cfg.log)
 			cfg.log(s);
+	}
+
+	void pin_failed()
+	{
+		std::string new_pin;
+		{
+			std::lock_guard lock(crypto_mutex);
+			++pin_failures;
+			pin_retry_after = std::chrono::steady_clock::now() + pin_backoff(pin_failures);
+			if (pin_failures >= pin_max_failures and cfg.pin.empty() and not pin.empty())
+			{
+				pin = KnownKeys::random_pin(); // the guesses so far say nothing about the new one
+				new_pin = pin;
+				pin_failures = 0;
+			}
+		}
+		if (not new_pin.empty())
+		{
+			log("too many incorrect PINs: new pairing PIN");
+			if (cfg.on_pin)
+				cfg.on_pin(new_pin);
+		}
 	}
 
 	void accept_loop();
@@ -387,7 +436,8 @@ static T expect(control_socket & ctl, stream_socket * strm, std::chrono::millise
 		int r = ::poll(fds, strm ? 2 : 1, 100);
 		if (r < 0)
 			throw std::system_error(errno, std::system_category());
-		if (fds[0].revents & (POLLHUP | POLLERR))
+		// POLLHUP comes with the peer's FIN while its last packets are still unread: read them first
+		if ((fds[0].revents & (POLLHUP | POLLERR)) and not(fds[0].revents & POLLIN))
 			throw std::runtime_error("control socket closed during handshake");
 		if (strm and (fds[1].revents & POLLIN))
 		{
@@ -522,7 +572,14 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 			});
 			if (not is_public_key_known)
 			{
+				{
+					std::lock_guard lock(crypto_mutex);
+					if (std::chrono::steady_clock::now() < pin_retry_after)
+						throw std::runtime_error("headset '" + hs.name + "': PIN attempt refused (" +
+						                         std::to_string(pin_failures) + " failed, retry later)");
+				}
 				log("headset '" + hs.name + "' is not paired: waiting for the PIN");
+				bool pin_ok = false;
 				try
 				{
 					crypto::smp pin_check;
@@ -532,14 +589,21 @@ void WivrnSession::impl::handshake(control_socket & ctl, stream_socket & strm, f
 					auto msg3 = expect<fh::pin_check_3>(ctl, nullptr, 10s).message;
 					auto [msg4, pin_match] = pin_check.step4(msg3);
 					ctl.send(th::pin_check_4{msg4});
-					if (not pin_match)
-						throw std::runtime_error("incorrect PIN from headset '" + hs.name + "'");
-					log("headset '" + hs.name + "': PIN ok");
+					pin_ok = pin_match;
 				}
 				catch (crypto::smp_cheated &)
 				{
-					throw std::runtime_error("unable to check the PIN");
 				}
+				if (not pin_ok)
+				{
+					pin_failed();
+					throw std::runtime_error("incorrect PIN from headset '" + hs.name + "'");
+				}
+				{
+					std::lock_guard lock(crypto_mutex);
+					pin_failures = 0;
+				}
+				log("headset '" + hs.name + "': PIN ok");
 			}
 			secrets s{server_key, headset_key, is_public_key_known ? "000000" : pin};
 			ctl.set_aes_key_and_ivs(s.control_key, s.control_iv_from_headset, s.control_iv_to_headset);
@@ -609,10 +673,16 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	h.render_eye_height = cfg.render_scale == 1 or not hi.render_eye_height ? hi.render_eye_height : scaled(hi.render_eye_height);
 	h.eye_width = (cfg.width ? cfg.width : hi.stream_eye_width) & ~1u;
 	h.eye_height = (cfg.height ? cfg.height : hi.stream_eye_height) & ~1u;
-	h.refresh_rates = hi.available_refresh_rates;
+	for (float r: hi.available_refresh_rates)
+		if (valid_refresh_rate(r))
+			h.refresh_rates.push_back(r);
 	h.preferred_refresh_rate = hi.settings.preferred_refresh_rate;
-	if (h.preferred_refresh_rate <= 0)
+	if (not valid_refresh_rate(h.preferred_refresh_rate))
 		h.preferred_refresh_rate = h.refresh_rates.empty() ? 72 : h.refresh_rates.front();
+	if (h.eye_width < 16 or h.eye_height < 16)
+		throw std::runtime_error("headset info: stream size " + std::to_string(h.eye_width) + "x" + std::to_string(h.eye_height));
+	if (h.render_eye_width < 16 or h.render_eye_height < 16)
+		h.render_eye_width = h.eye_width, h.render_eye_height = h.eye_height;
 	for (int i = 0; i < 2; ++i)
 		h.fov[i] = from_xr(hi.fov[i]);
 	for (auto c: hi.supported_codecs)
@@ -636,9 +706,9 @@ void WivrnSession::impl::on_headset_info(const fh::headset_info_packet & hi)
 	h.hand_tracking = hi.hand_tracking;
 	h.eye_gaze = hi.eye_gaze;
 	h.name = hi.system_name;
-	if (hi.speaker and hi.speaker->num_channels and hi.speaker->sample_rate)
+	if (hi.speaker and valid_audio(*hi.speaker))
 		h.speaker = AudioFormat{hi.speaker->num_channels, hi.speaker->sample_rate};
-	if (hi.microphone and hi.microphone->num_channels and hi.microphone->sample_rate)
+	if (hi.microphone and valid_audio(*hi.microphone))
 		h.microphone = AudioFormat{hi.microphone->num_channels, hi.microphone->sample_rate};
 	refresh = h.preferred_refresh_rate;
 	pacer.set_frame_duration(uint64_t(1e9 / h.preferred_refresh_rate));
@@ -813,9 +883,10 @@ void WivrnSession::impl::handle(fh::packets && packet)
 		        }
 		        else if constexpr (std::is_same_v<T, fh::refresh_rate_changed>)
 		        {
+			        if (not valid_refresh_rate(pkt.to))
+				        return;
 			        refresh = pkt.to;
-			        if (pkt.to > 0)
-				        pacer.set_frame_duration(uint64_t(1e9 / pkt.to));
+			        pacer.set_frame_duration(uint64_t(1e9 / pkt.to));
 			        if (listener)
 				        listener->on_refresh_rate(pkt.to);
 		        }
@@ -898,7 +969,7 @@ void WivrnSession::impl::run_connection(wivrn::TCP && tcp)
 		int r = ::poll(fds, 2, 5);
 		if (r < 0 and errno != EINTR)
 			throw std::system_error(errno, std::system_category());
-		if (fds[0].revents & (POLLHUP | POLLERR))
+		if ((fds[0].revents & (POLLHUP | POLLERR)) and not(fds[0].revents & POLLIN))
 			throw wivrn::socket_shutdown();
 		if (fds[0].revents & POLLIN)
 		{
