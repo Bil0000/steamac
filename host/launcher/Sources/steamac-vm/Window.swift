@@ -10,6 +10,7 @@ final class SteamacApplication: NSApplication {
     weak var router: WindowController?
 
     override func sendEvent(_ event: NSEvent) {
+        if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel].contains(event.type) { router?.cancelDeferredMetaTaps() }
         if let router, router.handleKeyEvent(event) { return }
         super.sendEvent(event)
     }
@@ -62,6 +63,7 @@ final class WindowController: NSObject, NSWindowDelegate {
 
     private var pressedKeys = Set<UInt16>()
     private var heldModifiers = Set<UInt16>()
+    private var deferredMetaTaps = Set<UInt16>()
     private let keyBindings = GuestKeyBindings()
     private var tabletButtons = Set<UInt16>()
     private var mouseButtons = Set<UInt16>()
@@ -675,13 +677,21 @@ final class WindowController: NSObject, NSWindowDelegate {
             } else if let mask = Keymap.modifierMask(e.keyCode), let code = Keymap.linuxKey(e.keyCode) {
                 let down = (UInt(e.modifierFlags.rawValue) & mask) != 0
                 if down {
+                    let meta = code == KEY.LEFTMETA || code == KEY.RIGHTMETA
+                    let tap = meta && nativeEditing && !nativeTextBindings && heldModifiers.isEmpty
+                    cancelDeferredMetaTaps()
                     heldModifiers.insert(code)
-                    if !nativeTextBindings || mods.contains(.control) {
+                    if tap { deferredMetaTaps.insert(code) }
+                    if (!nativeTextBindings || mods.contains(.control)) && !(meta && nativeEditing) {
                         if pressedKeys.insert(code).inserted { sendKey(code, true) }
                     }
                 } else {
                     heldModifiers.remove(code)
                     if pressedKeys.remove(code) != nil { sendKey(code, false) }
+                    if deferredMetaTaps.remove(code) != nil {
+                        sendKey(code, true)
+                        sendKey(code, false)
+                    }
                 }
             }
             if captured && mods.contains([.control, .option]) { releasePointer() }
@@ -700,7 +710,10 @@ final class WindowController: NSObject, NSWindowDelegate {
         sendGuestCommands(commands)
     }
 
+    func cancelDeferredMetaTaps() { deferredMetaTaps.removeAll() }
+
     private func sendGuestCommands(_ commands: [[UInt16]]) {
+        cancelDeferredMetaTaps()
         for modifier in heldModifiers.sorted() where pressedKeys.remove(modifier) != nil { sendKey(modifier, false) }
         for keys in commands {
             for code in keys { sendKey(code, true) }
@@ -709,6 +722,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     }
 
     private func sendHeldModifiers() {
+        cancelDeferredMetaTaps()
         for modifier in heldModifiers.sorted() where pressedKeys.insert(modifier).inserted { sendKey(modifier, true) }
     }
 
@@ -791,6 +805,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             noPicture?.heartbeatsEnded()
         }
         guard f != guestFocus else { return }
+        cancelDeferredMetaTaps()
         guestFocus = f
         // The agent sends the new game's `game-size` right after `focus game`; until then none is known.
         focusedGameSize = nil
@@ -926,6 +941,7 @@ extension WindowController {
         for k in pressedKeys { sendKey(k, false) }
         pressedKeys.removeAll()
         heldModifiers.removeAll()
+        cancelDeferredMetaTaps()
         releasePointer()
         releaseButtons()
         guestCursor = nil
