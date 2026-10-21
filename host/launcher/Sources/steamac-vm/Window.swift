@@ -628,6 +628,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         return false
     }
 
+    func windowDidBecomeKey(_ notification: Notification) { view.refreshHostCursor() }
     func windowDidResignKey(_ notification: Notification) { releaseAll() }
     func windowDidMiniaturize(_ notification: Notification) { releaseAll() }
 

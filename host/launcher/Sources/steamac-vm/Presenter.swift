@@ -138,6 +138,18 @@ final class VMView: NSView, NSUserInterfaceValidations {
         addCursorRect(rect, cursor: Self.guestCursor)
     }
 
+    func refreshHostCursor() {
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            guard let self, NSApp.isActive, let window = self.window, window.isKeyWindow,
+                  let rect = self.controller?.hostCursorRect else { return }
+            let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            guard rect.intersection(self.visibleRect).contains(point),
+                  NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber,
+                  self.hitTest(self.convert(point, to: self.superview)) === self else { return }
+            Self.guestCursor.set()
+        }
+    }
+
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         updateDrawableSize()
@@ -149,17 +161,17 @@ final class VMView: NSView, NSUserInterfaceValidations {
     }
 
     // Mouse events go to the controller (window.acceptsMouseMovedEvents delivers mouseMoved here).
-    override func mouseMoved(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func mouseDragged(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func rightMouseDragged(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func otherMouseDragged(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func mouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true) }
-    override func mouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false) }
-    override func rightMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true) }
-    override func rightMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false) }
-    override func otherMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true) }
-    override func otherMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false) }
-    override func scrollWheel(with e: NSEvent) { controller?.scroll(e) }
+    override func mouseMoved(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func mouseDragged(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func rightMouseDragged(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func otherMouseDragged(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func mouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true); refreshHostCursor() }
+    override func mouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false); refreshHostCursor() }
+    override func rightMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true); refreshHostCursor() }
+    override func rightMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false); refreshHostCursor() }
+    override func otherMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true); refreshHostCursor() }
+    override func otherMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false); refreshHostCursor() }
+    override func scrollWheel(with e: NSEvent) { controller?.scroll(e); refreshHostCursor() }
 
     private func updateDrawableSize() {
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
