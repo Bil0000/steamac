@@ -1,14 +1,14 @@
 # Fork notes
 
 A fork of [steamac](https://github.com/fxgl/steamac) (base: 1.9; results on 1.9 are marked, older ones were measured on 1.8.1/1.8.2) that adds support for genuine-Easy-Anti-Cheat x86 games,
-verified in game with VRChat (Mini Royale's EAC also reaches `301`; results differ game by game), plus launcher and stability fixes. Nothing here is sent to libkrun, Mesa, FEX or Proton by this fork;
+verified in earlier VRChat sessions with `eac-2610.2` (Mini Royale's EAC also reached `301`; results differ game by game), plus launcher and stability fixes. The current `eac-2610.3` runtime and automatic setup have not passed a real game test. Nothing here is sent to libkrun, Mesa, FEX or Proton by this fork;
 steamac changes are discussed with its maintainer directly. Bug reports are welcome here (see the README). Not affiliated with FX GAMES, Valve, Epic or VRChat.
 
 ## Changes
 
 | change | where | why | status |
 |---|---|---|---|
-| patched FEX-2610 ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610) tag `eac-2610.2`: patches 0001–0026, 0033, 0035), `build-fex.sh`, `install-fex-tool.sh`, `guest-tune.sh` | [`fex-eac/`](../fex-eac/README.md) | Valve's FEX-2607 in Steam's compatibility tool fails EAC's ptrace injection and signal semantics ([eac-how-it-works.md](eac-how-it-works.md)) | built, tested (3 sessions) — **the verified setup** |
+| patched FEX-2610 ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610) tag `eac-2610.3`), `build-fex.sh`, `install-fex-tool.sh`, `guest-tune.sh` | [`fex-eac/`](../fex-eac/README.md) | Valve's FEX-2607 in Steam's compatibility tool fails EAC's ptrace injection and signal semantics ([eac-how-it-works.md](eac-how-it-works.md)) | `.2`: tested in 3 sessions; current `.3`: gameplay unverified |
 | triple-buffered present | launcher (Swift) | replaces a `waitUntilCompleted()` per frame | experimental |
 | `--render-scale` (0.25–1.0) with MetalFX upscaling | launcher (Swift) | render below native and upscale, to move the frame-time cost off the GPU while keeping UI at real-world size | experimental (default stays 1.0 = unchanged) |
 | libkrun log level default `error` | launcher | less logging overhead | experimental |
@@ -31,7 +31,7 @@ steamac changes are discussed with its maintainer directly. Bug reports are welc
 | virtio-input worker runs at user-interactive QoS, like the vCPUs and the GPU worker (0013) | libkrun patch 0024 | key presses and pointer motion reach the guest through that thread; a busy host should not delay them | experimental; unit test for the QoS helper passes, the thread's runtime QoS is unverified |
 | DXMT path: arena blobs idle after a load peak go back to the Mac. Idle blobs beyond a 128 MiB warm reserve are released once they have been idle for 1 s (`WMTR_ARENA_KEEP_MB`, `WMTR_ARENA_TRIM_MS`; `WMTR_ARENA_KEEP_MB=-1` keeps them all). On release the guest closes the blob and the wmtr context drops its own mapping | `wmtr/` client and transports, libkrun patch 0028 | each blob is shared memory mapped three times (VMM, Hypervisor.framework stage-2, executor), so a level-load peak otherwise stays in `phys_footprint` until the game exits | experimental; `wmtr_loopback` (footprint 504 -> 203 MiB after the peak) and the libkrun `wmtr` detach test pass; a live footprint check in the VM is still owed |
 
-The app-side changes (the launcher changes above, libkrun 0018/0019/**0020**, KosmicKrisp 0041/0042/0047) are **experimental**, except libkrun 0020, which is verified live. The async-pipeline crash seen with `MESA_KK_ASYNC_PIPELINES=1` (SIGSEGV in the render encoder under VRChat) is addressed by KosmicKrisp 0047, which gates the async draw on the program the draw uses rather than the bound VS; 0041 and 0043 alone did not address it. No live run on record is shown to contain 0047. Async pipelines stay **off** by default and are not recommended: an idle in-world run with `=1` was clearly worse than off, and no stutter improvement is shown. Treat the release app plus `fex-eac/` as the recommended setup; each change was built and adversarially re-verified in isolation, and the live runs of the combined app are listed above. They are verified only on an M2 MacBook Air, 16 GB, macOS 27.0, with steamac 1.8.1/1.8.2. The launcher build is
+The app-side changes (the launcher changes above, libkrun 0018/0019/**0020**, KosmicKrisp 0041/0042/0047) are **experimental**, except libkrun 0020, which is verified live. The async-pipeline crash seen with `MESA_KK_ASYNC_PIPELINES=1` (SIGSEGV in the render encoder under VRChat) is addressed by KosmicKrisp 0047, which gates the async draw on the program the draw uses rather than the bound VS; 0041 and 0043 alone did not address it. No live run on record is shown to contain 0047. Async pipelines stay **off** by default and are not recommended: an idle in-world run with `=1` was clearly worse than off, and no stutter improvement is shown. These results describe the earlier `.2` setup; the current `.3` runtime and automatic setup need live checks. Each earlier change was built and checked in isolation, and the live runs of the combined app are listed above. They are verified only on an M2 MacBook Air, 16 GB, macOS 27.0, with steamac 1.8.1/1.8.2. The launcher build is
 clean (`swift build -c release`, 0 warnings). One logging-only race remains open and is not claimed fixed: `hidInputs` is
 incremented on `hidQueue` and reset on the main thread.
 
@@ -47,7 +47,7 @@ yet fix, including a full-frame scanout copy per present in libkrun.
 3. Ad-hoc sign the app with the entitlements of the release build.
 4. macOS treats the re-signed app as a new app: it asks again for microphone permission and keychain access.
 
-The libkrun 0018/0019 and KosmicKrisp 0041/0042/0047 changes are separate components of the bundle. They are **experimental**: each passed its adversarial re-verification. The async-pipeline crash of the combined app is addressed by 0047 in code (see above), without live confirmation on record. KosmicKrisp 0041 remains opt-in at run time (`MESA_KK_ASYNC_PIPELINES`, off by default, not recommended). Prefer the release app plus `fex-eac/`.
+The libkrun 0018/0019 and KosmicKrisp 0041/0042/0047 changes are separate components of the bundle. They are **experimental**: each passed its adversarial re-verification. The async-pipeline crash of the combined app is addressed by 0047 in code (see above), without live confirmation on record. KosmicKrisp 0041 remains opt-in at run time (`MESA_KK_ASYNC_PIPELINES`, off by default, not recommended). These historical results do not verify the current `.3` runtime.
 
 ## Documents
 

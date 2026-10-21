@@ -1,12 +1,15 @@
 # EAC in the SteamOS guest via Valve's FEX compat tool
 
-Run Easy Anti-Cheat games (tested: VRChat) on a steamac Mac by replacing the FEX inside Steam's own FEX compatibility tool
+Prepare a Linux Easy Anti-Cheat runtime on a steamac Mac by replacing FEX inside Steam's own FEX compatibility tool
 (Steam app 3127680) with the patched FEX from [StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610): branch `eac-2610` = FEX-2610 plus the EAC fidelity patches, pinned here to tag
 [`eac-2610.3`](https://github.com/StonkGuy/FEX/releases/tag/eac-2610.3).
 
+The recorded VRChat sessions used `eac-2610.2`. The current `.3` pin and automatic setup have not passed a real game test.
+
 EAC's Linux module runs the game under the x86-64 Proton that itself runs inside Steam's FEX tool. The module drives the
 game through `ptrace` and depends on exact Linux signal semantics; Valve's FEX-2607 build fails that under emulation, so
-the session never authenticates. The patched FEX passes the `ptrace` and signal-fidelity tests in the research repo below.
+the session never authenticates. The earlier `.2` runtime passed the `ptrace` and signal-fidelity tests in the research repo below;
+the current `.3` runtime still needs those checks inside the guest.
 
 | patch | what it is |
 |---|---|
