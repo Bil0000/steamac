@@ -14,7 +14,7 @@ enum L10nSelfTest {
     static var probes: [String] {
         ["Graphics path", "DXMT (lean)", "Vulkan (classic)", "Applies from the next start.",
          "Not available here: %@; Vulkan is used.", "Render scale", "Off (1.0×)", "Upscale lower game resolutions",
-         "Frame latency", "Loading…", "not included in this build (%@)"]
+         "Frame latency", "Experimental game support", "Loading…", "not included in this build (%@)"]
     }
 
     static func run() -> Never {

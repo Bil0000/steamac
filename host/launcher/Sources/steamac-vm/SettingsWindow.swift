@@ -1063,6 +1063,11 @@ private struct AdvancedTab: View {
                            now: false, key: .frameLatency)
                 }
                 .disabled(settings.graphicsPath == .dxmt)
+                Toggle(isOn: $settings.experimentalGameSupport) {
+                    Label2(title: "Experimental game support",
+                           detail: String(localized: "Downloads and builds a Linux game runtime on first use. Restart Steam when setup finishes. Game support varies."),
+                           now: false, key: .experimentalGameSupport)
+                }
             }
             Section {
                 HStack {

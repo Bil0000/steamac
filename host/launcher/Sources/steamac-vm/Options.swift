@@ -79,6 +79,7 @@ struct Options {
     /// Settings > Advanced "Frame latency" (kernel cmdline `steamac.frame_latency=1`): the guest's
     /// DXVK config gets dxgi.maxFrameLatency = 1 for the Vulkan path. Default false: unset.
     var frameLatency = false
+    var experimentalGameSupport = false
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
     var gvproxyPath: String?
@@ -143,6 +144,7 @@ struct Options {
                       [--no-crash-reports] [--steam-client frame|deck|deckbeta]
                       [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan]
                       [--frame-latency | --no-frame-latency] [--lan-remote-play | --no-lan-remote-play]
+                      [--experimental-game-support | --no-experimental-game-support]
            steamac-vm --selftest-display [--headless] [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-overlay [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-stall [--selftest-out DIR] [--display WxH]
@@ -239,6 +241,11 @@ struct Options {
                            dxgi.maxFrameLatency = 1 (Vulkan path only), trading some throughput for
                            lower input latency. Off means no key is added, so the guest side is
                            unchanged. --no-frame-latency turns it off for this run.
+      --experimental-game-support  experimental game support on (kernel cmdline steamac.fex_eac=1|0,
+                           added on every boot; default: Settings > Advanced "Experimental game
+                           support", off): downloads and builds a Linux game runtime on first use;
+                           restart Steam when setup finishes. Game support varies.
+                           --no-experimental-game-support turns it off for this run.
 
     Creating a SteamOS disk (no Docker; the same code as Settings > Advanced "Create New Disk…"):
       --create-disk PATH   download the signed SteamOS bundle of the branch (default: the saved setting,
@@ -391,6 +398,8 @@ struct Options {
             case "--selftest-graphics-path": o.selftestGraphicsPath = true
             case "--frame-latency": o.frameLatency = true
             case "--no-frame-latency": o.frameLatency = false
+            case "--experimental-game-support": o.experimentalGameSupport = true
+            case "--no-experimental-game-support": o.experimentalGameSupport = false
             case "--vulkan-driver":
                 let v = try value(a)
                 guard let d = LauncherSettings.VulkanDriver(rawValue: v) else {
@@ -491,6 +500,15 @@ struct Options {
         on ? ("steamac.frame_latency", "1") : nil
     }
 
+    static func experimentalGameSupportArg(_ on: Bool) -> (key: String, value: String) {
+        ("steamac.fex_eac", on ? "1" : "0")
+    }
+
+    static func kernelArg(_ key: String, _ value: @autoclosure () -> String?, unlessSetIn cmdline: String) -> String {
+        guard !cmdline.split(separator: " ").contains(where: { $0.hasPrefix(key + "=") }), let v = value() else { return "" }
+        return " \(key)=\(v)"
+    }
+
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
             || selftestMetalCache || selftestGameLayers || selftestL10n || createDisk != nil || growDisk != nil
@@ -520,11 +538,8 @@ struct Options {
             AppBundle.fill(&o, settings: settings, overrides: &overrides)
             Provision.attachPending(&o)
             Provision.attachConfig(&o)
-            let words = o.cmdline.split(separator: " ")
-            func add(_ key: String, _ value: @autoclosure () -> String?) {
-                guard !words.contains(where: { $0.hasPrefix(key + "=") }), let v = value() else { return }
-                o.cmdline += " \(key)=\(v)"
-            }
+            let given = o.cmdline
+            func add(_ key: String, _ value: @autoclosure () -> String?) { o.cmdline += Options.kernelArg(key, value(), unlessSetIn: given) }
             add("steamac.ssh", o.sshPort == 0 ? "0" : "1")
             add("steamac.steam_client", o.steamClient.rawValue)
             add("steamac.gpu_mib", String(VMSizing.gpuBudgetMiB(memMiB: o.memMiB)))
@@ -532,6 +547,8 @@ struct Options {
             add("steamac.gfx", o.graphicsPath.rawValue)
             // only written when on; absent is the default (off), so an explicit =0 needs no key
             if let a = Options.frameLatencyArg(o.frameLatency) { add(a.key, a.value) }
+            let fex = Options.experimentalGameSupportArg(o.experimentalGameSupport)
+            add(fex.key, fex.value)
             if o.macTime {
                 add("steamac.tz", MacTime.zone)
                 add("steamac.clock24", MacTime.clock24.map { $0 ? "1" : "0" })
@@ -589,6 +606,9 @@ struct Options {
         if given("--frame-latency") || given("--no-frame-latency") {
             ov[.frameLatency] = frameLatency ? "--frame-latency" : "--no-frame-latency"
         } else { frameLatency = s.frameLatency }
+        if given("--experimental-game-support") || given("--no-experimental-game-support") {
+            ov[.experimentalGameSupport] = experimentalGameSupport ? "--experimental-game-support" : "--no-experimental-game-support"
+        } else { experimentalGameSupport = s.experimentalGameSupport }
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }
