@@ -61,7 +61,9 @@ final class Presenter: DisplaySink {
         let perf = PerfStats.shared
         var stamp = perf?.frameTaken() ?? PerfStats.FrameStamp()
         let t0 = perf != nil ? CACurrentMediaTime() : 0
+        let sizeChanged = renderer.texture?.width != f.buffer.width || renderer.texture?.height != f.buffer.height
         renderer.upload(f)
+        if sizeChanged, let view { view.window?.invalidateCursorRects(for: view) }
         if let perf {
             let ms = (CACurrentMediaTime() - t0) * 1000
             perf.uploaded(ms: ms)
@@ -115,6 +117,13 @@ final class VMView: NSView {
     override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    private static let guestCursor = NSCursor(image: NSImage(size: NSSize(width: 16, height: 16)), hotSpot: .zero)
+
+    override func resetCursorRects() {
+        guard let rect = controller?.hostCursorRect?.intersection(visibleRect), !rect.isEmpty else { return }
+        addCursorRect(rect, cursor: Self.guestCursor)
+    }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()

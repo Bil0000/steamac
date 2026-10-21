@@ -61,6 +61,7 @@ struct Options {
     var selftestOverlay = false
     var selftestStall = false
     var selftestPill = false
+    var selftestCursor = false
     var headless = false
     var logFile: String?
     var network = true
@@ -396,6 +397,7 @@ struct Options {
                 }
                 o.graphicsPath = g
             case "--selftest-graphics-path": o.selftestGraphicsPath = true
+            case "--selftest-cursor": o.selftestCursor = true
             case "--frame-latency": o.frameLatency = true
             case "--no-frame-latency": o.frameLatency = false
             case "--experimental-game-support": o.experimentalGameSupport = true
@@ -511,7 +513,7 @@ struct Options {
 
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
-            || selftestMetalCache || selftestGameLayers || selftestL10n || createDisk != nil || growDisk != nil
+            || selftestMetalCache || selftestGameLayers || selftestL10n || selftestCursor || createDisk != nil || growDisk != nil
             || showSSHPassword != nil
     }
 

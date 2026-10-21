@@ -52,6 +52,7 @@ if options.selftestDisplay { SelfTest.run(options) }
 if options.selftestOverlay { OverlaySelfTest.run(options) }
 if options.selftestStall { StallSelfTest.run(options) }
 if options.selftestPill { PillSelfTest.run(options) }
+if options.selftestCursor { CursorSelfTest.run() }
 if options.selftestSettings { SettingsSelfTest.run(options, overrides: settingsOverrides) }
 if options.selftestProvision { ProvisionSelfTest.run(options) }
 if options.selftestRemotePlay { RemotePlaySelfTest.run() }

@@ -42,11 +42,11 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// "Game paused" (GamePause confirmed a frozen game), above everything else.
     let pauseView: PauseOverlayView
     /// App id shown as paused (nil = not paused).
-    private(set) var pausedGame: Int?
+    private(set) var pausedGame: Int? { didSet { window.invalidateCursorRects(for: view) } }
     /// "SteamOS is sleeping" (the guest went to sleep, SuspendController paused the VM).
     let sleepView: PauseOverlayView
     /// The guest sleeps: nothing reaches it; the first click, key or controller button wakes it.
-    private(set) var guestAsleep = false
+    private(set) var guestAsleep = false { didSet { window.invalidateCursorRects(for: view) } }
     /// A click / key while the guest sleeps (argument: what it was, for the log).
     var onWakeRequest: ((String) -> Void)?
     /// "Resuming…" chip after a suspend, until the guest's next frame.
@@ -68,13 +68,13 @@ final class WindowController: NSObject, NSWindowDelegate {
     private var tabletButtons = Set<UInt16>()
     private var mouseButtons = Set<UInt16>()
     private var lastAbs: (Int32, Int32) = (-1, -1)
-    private var captured = false
+    private var captured = false { didSet { window.invalidateCursorRects(for: view) } }
     private var relRemainder = (0.0, 0.0)
     /// Auto mode: where the guest cursor is (guest pixels); nil = unknown, re-anchor first.
     private var guestCursor: (Int, Int)?
     private var lastPointerMotion = Date.distantPast
     /// What the guest says has focus (progress agent `focus …`); Steam until told otherwise.
-    private(set) var guestFocus: GuestFocus = .steam
+    private(set) var guestFocus: GuestFocus = .steam { didSet { window.invalidateCursorRects(for: view) } }
     private var wheelHiRemainder = (0.0, 0.0)   // (vertical, horizontal) in 1/120 notch units
     private var wheelLoAccum: (Int32, Int32) = (0, 0)
     private var scanoutSize: (Int, Int)
@@ -146,8 +146,10 @@ final class WindowController: NSObject, NSWindowDelegate {
         pill.onClick = { [weak self] in self?.expandPill() }
         pill.clickable = { [weak self] in self.map { $0.bootOrShutdown && !$0.captured } ?? false }
         overlay.onVisibilityChange = { [weak self] _ in
-            self?.updateStallGate()
-            self?.updatePill()
+            guard let self else { return }
+            self.updateStallGate()
+            self.updatePill()
+            self.window.invalidateCursorRects(for: self.view)
         }
         pauseView.frame = view.bounds
         view.addSubview(pauseView)
@@ -221,6 +223,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     func scanoutResized(width: Int, height: Int) {
         view.contentPixelSize = CGSize(width: width, height: height)
         scanoutSize = (width, height)
+        window.invalidateCursorRects(for: view)
         updateUpscaleCap()
         view.redraw()
     }
@@ -721,6 +724,11 @@ final class WindowController: NSObject, NSWindowDelegate {
 
     private var usesTablet: Bool {
         mouseMode == .tablet
+    }
+
+    var hostCursorRect: NSRect? {
+        guard inputs != nil, !usesTablet, !captured, !overlay.shown, pausedGame == nil, !guestAsleep else { return nil }
+        return pointerRect
     }
 
     /// The surface relative motion lands on, in its pixels: the Desktop Mode desktop window, else
