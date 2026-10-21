@@ -7,8 +7,8 @@ WORK=${WORK:-$HOME/fex-eac-work}
 SRC=$WORK/FEX
 STAGE=$WORK/stage
 REPO=https://github.com/StonkGuy/FEX.git
-FEX_EAC_TAG=eac-2610.2
-FEX_EAC_SHA=cc1cc2a14da9f2e844f5b2b2b5bec3db237bb836
+FEX_EAC_TAG=eac-2610.3
+FEX_EAC_SHA=938eedfcd79eb00e86561fbdf4933770766f0ba9
 
 # Clone the exact tag with shallow submodules unless the tree is already there.
 if [ ! -d "$SRC/.git" ]; then
@@ -21,8 +21,10 @@ cd "$SRC"
 # applied by git am) or from another tag is not updated in place.
 HEADSHA=$(git rev-parse HEAD)
 if [ "$HEADSHA" != "$FEX_EAC_SHA" ]; then
-  if git cat-file -e "$FEX_EAC_TAG^{commit}" 2>/dev/null &&
-     [ "$(git rev-parse "$FEX_EAC_TAG^{commit}")" = "$FEX_EAC_SHA" ] && git diff --quiet HEAD; then
+  if git diff --quiet --ignore-submodules=none HEAD -- &&
+     { git cat-file -e "$FEX_EAC_TAG^{commit}" 2>/dev/null ||
+       git fetch -q origin "refs/tags/$FEX_EAC_TAG:refs/tags/$FEX_EAC_TAG"; } &&
+     [ "$(git rev-parse "$FEX_EAC_TAG^{commit}")" = "$FEX_EAC_SHA" ]; then
     git checkout -q "$FEX_EAC_TAG" && git submodule update --init --recursive --depth 1
   else
     echo "$SRC is at $(git rev-parse --short HEAD), not $FEX_EAC_TAG ($FEX_EAC_SHA)." >&2
@@ -33,6 +35,9 @@ if [ "$HEADSHA" != "$FEX_EAC_SHA" ]; then
 fi
 [ "$(git rev-parse "$FEX_EAC_TAG^{commit}")" = "$FEX_EAC_SHA" ] ||
   { echo "$FEX_EAC_TAG is $(git rev-parse "$FEX_EAC_TAG^{commit}"), expected $FEX_EAC_SHA" >&2; exit 1; }
+git diff --quiet --ignore-submodules=none HEAD -- ||
+  { echo "$SRC has local changes; leaving the source and staged runtime untouched." >&2; exit 1; }
+git submodule update --init --recursive --depth 1
 
 # Release Steam-mode build: no tests, thunks or FEXConfig, native CPU tuning, module scanning off for clang 19.
 cmake -S . -B build-steam -G Ninja \
@@ -51,6 +56,8 @@ cmake -S . -B build-steam -G Ninja \
 
 # Build and stage only the Runtime component: that is what Valve's compat tool ships.
 cmake --build build-steam -j"${JOBS:-$(nproc)}"
+rm -f "$STAGE/.steamac-fex-source"
 DESTDIR=$STAGE cmake --install build-steam --component Runtime
+echo "$FEX_EAC_SHA" > "$STAGE/.steamac-fex-source.new" && mv -f "$STAGE/.steamac-fex-source.new" "$STAGE/.steamac-fex-source"
 
 echo "staged: $STAGE ($FEX_EAC_TAG)"
