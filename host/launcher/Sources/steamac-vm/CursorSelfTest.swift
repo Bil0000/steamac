@@ -32,17 +32,6 @@ enum CursorSelfTest {
         let tablet = WindowController(title: "Tablet cursor test", width: 800, height: 500,
                                       renderer: wc.view.renderer, inputs: inputs, mouseMode: .tablet)
         if tablet.hostCursorRect != nil { failures.append("tablet mode hides its only usable cursor") }
-        func wait(_ condition: () -> Bool) -> Bool {
-            let deadline = Date().addingTimeInterval(2)
-            repeat {
-                if condition() { return true }
-                if let e = app.nextEvent(matching: .any, until: Date().addingTimeInterval(0.01), inMode: .default, dequeue: true) {
-                    app.sendEvent(e)
-                }
-                app.updateWindows()
-            } while Date() < deadline
-            return condition()
-        }
         func visible() -> Bool? {
             guard let data = NSCursor.currentSystem?.image.tiffRepresentation,
                   let pixels = NSBitmapImageRep(data: data) else { return nil }
@@ -54,7 +43,7 @@ enum CursorSelfTest {
             return false
         }
         func expect(_ shown: Bool, _ name: String) {
-            if !wait({ visible() == shown }) { failures.append(name) }
+            if !InputSelfTest.wait({ visible() == shown }) { failures.append(name) }
         }
         func move(in window: NSWindow, _ point: NSPoint) {
             let p = window.convertPoint(toScreen: point)
@@ -63,7 +52,7 @@ enum CursorSelfTest {
             CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: screen, mouseButton: .left)?.post(tap: .cghidEventTap)
         }
         wc.show()
-        guard wait({ wc.window.isKeyWindow && app.isActive }) else { return ["test window did not become active"] }
+        guard InputSelfTest.wait({ wc.window.isKeyWindow && app.isActive }) else { return ["test window did not become active"] }
         let center = NSPoint(x: wc.view.bounds.midX, y: wc.view.bounds.midY)
         move(in: wc.window, center)
         expect(false, "Steam picture still shows the Mac cursor")

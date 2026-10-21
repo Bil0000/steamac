@@ -484,7 +484,7 @@ private struct DisplayTab: View {
             Section {
                 Toggle(isOn: $settings.metalHUD) {
                     Label2(title: "Metal Performance HUD",
-                           detail: String(localized: "Apple's frame-rate overlay in the top-right corner of the window: FPS, frame interval, GPU time, memory (Ctrl+Cmd+P, View menu)."),
+                           detail: String(localized: "Apple's frame-rate overlay in the top-right corner of the window: FPS, frame interval, GPU time, memory (View menu)."),
                            now: true)
                 }
                 Toggle(isOn: $settings.superResolution) {
@@ -518,7 +518,7 @@ private struct MouseTab: View {
                            detail: String(localized: "While a game has focus, a click captures the pointer (relative motion for mouse-look)."),
                            now: true, key: .autoCaptureGames)
                 }
-                LabeledContent("Release the mouse") { Text("Ctrl+Option  (Ctrl+Cmd+G toggles)").foregroundStyle(.secondary) }
+                LabeledContent("Release the mouse") { Text("Ctrl+Option").foregroundStyle(.secondary) }
                 LabeledContent("Steam UI and desktop") {
                     Text("pointer follows the Mac cursor 1:1 (fixed)").foregroundStyle(.secondary)
                 }

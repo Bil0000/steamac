@@ -22,10 +22,6 @@ final class WindowController: NSObject, NSWindowDelegate {
     private let mouseMode: MouseMode
     private let baseTitle: String
     var onCloseRequest: (() -> Void)?
-    /// Ctrl+Cmd+S while the VM window has the keyboard (the menu's Suspend).
-    var onSuspendRequest: (() -> Void)?
-    /// Cmd+, while the VM window has the keyboard (keys otherwise all go to the guest).
-    var onOpenSettings: (() -> Void)?
     /// Launcher settings (live values: overlay, follow window size, mouse auto-capture).
     let settings: LauncherSettings
     private var subscriptions: [AnyCancellable] = []
@@ -65,6 +61,8 @@ final class WindowController: NSObject, NSWindowDelegate {
     private var collapseIsSticky = false
 
     private var pressedKeys = Set<UInt16>()
+    private var heldModifiers = Set<UInt16>()
+    private let keyBindings = GuestKeyBindings()
     private var tabletButtons = Set<UInt16>()
     private var mouseButtons = Set<UInt16>()
     private var lastAbs: (Int32, Int32) = (-1, -1)
@@ -636,7 +634,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// Returns true if the event was consumed (only while our window is key).
     func handleKeyEvent(_ e: NSEvent) -> Bool {
         guard e.type == .keyDown || e.type == .keyUp || e.type == .flagsChanged,
-              e.window === window || (e.window == nil && window.isKeyWindow), window.isKeyWindow else { return false }
+              e.window === window || (e.window == nil && window.isKeyWindow), window.isKeyWindow, window.firstResponder === view else { return false }
         return processKey(e)
     }
 
@@ -647,21 +645,10 @@ final class WindowController: NSObject, NSWindowDelegate {
         switch e.type {
         case .keyDown:
             userInput("key")
-            if mods.contains([.control, .command]) {
-                switch Int(e.keyCode) {
-                case kVK_ANSI_F: toggleFullScreen(); return true
-                case kVK_ANSI_G: captured ? releasePointer() : grabPointer(); return true
-                case kVK_ANSI_P: toggleMetalHUD(); return true
-                case kVK_ANSI_S:
-                    guard let onSuspendRequest else { break }
-                    onSuspendRequest()
-                    return true
-                default: break
-                }
-            }
-            if mods == .command && Int(e.keyCode) == kVK_ANSI_Comma, let onOpenSettings {
-                releaseAll()
-                onOpenSettings()
+            if MainMenu.performKeyEquivalent(with: e, editing: nativeEditing) { return true }
+            if nativeTextBindings, !mods.contains(.control), !mods.intersection([.command, .option]).isEmpty,
+               let commands = keyBindings.resolve(e) {
+                sendGuestCommands(commands)
                 return true
             }
             if e.isARepeat { return true }   // guest does autorepeat
@@ -670,6 +657,7 @@ final class WindowController: NSObject, NSWindowDelegate {
                 wakeGuest("key")
                 return true
             }
+            sendHeldModifiers()
             guard let code = Keymap.linuxKey(e.keyCode) else { return true }
             if pressedKeys.insert(code).inserted { sendKey(code, true) }
             return true
@@ -686,20 +674,46 @@ final class WindowController: NSObject, NSWindowDelegate {
                 sendKey(KEY.CAPSLOCK, false)
             } else if let mask = Keymap.modifierMask(e.keyCode), let code = Keymap.linuxKey(e.keyCode) {
                 let down = (UInt(e.modifierFlags.rawValue) & mask) != 0
-                if down, pressedKeys.insert(code).inserted { sendKey(code, true) }
-                if !down, pressedKeys.remove(code) != nil { sendKey(code, false) }
+                if down {
+                    heldModifiers.insert(code)
+                    if !nativeTextBindings || mods.contains(.control) {
+                        if pressedKeys.insert(code).inserted { sendKey(code, true) }
+                    }
+                } else {
+                    heldModifiers.remove(code)
+                    if pressedKeys.remove(code) != nil { sendKey(code, false) }
+                }
             }
             if captured && mods.contains([.control, .option]) { releasePointer() }
             return true
         }
     }
 
-    private func sendKey(_ code: UInt16, _ down: Bool) {
-        inputs?.keyboard.send([(EV.KEY, code, down ? 1 : 0)])
+    var nativeEditing: Bool {
+        inputs != nil && !captured && focusedGame == nil && !guestAsleep && pausedGame == nil
     }
 
-    private func toggleFullScreen() {
-        window.toggleFullScreen(nil)
+    private var nativeTextBindings: Bool { nativeEditing && guestFocus == .steam }
+
+    func performGuestEdit(_ selector: Selector) {
+        guard nativeEditing, let commands = GuestEditCommand.keys(for: selector) else { return }
+        sendGuestCommands(commands)
+    }
+
+    private func sendGuestCommands(_ commands: [[UInt16]]) {
+        for modifier in heldModifiers.sorted() where pressedKeys.remove(modifier) != nil { sendKey(modifier, false) }
+        for keys in commands {
+            for code in keys { sendKey(code, true) }
+            for code in keys.reversed() { sendKey(code, false) }
+        }
+    }
+
+    private func sendHeldModifiers() {
+        for modifier in heldModifiers.sorted() where pressedKeys.insert(modifier).inserted { sendKey(modifier, true) }
+    }
+
+    private func sendKey(_ code: UInt16, _ down: Bool) {
+        inputs?.keyboard.send([(EV.KEY, code, down ? 1 : 0)])
     }
 
     // MARK: pointer
@@ -791,7 +805,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         updateTitle()
         if let id = focusedGame, mouseMode == .auto {
             flashStatus(settings.autoCapture(for: id) ? String(localized: "click to capture the mouse (Ctrl+Option releases)")
-                                                      : String(localized: "auto-capture off for \(gameLabel(id)) (Ctrl+Cmd+G captures)"))
+                                                      : String(localized: "auto-capture off for \(gameLabel(id))"))
         }
     }
 
@@ -838,7 +852,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         let entries: [(LocalizedStringResource, Selector)] = [
             ("Capture Mouse in This Game", #selector(toggleGameAutoCapture(_:))),
             ("Auto-Capture Mouse in Games", #selector(toggleGlobalAutoCapture(_:))),
-            ("Capture / Release Mouse Now (Ctrl+Cmd+G)", #selector(toggleCaptureNow(_:))),
+            ("Capture / Release Mouse Now", #selector(toggleCaptureNow(_:))),
         ]
         for (title, action) in entries {
             let i = NSMenuItem(title: String(localized: title), action: action, keyEquivalent: "")
@@ -911,6 +925,7 @@ extension WindowController {
     func releaseAll() {
         for k in pressedKeys { sendKey(k, false) }
         pressedKeys.removeAll()
+        heldModifiers.removeAll()
         releasePointer()
         releaseButtons()
         guestCursor = nil
@@ -1019,6 +1034,7 @@ extension WindowController {
         if !down && swallowedButtons.remove(b) != nil { return }
         if down { userInput("click") }
         if captured {
+            if down { sendHeldModifiers() }
             if down ? mouseButtons.insert(b).inserted : mouseButtons.remove(b) != nil {
                 inputs.mouse.send([(EV.KEY, b, down ? 1 : 0)])
             }
@@ -1033,6 +1049,7 @@ extension WindowController {
         }
         // The tablet only advertises LEFT/RIGHT/MIDDLE (see InputDevices); other buttons and the
         // auto mode use the relative mouse.
+        if down { sendHeldModifiers() }
         if usesTablet && InputDevices.tabletButtons.contains(b) {
             if down {
                 moveTablet(e)
@@ -1056,6 +1073,7 @@ extension WindowController {
             guard inPicture(e) else { return }
             if usesTablet { moveTablet(e) } else { moveEmulated(e) }
         }
+        sendHeldModifiers()
         // 120 = one wheel notch. Precise (trackpad) deltas are points: ~30 pt per notch.
         let scale = e.hasPreciseScrollingDeltas ? 4.0 : 120.0
         sendWheel(hiResY: Double(e.scrollingDeltaY) * scale, hiResX: -Double(e.scrollingDeltaX) * scale)
@@ -1084,6 +1102,16 @@ extension WindowController {
 }
 
 enum MainMenu {
+    private static weak var editMenu: NSMenu?
+
+    static func performKeyEquivalent(with event: NSEvent, editing: Bool) -> Bool {
+        for item in NSApp.mainMenu?.items ?? [] {
+            guard let menu = item.submenu, editing || menu !== editMenu else { continue }
+            if menu.performKeyEquivalent(with: event) { return true }
+        }
+        return false
+    }
+
     static func install(target: AnyObject, settings: Selector, report: Selector, checkForUpdates: Selector, restart: Selector,
                         suspend: Selector, shutdown: Selector, forceQuit: Selector, fullscreen: Selector, grab: Selector,
                         overlay: Selector, metalHUD: Selector) {
@@ -1098,7 +1126,6 @@ enum MainMenu {
         appMenu.addItem(item("Settings…", settings, target, key: ","))
         appMenu.addItem(item("Report a Problem…", report, target))
         appMenu.addItem(.separator())
-        // Ctrl+Cmd+S also works while the VM window has the keyboard (WindowController.processKey).
         let suspendItem = item(LocalizedStringResource("Suspend", comment: "App menu: freeze the VM in memory"), suspend, target, key: "s")
         suspendItem.keyEquivalentModifierMask = [.command, .control]
         appMenu.addItem(suspendItem)
@@ -1107,18 +1134,23 @@ enum MainMenu {
         appMenu.addItem(item("Force Quit", forceQuit, target))
         appMenu.addItem(.separator())
         // Lifecycle.applicationShouldTerminate decides (shut down; asks first while suspended).
-        // While the VM window has the keyboard, Cmd+Q goes to the guest like every key.
         appMenu.addItem(NSMenuItem(title: String(localized: "Quit FX Steam Launcher"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         addEditAndWindowMenus(main)
         let viewItem = NSMenuItem()
         main.insertItem(viewItem, at: 2)
         let viewMenu = NSMenu(title: String(localized: "View", comment: "Menu for display controls"))
         viewItem.submenu = viewMenu
-        viewMenu.addItem(item("Toggle Full Screen (Ctrl+Cmd+F)", fullscreen, target))
-        viewMenu.addItem(item("Grab Pointer (Ctrl+Cmd+G; Ctrl+Option releases)", grab, target))
+        let fullscreenItem = item("Toggle Full Screen", fullscreen, target, key: "f")
+        fullscreenItem.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(fullscreenItem)
+        let grabItem = item("Grab Pointer", grab, target, key: "g")
+        grabItem.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(grabItem)
         viewMenu.addItem(item("Show Boot Progress", overlay, target))
         // Ticked by the target's validateMenuItem (follows Settings > Display and Ctrl+Cmd+P).
-        viewMenu.addItem(item("Show Metal Performance HUD (Ctrl+Cmd+P)", metalHUD, target))
+        let hudItem = item("Show Metal Performance HUD", metalHUD, target, key: "p")
+        hudItem.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(hudItem)
         let help = NSMenu(title: String(localized: "Help", comment: "Application help menu"))
         help.addItem(item("Report a Problem…", report, target))
         let helpItem = NSMenuItem()
@@ -1144,6 +1176,7 @@ enum MainMenu {
     /// Standard Edit (text fields in Settings) and Window (Cmd+W closes Settings) menus.
     private static func addEditAndWindowMenus(_ main: NSMenu) {
         let edit = NSMenu(title: String(localized: "Edit", comment: "Standard text editing menu"))
+        editMenu = edit
         let entries: [(LocalizedStringResource, Selector, String)] = [
             ("Undo", Selector(("undo:")), "z"), ("Redo", Selector(("redo:")), "Z"),
             ("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"),
@@ -1153,6 +1186,10 @@ enum MainMenu {
         for (title, action, key) in entries {
             edit.addItem(NSMenuItem(title: String(localized: title), action: action, keyEquivalent: key))
         }
+        let find = NSMenuItem(title: String(localized: "Find…"), action: Selector(("performFindPanelAction:")), keyEquivalent: "f")
+        find.tag = 1
+        edit.addItem(.separator())
+        edit.addItem(find)
         let editItem = NSMenuItem()
         editItem.submenu = edit
         main.addItem(editItem)

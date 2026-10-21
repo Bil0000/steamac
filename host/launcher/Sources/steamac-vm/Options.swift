@@ -62,6 +62,7 @@ struct Options {
     var selftestStall = false
     var selftestPill = false
     var selftestCursor = false
+    var selftestShortcuts = false
     var headless = false
     var logFile: String?
     var network = true
@@ -316,8 +317,8 @@ struct Options {
                            update check|startup|state | update press download|skip|later|ok |
                            update dump PNG (+ -with-vm = beside the VM window, as on screen)
 
-    Window keys: Ctrl+Cmd+F fullscreen, Ctrl+Cmd+G capture/release the mouse, Ctrl+Option release,
-    Ctrl+Cmd+P Metal Performance HUD on/off (Settings > Display).
+    Window keys follow the Mac menu bindings. See the View and Mouse menus.
+    Ctrl+Option releases the mouse.
     Closing the window (or SIGINT/SIGTERM) presses the guest power key; a second request force-quits.
     Console: hvc0 <-> this terminal (raw mode when stdin is a TTY; Ctrl+] twice force-quits).
     """
@@ -398,6 +399,7 @@ struct Options {
                 o.graphicsPath = g
             case "--selftest-graphics-path": o.selftestGraphicsPath = true
             case "--selftest-cursor": o.selftestCursor = true
+            case "--selftest-shortcuts": o.selftestShortcuts = true
             case "--frame-latency": o.frameLatency = true
             case "--no-frame-latency": o.frameLatency = false
             case "--experimental-game-support": o.experimentalGameSupport = true
@@ -513,7 +515,7 @@ struct Options {
 
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
-            || selftestMetalCache || selftestGameLayers || selftestL10n || selftestCursor || createDisk != nil || growDisk != nil
+            || selftestMetalCache || selftestGameLayers || selftestL10n || selftestCursor || selftestShortcuts || createDisk != nil || growDisk != nil
             || showSSHPassword != nil
     }
 

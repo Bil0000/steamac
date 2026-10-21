@@ -538,18 +538,18 @@
         }
       }
     },
-    "Apple's frame-rate overlay in the top-right corner of the window: FPS, frame interval, GPU time, memory (Ctrl+Cmd+P, View menu)." : {
+    "Apple's frame-rate overlay in the top-right corner of the window: FPS, frame interval, GPU time, memory (View menu)." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Панель частоты кадров Apple в правом верхнем углу окна: FPS, интервал между кадрами, время GPU, память (Ctrl+Cmd+P, меню «Вид»)."
+            "value" : "Панель частоты кадров Apple в правом верхнем углу окна: FPS, интервал между кадрами, время GPU, память (меню «Вид»)."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在窗口右上角显示 Apple 的帧率叠加层：FPS、帧间隔、GPU 时间和内存（Ctrl+Cmd+P，“显示”菜单）。"
+            "value" : "在窗口右上角显示 Apple 的帧率叠加层：FPS、帧间隔、GPU 时间和内存（“显示”菜单）。"
           }
         }
       }
@@ -874,18 +874,18 @@
         }
       }
     },
-    "Capture / Release Mouse Now (Ctrl+Cmd+G)" : {
+    "Capture / Release Mouse Now" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Захватить / освободить мышь сейчас (Ctrl+Cmd+G)"
+            "value" : "Захватить / освободить мышь сейчас"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "立即捕获或释放鼠标（Ctrl+Cmd+G）"
+            "value" : "立即捕获或释放鼠标"
           }
         }
       }
@@ -1340,18 +1340,18 @@
         }
       }
     },
-    "Ctrl+Option  (Ctrl+Cmd+G toggles)" : {
+    "Ctrl+Option" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ctrl+Option  (Ctrl+Cmd+G переключает)"
+            "value" : "Ctrl+Option"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ctrl+Option  （Ctrl+Cmd+G 切换）"
+            "value" : "Ctrl+Option"
           }
         }
       }
@@ -2153,6 +2153,22 @@
         }
       }
     },
+    "Find…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Найти…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找…"
+          }
+        }
+      }
+    },
     "Fixed DPI" : {
       "localizations" : {
         "ru" : {
@@ -2415,18 +2431,18 @@
         }
       }
     },
-    "Grab Pointer (Ctrl+Cmd+G; Ctrl+Option releases)" : {
+    "Grab Pointer" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Захватить указатель (Ctrl+Cmd+G; Ctrl+Option освобождает)"
+            "value" : "Захватить указатель"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "捕获指针（Ctrl+Cmd+G；Ctrl+Option 释放）"
+            "value" : "捕获指针"
           }
         }
       }
@@ -4640,18 +4656,18 @@
         }
       }
     },
-    "Show Metal Performance HUD (Ctrl+Cmd+P)" : {
+    "Show Metal Performance HUD" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Показать панель производительности Metal (Ctrl+Cmd+P)"
+            "value" : "Показать панель производительности Metal"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "显示 Metal 性能 HUD（Ctrl+Cmd+P）"
+            "value" : "显示 Metal 性能 HUD"
           }
         }
       }
@@ -6063,18 +6079,18 @@
         }
       }
     },
-    "Toggle Full Screen (Ctrl+Cmd+F)" : {
+    "Toggle Full Screen" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Переключить полноэкранный режим (Ctrl+Cmd+F)"
+            "value" : "Переключить полноэкранный режим"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切换全屏（Ctrl+Cmd+F）"
+            "value" : "切换全屏"
           }
         }
       }
@@ -6831,22 +6847,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已为 %@ 关闭自动捕获"
-          }
-        }
-      }
-    },
-    "auto-capture off for %@ (Ctrl+Cmd+G captures)" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "автозахват выключен для %@ (Ctrl+Cmd+G захватывает)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已为 %@ 关闭自动捕获（Ctrl+Cmd+G 手动捕获）"
           }
         }
       }

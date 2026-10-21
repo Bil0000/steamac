@@ -80,7 +80,7 @@ final class Presenter: DisplaySink {
 }
 
 /// NSView backed by a CAMetalLayer showing the guest scanout, aspect-fit and Retina-aware.
-final class VMView: NSView {
+final class VMView: NSView, NSUserInterfaceValidations {
     let renderer: Renderer
     let metalLayer = CAMetalLayer()
     /// Fallback geometry for pointer mapping before the first frame.
@@ -117,6 +117,19 @@ final class VMView: NSView {
     override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    @objc func performFindPanelAction(_ sender: Any?) { controller?.performGuestEdit(#selector(performFindPanelAction(_:))) }
+    @objc func copy(_ sender: Any?) { controller?.performGuestEdit(#selector(copy(_:))) }
+    @objc func cut(_ sender: Any?) { controller?.performGuestEdit(#selector(cut(_:))) }
+    @objc func paste(_ sender: Any?) { controller?.performGuestEdit(#selector(paste(_:))) }
+    override func selectAll(_ sender: Any?) { controller?.performGuestEdit(#selector(selectAll(_:))) }
+    @objc func undo(_ sender: Any?) { controller?.performGuestEdit(#selector(undo(_:))) }
+    @objc func redo(_ sender: Any?) { controller?.performGuestEdit(#selector(redo(_:))) }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard let action = item.action else { return false }
+        return controller?.nativeEditing == true && GuestEditCommand.keys(for: action) != nil
+    }
 
     private static let guestCursor = NSCursor(image: NSImage(size: NSSize(width: 16, height: 16)), hotSpot: .zero)
 
