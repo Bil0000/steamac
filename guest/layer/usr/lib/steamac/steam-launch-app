@@ -1,0 +1,32 @@
+#!/bin/bash
+# steamac: launcher --launch-app APPID (kernel command line steamac.launch_app=APPID), used by
+# launchers such as GameHub to start one game in FX: once Steam's UI is up (the fx-progress-agent
+# `ready` marker of this boot), run steam://rungameid/APPID. At most once per boot, so a Steam
+# restart does not start the game again.
+# ExecStartPost of steam.service; returns at once (the wait runs in the background).
+# Test overrides: STEAMAC_CMDLINE, STEAMAC_READY_MARKER, STEAMAC_BOOT_ID, STEAMAC_STEAM, STEAMAC_WAIT_STEPS.
+set -euo pipefail
+
+app=
+for w in $(cat "${STEAMAC_CMDLINE:-/proc/cmdline}" 2>/dev/null); do
+    case $w in steamac.launch_app=*) app=${w#steamac.launch_app=} ;; esac
+done
+[[ $app =~ ^[1-9][0-9]{0,9}$ ]] || exit 0
+
+done_marker=${XDG_RUNTIME_DIR:?}/steamac/launch-app-done
+[[ -e $done_marker ]] && exit 0
+mkdir -p "${done_marker%/*}"
+: > "$done_marker"
+
+ready=${STEAMAC_READY_MARKER:-/tmp/.fx-progress-ready-$(id -u)}
+boot=${STEAMAC_BOOT_ID:-$(cat /proc/sys/kernel/random/boot_id)}
+steam=${STEAMAC_STEAM:-/usr/bin/steam}
+steps=${STEAMAC_WAIT_STEPS:-300}
+(
+    for ((i = 0; i < steps; i++)); do
+        [[ $(cat "$ready" 2>/dev/null) == "$boot" ]] && break
+        sleep 1
+    done
+    echo "steamac: --launch-app: starting steam://rungameid/$app" >&2
+    exec "$steam" "steam://rungameid/$app"
+) </dev/null >/dev/null 2>&1 &

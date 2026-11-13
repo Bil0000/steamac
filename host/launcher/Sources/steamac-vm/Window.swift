@@ -194,8 +194,13 @@ final class WindowController: NSObject, NSWindowDelegate {
         NSApp.activate()
     }
 
-    /// The screen the window opens on: the one under the mouse pointer, else the main screen.
+    /// The screen the window opens on: the one of the previous boot's window (guest reboot),
+    /// else the one under the mouse pointer, else the main screen.
     static func targetScreen() -> NSScreen? {
+        if let f = Supervisor.windowFrame, !f.isEmpty {
+            let r = NSRectFromString(f)
+            if let s = NSScreen.screens.first(where: { NSMouseInRect(NSPoint(x: r.midX, y: r.midY), $0.frame, false) }) { return s }
+        }
         let mouse = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
     }
@@ -628,6 +633,11 @@ final class WindowController: NSObject, NSWindowDelegate {
         return false
     }
 
+    func windowDidChangeScreen(_ notification: Notification) {
+        guard let s = window.screen else { return }
+        log("display: window on \"\(s.localizedName)\" (\(s.maximumFramesPerSecond) Hz, \(s.backingScaleFactor)x);"
+            + " guest refresh rate keeps its boot value until the next start")
+    }
     func windowDidBecomeKey(_ notification: Notification) { view.refreshHostCursor() }
     func windowDidResignKey(_ notification: Notification) { releaseAll() }
     func windowDidMiniaturize(_ notification: Notification) { releaseAll() }

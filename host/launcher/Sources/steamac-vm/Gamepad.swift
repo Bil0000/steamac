@@ -231,6 +231,9 @@ final class GamepadBridge {
     private var hidCapable = false
     /// --input-selftest, control `pad on`: a pad even without a controller.
     private var testPad = false
+    /// A button or the d-pad was pressed since a controller connected: only then SteamOS gets a
+    /// pad, so a connected but idle controller does not switch games to controller prompts.
+    private var padUsed = false
     private var paused = false
     private let rumble = Rumble()
     private let hid = HIDPassthrough()
@@ -412,12 +415,13 @@ final class GamepadBridge {
            let chosen = candidates.first(where: { GamepadBridge.identifier(of: $0) == settings.controllerID }) {
             next = chosen
         } else {
-            // First connected (the chosen one is not connected: fall back to it as well).
-            next = candidates.first
+            // The last used one (GCController.current), else the first connected.
+            next = GCController.current.flatMap { cur in candidates.first { $0 === cur } } ?? candidates.first
         }
         if next === controller { return }
         controller?.extendedGamepad?.valueChangedHandler = nil
         controller = next
+        if next == nil { padUsed = false }
         rumble.attach(next)
         if let c = next, let pad = c.extendedGamepad {
             log("gamepad active: \(GamepadBridge.logDisplayName(of: c))")
@@ -443,7 +447,7 @@ final class GamepadBridge {
     /// is on (and the guest's service takes uhid devices); else a uinput pad of the kind from
     /// "Appears in SteamOS as" (`--pad`), Automatic = the controller's.
     private func wanted() -> (device: GuestDevice, why: String)? {
-        guard settings.virtualPad, controller != nil || testPad else { return nil }
+        guard settings.virtualPad, (controller != nil && padUsed) || testPad else { return nil }
         let pad: GuestPad, why: String
         switch typeOverride ?? settings.padType {
         case .xbox360: (pad, why) = (.xbox360, typeOverride == nil ? "setting" : "--pad")
@@ -509,8 +513,15 @@ final class GamepadBridge {
     }
 
     private func update(from pad: GCExtendedGamepad) {
-        apply(GamepadBridge.read(pad, as: guestPad ?? .xbox360, swapABXY: settings.swapABXY,
-                                 deadzone: Float(settings.stickDeadzone) / 100))
+        let s = GamepadBridge.read(pad, as: guestPad ?? .xbox360, swapABXY: settings.swapABXY,
+                                   deadzone: Float(settings.stickDeadzone) / 100)
+        if !padUsed, s.buttons.values.contains(true) || s.axes[ABS.HAT0X] != 0 || s.axes[ABS.HAT0Y] != 0 {
+            padUsed = true
+            log("gamepad: first press: SteamOS gets the pad now")
+            reconcile()
+            if guestPad != nil { return }
+        }
+        apply(s)
     }
 
     private static func axis(_ v: Float) -> Int32 {

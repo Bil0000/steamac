@@ -634,6 +634,22 @@
         }
       }
     },
+    "Auto (this screen, %@ Hz)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Авто (этот экран, %@ Гц)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动（此屏幕，%@ Hz）"
+          }
+        }
+      }
+    },
     "Auto-Capture Mouse in Games" : {
       "localizations" : {
         "ru" : {
@@ -5254,18 +5270,18 @@
         }
       }
     },
-    "SteamOS gets a gamepad while a controller is connected." : {
+    "SteamOS gets a gamepad once a connected controller is used." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SteamOS получает геймпад, когда подключён контроллер."
+            "value" : "SteamOS получает геймпад, когда подключённый контроллер начинают использовать."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "连接控制器时，SteamOS 会获得一个游戏手柄。"
+            "value" : "使用已连接的控制器后，SteamOS 才会获得游戏手柄。"
           }
         }
       }

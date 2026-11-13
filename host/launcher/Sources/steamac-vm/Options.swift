@@ -82,6 +82,8 @@ struct Options {
     /// DXVK config gets dxgi.maxFrameLatency = 1 for the Vulkan path. Default false: unset.
     var frameLatency = false
     var experimentalGameSupport = false
+    /// --launch-app APPID: Steam starts this game once per boot (kernel cmdline steamac.launch_app=).
+    var launchApp: Int?
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
     var gvproxyPath: String?
@@ -186,7 +188,7 @@ struct Options {
       --render-scale S     guest render scale 0.25..1.0 of the window's pixel size (default 1 = off,
                            Settings > Display "Render scale"): the guest renders fewer pixels and
                            MetalFX super resolution upscales them to the window; next start
-      --refresh HZ         EDID refresh rate (default 60)
+      --refresh HZ         EDID refresh rate (default: Settings > Display, Auto = the screen's)
       --dpi N              EDID pixel density instead of the default physical size (below)
       --display-mm WxH     EDID physical size in millimetres at the initial size (overrides --dpi)
                            Default: the window's real size on the host monitor (initial content size
@@ -248,6 +250,8 @@ struct Options {
                            support", off): downloads and builds a Linux game runtime on first use;
                            restart Steam when setup finishes. Game support varies.
                            --no-experimental-game-support turns it off for this run.
+      --launch-app APPID   Steam starts this game once Steam is up, once per boot (kernel cmdline
+                           steamac.launch_app=); for launchers such as GameHub
 
     Creating a SteamOS disk (no Docker; the same code as Settings > Advanced "Create New Disk…"):
       --create-disk PATH   download the signed SteamOS bundle of the branch (default: the saved setting,
@@ -404,6 +408,10 @@ struct Options {
             case "--no-frame-latency": o.frameLatency = false
             case "--experimental-game-support": o.experimentalGameSupport = true
             case "--no-experimental-game-support": o.experimentalGameSupport = false
+            case "--launch-app":
+                let n = try int(a)
+                guard n > 0 else { throw OptionError("--launch-app: a Steam app id") }
+                o.launchApp = n
             case "--vulkan-driver":
                 let v = try value(a)
                 guard let d = LauncherSettings.VulkanDriver(rawValue: v) else {
@@ -553,6 +561,7 @@ struct Options {
             if let a = Options.frameLatencyArg(o.frameLatency) { add(a.key, a.value) }
             let fex = Options.experimentalGameSupportArg(o.experimentalGameSupport)
             add(fex.key, fex.value)
+            add("steamac.launch_app", o.launchApp.map(String.init))
             if o.macTime {
                 add("steamac.tz", MacTime.zone)
                 add("steamac.clock24", MacTime.clock24.map { $0 ? "1" : "0" })
@@ -616,7 +625,9 @@ struct Options {
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }
-        if given("--refresh") { ov[.refreshRate] = "--refresh \(refreshRate)" } else { refreshRate = min(240, max(24, s.refreshRate)) }
+        if given("--refresh") { ov[.refreshRate] = "--refresh \(refreshRate)" }
+        else if s.refreshRate == LauncherSettings.autoRefresh { refreshRate = headless ? 60 : LauncherSettings.screenRefreshRate() }
+        else { refreshRate = min(240, max(24, s.refreshRate)) }
         if given("--display") {
             ov[.windowWidth] = "--display \(displayWidth)x\(displayHeight)"
             ov[.windowHeight] = ov[.windowWidth]

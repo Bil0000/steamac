@@ -420,8 +420,9 @@ private struct DisplayTab: View {
                     }
                 }
                 Picker(selection: $settings.refreshRate) {
+                    Text("Auto (this screen, \(String(LauncherSettings.screenRefreshRate())) Hz)").tag(LauncherSettings.autoRefresh)
                     ForEach(DisplayTab.refreshRates, id: \.self) { Text("\($0) Hz").tag($0) }
-                    if !DisplayTab.refreshRates.contains(settings.refreshRate) {
+                    if settings.refreshRate != LauncherSettings.autoRefresh && !DisplayTab.refreshRates.contains(settings.refreshRate) {
                         Text("\(settings.refreshRate) Hz").tag(settings.refreshRate)
                     }
                 } label: {
@@ -596,7 +597,7 @@ private struct ControllerTab: View {
             Section {
                 Toggle(isOn: $settings.virtualPad) {
                     Label2(title: "Virtual controller",
-                           detail: String(localized: "SteamOS gets a gamepad while a controller is connected."),
+                           detail: String(localized: "SteamOS gets a gamepad once a connected controller is used."),
                            now: true, key: .virtualPad)
                 }
                 Picker(selection: $settings.padType) {
