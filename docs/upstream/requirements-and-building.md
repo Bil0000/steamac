@@ -126,8 +126,9 @@ start over.
 Mouse (`--mouse auto`, by default): the SteamOS cursor follows the Mac cursor precisely. gamescope
 (gaming mode) does not accept absolute coordinates, so the launcher moves it with relative deltas
 without acceleration. When a game has focus in the guest (the agent sends `focus game <appid>`), the
-first click captures the mouse (relative movement for mouse-look); Ctrl+Option releases it. On
-returning to Steam, capture is released automatically. **Mouse** menu:
+mouse is captured while the launcher window is active, without a click (relative movement for
+mouse-look). Switching to another window or Ctrl+Option releases it; switching back captures it
+again. On returning to Steam, capture is released automatically. **Mouse** menu:
 - **Capture Mouse in This Game** — auto-capture for the current game (saved by appid);
 - **Auto-Capture Mouse in Games** — default for all games;
 - **Capture / Release Mouse Now** — same as Ctrl+Cmd+G.

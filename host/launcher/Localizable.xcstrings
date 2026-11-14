@@ -6690,18 +6690,18 @@
         }
       }
     },
-    "While a game has focus, a click captures the pointer (relative motion for mouse-look)." : {
+    "While a game has focus and the FX window is active, the mouse is captured without a click (relative motion for mouse-look). Another window or Ctrl+Option releases it." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Когда игра активна, нажатие захватывает указатель (относительное перемещение для управления взглядом мышью)."
+            "value" : "Когда игра активна и окно FX активно, мышь захватывается без нажатия (относительное перемещение для управления взглядом мышью). Другое окно или Ctrl+Option освобождает её."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "游戏获得焦点时，点按即可捕获指针（通过相对移动控制视角）。"
+            "value" : "游戏获得焦点且 FX 窗口处于活跃状态时，无需点按即可捕获鼠标（通过相对移动控制视角）。切换到其他窗口或按 Ctrl+Option 即可释放。"
           }
         }
       }
@@ -6943,22 +6943,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "点按以捕获鼠标"
-          }
-        }
-      }
-    },
-    "click to capture the mouse (Ctrl+Option releases)" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "нажмите, чтобы захватить мышь (Ctrl+Option освобождает)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "点按以捕获鼠标（Ctrl+Option 释放）"
           }
         }
       }

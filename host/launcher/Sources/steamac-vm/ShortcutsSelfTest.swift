@@ -232,6 +232,19 @@ enum ShortcutsSelfTest {
         wc.releaseAll()
         let cleanup = drain()
         expect(held(cleanup).isEmpty, "focus cleanup left keys held")
+        let pointer = NSEvent.mouseLocation
+        CGWarpMouseCursorPosition(CGPoint(x: 1, y: 1))
+        wc.guestFocusChanged(.game(4242))
+        expect(wc.pointerCaptured, "game focus did not capture the mouse")
+        expect(wc.view.bounds.contains(wc.view.convert(wc.window.mouseLocationOutsideOfEventStream, from: nil)),
+               "auto-capture left the pointer outside the picture")
+        native.makeKeyAndOrderFront(nil)
+        expect(InputSelfTest.wait({ native.isKeyWindow }) && !wc.pointerCaptured, "another window did not release the mouse")
+        wc.show()
+        expect(InputSelfTest.wait({ wc.window.isKeyWindow }) && wc.pointerCaptured, "returning to the game window did not capture the mouse")
+        wc.guestFocusChanged(.steam)
+        expect(!wc.pointerCaptured, "leaving the game did not release the mouse")
+        CGWarpMouseCursorPosition(CGPoint(x: pointer.x, y: NSScreen.screens[0].frame.maxY - pointer.y))
         return failures
     }
 }
