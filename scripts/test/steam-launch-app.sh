@@ -4,6 +4,7 @@
 #   none    no key or a bad value: Steam is not called
 #   wait    the game starts only after this boot's ready marker, with steam://rungameid/APPID
 #   once    a second run in the same boot (Steam restarted) starts nothing
+#   restart a Steam restart before ready (the waiter is killed) still starts the game on the next run
 #   unit    steam.service runs it after Steam starts
 # usage: scripts/test/steam-launch-app.sh
 set -u
@@ -17,7 +18,7 @@ run() { # cmdline runtime-dir
     printf '%s\n' "$1" > "$T/cmdline"
     mkdir -p "$2"
     STEAMAC_CMDLINE=$T/cmdline XDG_RUNTIME_DIR=$2 STEAMAC_READY_MARKER=$T/ready STEAMAC_BOOT_ID=boot-1 \
-        STEAMAC_STEAM=$T/steam STEAMAC_WAIT_STEPS=20 bash "$S"
+        STEAMAC_STEAM=$T/steam bash "$S"
 }
 calls() { cat "$T/calls" 2>/dev/null; }
 
@@ -38,6 +39,19 @@ for _ in $(seq 30); do [ -n "$(calls)" ] && break; sleep 0.2; done
 run "steamac.launch_app=2406770" "$T/rt"
 sleep 2
 [ "$(calls | wc -l | tr -d ' ')" = 1 ] || fail once "started again: $(calls)"
+
+rm -f "$T/calls" "$T/ready"
+run "steamac.launch_app=438100" "$T/rt2"
+sleep 1
+for p in /proc/[0-9]*; do  # what systemd does to the waiter on a Steam stop
+    [ "${p#/proc/}" = $$ ] && continue
+    { tr '\0' ' ' < "$p/cmdline"; } 2>/dev/null | grep -q '^bash [^ ]*/steam-launch-app' && kill "${p#/proc/}" 2>/dev/null
+done
+[ -e "$T/rt2/steamac/launch-app-done" ] && fail restart "marked done before the launch"
+echo boot-1 > "$T/ready"
+run "steamac.launch_app=438100" "$T/rt2"
+for _ in $(seq 30); do [ -n "$(calls)" ] && break; sleep 0.2; done
+[ "$(calls)" = "steam://rungameid/438100" ] || fail restart "calls: $(calls)"
 
 grep -qx 'ExecStartPost=-/usr/lib/steamac/steam-launch-app' "$R/guest/layer/usr/lib/systemd/user/steam.service.d/50-steamac.conf" \
     || fail unit "steam.service drop-in does not run it"
