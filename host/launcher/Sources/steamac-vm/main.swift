@@ -478,6 +478,8 @@ do {
     wc.onWakeRequest = { what in suspender.resume(origin: what) }
     wc.onGuestSizeRequest = { w, h in vm.resizeDisplay(width: w, height: h) }
     if options.refreshFollowsScreen { wc.onScreenRefreshRate = { hz in vm.setRefreshRate(hz) } }
+    // Hidden window: guest frames are not uploaded or drawn.
+    wc.onVisibleChange = { presenter.setVisible($0) }
     let settingsContext = SettingsContext(settings: settings, sound: sound, restart: { lifecycle.requestRestart() },
                                           vmHasPad: gamepad != nil, vmHasSound: vm.hasSound,
                                           diskPath: options.disks.first?.path)

@@ -13,6 +13,8 @@ final class Presenter: DisplaySink {
     var onScanoutResize: ((Int, Int) -> Void)?
     private var lock = os_unfair_lock()
     private var pending = false
+    /// Main thread: the window is on screen. While hidden, guest frames are not taken, uploaded or drawn.
+    private var visible = true
     private(set) var framesShown: UInt64 = 0
     /// Main thread, one-shot: runs after the next guest frame is on screen.
     var onNextFrame: (() -> Void)?
@@ -48,8 +50,21 @@ final class Presenter: DisplaySink {
         pending = true
         os_unfair_lock_unlock(&lock)
         if schedule {
-            DispatchQueue.main.async { [weak self] in self?.consume() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.visible else { return }
+                self.consume()
+            }
         }
+    }
+
+    /// Main thread. Showing again takes the newest frame (its damage covers everything missed) and
+    /// redraws, also for an idle guest or a window resized while hidden.
+    func setVisible(_ v: Bool) {
+        guard v != visible else { return }
+        visible = v
+        guard v else { return }
+        consume()
+        view?.redraw()
     }
 
     /// Main thread.

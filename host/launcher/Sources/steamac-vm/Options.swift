@@ -572,6 +572,17 @@ struct Options {
             // preen cannot fix (a VM killed mid-write, two VMs on one disk) is repaired at boot instead of
             // failing /home and every unit after it (boot stuck at "Starting SteamOS services").
             add("fsck.repair", "yes")
+            // SteamOS swaps to zram; zswap in front of it only adds a second compression pass.
+            add("zswap.enabled", "0")
+            // Give page cache a game has not touched for 120 s back to the guest's free memory, which
+            // free page reporting returns to the Mac (assets read once at load otherwise stay resident
+            // for the whole session). wmarks_low=0: keep working when free memory is low, the normal
+            // state once a game has filled the cache. Capped at 10 ms of one vCPU per second.
+            add("damon_reclaim.enabled", "Y")
+            add("damon_reclaim.skip_anon", "Y")
+            add("damon_reclaim.wmarks_low", "0")
+            add("damon_reclaim.wmarks_mid", "250")
+            add("damon_reclaim.wmarks_high", "300")
         }
         try o.validate()
         return (o, overrides)

@@ -635,6 +635,22 @@ final class WindowController: NSObject, NSWindowDelegate {
 
     /// The window's screen changed: the guest gets that screen's refresh rate (set when it follows the screen).
     var onScreenRefreshRate: ((Int) -> Void)?
+    /// The window became visible (true) or hidden: minimized, fully covered, on another Space.
+    /// Hiding is reported after `hideDelay`, so a Space swipe or Mission Control does not count.
+    var onVisibleChange: ((Bool) -> Void)?
+    private var hideWork: DispatchWorkItem?
+    static let hideDelay: TimeInterval = 2
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        hideWork?.cancel()
+        hideWork = nil
+        guard window.occlusionState.contains(.visible) else {
+            let work = DispatchWorkItem { [weak self] in self?.onVisibleChange?(false) }
+            hideWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + WindowController.hideDelay, execute: work)
+            return
+        }
+        onVisibleChange?(true)
+    }
     func windowDidChangeScreen(_ notification: Notification) {
         guard let s = window.screen else { return }
         log("display: window on \"\(s.localizedName)\" (\(s.maximumFramesPerSecond) Hz, \(s.backingScaleFactor)x)")
