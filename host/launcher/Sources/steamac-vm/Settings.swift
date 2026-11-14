@@ -294,6 +294,11 @@ final class LauncherSettings: ObservableObject {
         return (w, h)
     }
 
+    static let autoRefresh = 0
+    /// The refresh rate of the screen the VM window opens on (24...240 Hz).
+    static func screenRefreshRate() -> Int { refreshRate(of: WindowController.targetScreen()) }
+    static func refreshRate(of screen: NSScreen?) -> Int { min(240, max(24, screen?.maximumFramesPerSecond ?? 60)) }
+
     struct Game: Identifiable, Equatable {
         let appid: Int
         var name: String?
@@ -336,7 +341,8 @@ final class LauncherSettings: ObservableObject {
     @Published var fixedDPI = 110 { didSet { save(.fixedDPI, fixedDPI) } }
     @Published var fixedWidthMM = 300 { didSet { save(.fixedWidthMM, fixedWidthMM) } }
     @Published var fixedHeightMM = 188 { didSet { save(.fixedHeightMM, fixedHeightMM) } }
-    @Published var refreshRate = 60 { didSet { save(.refreshRate, refreshRate) } }
+    /// `autoRefresh` (0): the refresh rate of the screen the VM window opens on, read at every start.
+    @Published var refreshRate = LauncherSettings.autoRefresh { didSet { save(.refreshRate, refreshRate) } }
     @Published var followWindowSize = true { didSet { save(.followWindowSize, followWindowSize) } }
     @Published var windowWidth = 1280 { didSet { save(.windowWidth, windowWidth) } }
     @Published var windowHeight = 800 { didSet { save(.windowHeight, windowHeight) } }
@@ -526,7 +532,10 @@ final class LauncherSettings: ObservableObject {
         case .fixedDPI: guard let i else { return false }; fixedDPI = i
         case .fixedWidthMM: guard let i else { return false }; fixedWidthMM = i
         case .fixedHeightMM: guard let i else { return false }; fixedHeightMM = i
-        case .refreshRate: guard let i else { return false }; refreshRate = i
+        case .refreshRate:
+            guard let v = text == "auto" ? LauncherSettings.autoRefresh : i,
+                  v == LauncherSettings.autoRefresh || (24...240).contains(v) else { return false }
+            refreshRate = v
         case .followWindowSize: guard let b else { return false }; followWindowSize = b
         case .windowWidth: guard let i else { return false }; windowWidth = i
         case .windowHeight: guard let i else { return false }; windowHeight = i

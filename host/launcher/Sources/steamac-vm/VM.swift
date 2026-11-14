@@ -33,6 +33,7 @@ final class VM {
     /// Boot EDID; its mm-per-pixel is reused for every resize (constant DPI).
     let edid: EdidSize.Result
     private var displaySize: (Int, Int, Int, Int)   // px w, h, mm w, h
+    private var refreshRate: Int
     /// Largest guest display side libkrun's EDID detailed timing can describe.
     static let maxDisplaySide = 4095
 
@@ -109,6 +110,7 @@ final class VM {
         displayId = UInt32(try krun("krun_add_display", krun_add_display(ctx, UInt32(gw), UInt32(gh))))
         let did = displayId
         try krun("krun_display_set_refresh_rate", krun_display_set_refresh_rate(ctx, did, UInt32(o.refreshRate)))
+        refreshRate = o.refreshRate
         // EDID physical size (drives the guest UI scale; libkrun's default of 300 DPI makes Steam ~2x).
         edid = EdidSize.resolve(o)
         try krun("krun_display_set_physical_size",
@@ -202,6 +204,20 @@ final class VM {
         }
         displaySize = (width, height, wmm, hmm)
         log("display: resized to \(width)x\(height) px (\(wmm)×\(hmm) mm, same DPI)")
+    }
+
+    /// Give the guest display a new refresh rate at its current size (main thread; the guest sees
+    /// a mode change like a resize). No-op if unchanged.
+    func setRefreshRate(_ hz: Int) {
+        guard hz != refreshRate else { return }
+        let (w, h, wmm, hmm) = displaySize
+        let r = krun_display_set_mode(ctx, displayId, UInt32(w), UInt32(h), UInt16(clamping: wmm), UInt16(clamping: hmm), UInt32(hz))
+        if r < 0 {
+            log("display: refresh rate \(hz) Hz failed: \(r) (\(String(cString: strerror(-r))))")
+            return
+        }
+        log("display: refresh rate \(refreshRate) -> \(hz) Hz")
+        refreshRate = hz
     }
 
     /// Press the guest power key (gpio-keys, KEY_RESTART in libkrun 1.19.6's FDT; systemd-logind

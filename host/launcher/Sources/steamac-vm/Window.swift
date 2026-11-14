@@ -10,6 +10,7 @@ final class SteamacApplication: NSApplication {
     weak var router: WindowController?
 
     override func sendEvent(_ event: NSEvent) {
+        if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel].contains(event.type) { router?.cancelDeferredMetaTaps() }
         if let router, router.handleKeyEvent(event) { return }
         super.sendEvent(event)
     }
@@ -22,10 +23,6 @@ final class WindowController: NSObject, NSWindowDelegate {
     private let mouseMode: MouseMode
     private let baseTitle: String
     var onCloseRequest: (() -> Void)?
-    /// Ctrl+Cmd+S while the VM window has the keyboard (the menu's Suspend).
-    var onSuspendRequest: (() -> Void)?
-    /// Cmd+, while the VM window has the keyboard (keys otherwise all go to the guest).
-    var onOpenSettings: (() -> Void)?
     /// Launcher settings (live values: overlay, follow window size, mouse auto-capture).
     let settings: LauncherSettings
     private var subscriptions: [AnyCancellable] = []
@@ -42,11 +39,11 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// "Game paused" (GamePause confirmed a frozen game), above everything else.
     let pauseView: PauseOverlayView
     /// App id shown as paused (nil = not paused).
-    private(set) var pausedGame: Int?
+    private(set) var pausedGame: Int? { didSet { window.invalidateCursorRects(for: view) } }
     /// "SteamOS is sleeping" (the guest went to sleep, SuspendController paused the VM).
     let sleepView: PauseOverlayView
     /// The guest sleeps: nothing reaches it; the first click, key or controller button wakes it.
-    private(set) var guestAsleep = false
+    private(set) var guestAsleep = false { didSet { window.invalidateCursorRects(for: view) } }
     /// A click / key while the guest sleeps (argument: what it was, for the log).
     var onWakeRequest: ((String) -> Void)?
     /// "Resuming…" chip after a suspend, until the guest's next frame.
@@ -65,16 +62,19 @@ final class WindowController: NSObject, NSWindowDelegate {
     private var collapseIsSticky = false
 
     private var pressedKeys = Set<UInt16>()
+    private var heldModifiers = Set<UInt16>()
+    private var deferredMetaTaps = Set<UInt16>()
+    private let keyBindings = GuestKeyBindings()
     private var tabletButtons = Set<UInt16>()
     private var mouseButtons = Set<UInt16>()
     private var lastAbs: (Int32, Int32) = (-1, -1)
-    private var captured = false
+    private var captured = false { didSet { window.invalidateCursorRects(for: view) } }
     private var relRemainder = (0.0, 0.0)
     /// Auto mode: where the guest cursor is (guest pixels); nil = unknown, re-anchor first.
     private var guestCursor: (Int, Int)?
     private var lastPointerMotion = Date.distantPast
     /// What the guest says has focus (progress agent `focus …`); Steam until told otherwise.
-    private(set) var guestFocus: GuestFocus = .steam
+    private(set) var guestFocus: GuestFocus = .steam { didSet { window.invalidateCursorRects(for: view) } }
     private var wheelHiRemainder = (0.0, 0.0)   // (vertical, horizontal) in 1/120 notch units
     private var wheelLoAccum: (Int32, Int32) = (0, 0)
     private var scanoutSize: (Int, Int)
@@ -146,8 +146,10 @@ final class WindowController: NSObject, NSWindowDelegate {
         pill.onClick = { [weak self] in self?.expandPill() }
         pill.clickable = { [weak self] in self.map { $0.bootOrShutdown && !$0.captured } ?? false }
         overlay.onVisibilityChange = { [weak self] _ in
-            self?.updateStallGate()
-            self?.updatePill()
+            guard let self else { return }
+            self.updateStallGate()
+            self.updatePill()
+            self.window.invalidateCursorRects(for: self.view)
         }
         pauseView.frame = view.bounds
         view.addSubview(pauseView)
@@ -192,8 +194,13 @@ final class WindowController: NSObject, NSWindowDelegate {
         NSApp.activate()
     }
 
-    /// The screen the window opens on: the one under the mouse pointer, else the main screen.
+    /// The screen the window opens on: the one of the previous boot's window (guest reboot),
+    /// else the one under the mouse pointer, else the main screen.
     static func targetScreen() -> NSScreen? {
+        if let f = Supervisor.windowFrame, !f.isEmpty {
+            let r = NSRectFromString(f)
+            if let s = NSScreen.screens.first(where: { NSMouseInRect(NSPoint(x: r.midX, y: r.midY), $0.frame, false) }) { return s }
+        }
         let mouse = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
     }
@@ -221,6 +228,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     func scanoutResized(width: Int, height: Int) {
         view.contentPixelSize = CGSize(width: width, height: height)
         scanoutSize = (width, height)
+        window.invalidateCursorRects(for: view)
         updateUpscaleCap()
         view.redraw()
     }
@@ -625,6 +633,30 @@ final class WindowController: NSObject, NSWindowDelegate {
         return false
     }
 
+    /// The window's screen changed: the guest gets that screen's refresh rate (set when it follows the screen).
+    var onScreenRefreshRate: ((Int) -> Void)?
+    /// The window became visible (true) or hidden: minimized, fully covered, on another Space.
+    /// Hiding is reported after `hideDelay`, so a Space swipe or Mission Control does not count.
+    var onVisibleChange: ((Bool) -> Void)?
+    private var hideWork: DispatchWorkItem?
+    static let hideDelay: TimeInterval = 2
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        hideWork?.cancel()
+        hideWork = nil
+        guard window.occlusionState.contains(.visible) else {
+            let work = DispatchWorkItem { [weak self] in self?.onVisibleChange?(false) }
+            hideWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + WindowController.hideDelay, execute: work)
+            return
+        }
+        onVisibleChange?(true)
+    }
+    func windowDidChangeScreen(_ notification: Notification) {
+        guard let s = window.screen else { return }
+        log("display: window on \"\(s.localizedName)\" (\(s.maximumFramesPerSecond) Hz, \(s.backingScaleFactor)x)")
+        onScreenRefreshRate?(LauncherSettings.refreshRate(of: s))
+    }
+    func windowDidBecomeKey(_ notification: Notification) { view.refreshHostCursor() }
     func windowDidResignKey(_ notification: Notification) { releaseAll() }
     func windowDidMiniaturize(_ notification: Notification) { releaseAll() }
 
@@ -633,7 +665,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// Returns true if the event was consumed (only while our window is key).
     func handleKeyEvent(_ e: NSEvent) -> Bool {
         guard e.type == .keyDown || e.type == .keyUp || e.type == .flagsChanged,
-              e.window === window || (e.window == nil && window.isKeyWindow), window.isKeyWindow else { return false }
+              e.window === window || (e.window == nil && window.isKeyWindow), window.isKeyWindow, window.firstResponder === view else { return false }
         return processKey(e)
     }
 
@@ -644,21 +676,10 @@ final class WindowController: NSObject, NSWindowDelegate {
         switch e.type {
         case .keyDown:
             userInput("key")
-            if mods.contains([.control, .command]) {
-                switch Int(e.keyCode) {
-                case kVK_ANSI_F: toggleFullScreen(); return true
-                case kVK_ANSI_G: captured ? releasePointer() : grabPointer(); return true
-                case kVK_ANSI_P: toggleMetalHUD(); return true
-                case kVK_ANSI_S:
-                    guard let onSuspendRequest else { break }
-                    onSuspendRequest()
-                    return true
-                default: break
-                }
-            }
-            if mods == .command && Int(e.keyCode) == kVK_ANSI_Comma, let onOpenSettings {
-                releaseAll()
-                onOpenSettings()
+            if MainMenu.performKeyEquivalent(with: e, editing: nativeEditing) { return true }
+            if nativeTextBindings, !mods.contains(.control), !mods.intersection([.command, .option]).isEmpty,
+               let commands = keyBindings.resolve(e) {
+                sendGuestCommands(commands)
                 return true
             }
             if e.isARepeat { return true }   // guest does autorepeat
@@ -667,6 +688,7 @@ final class WindowController: NSObject, NSWindowDelegate {
                 wakeGuest("key")
                 return true
             }
+            sendHeldModifiers()
             guard let code = Keymap.linuxKey(e.keyCode) else { return true }
             if pressedKeys.insert(code).inserted { sendKey(code, true) }
             return true
@@ -683,20 +705,58 @@ final class WindowController: NSObject, NSWindowDelegate {
                 sendKey(KEY.CAPSLOCK, false)
             } else if let mask = Keymap.modifierMask(e.keyCode), let code = Keymap.linuxKey(e.keyCode) {
                 let down = (UInt(e.modifierFlags.rawValue) & mask) != 0
-                if down, pressedKeys.insert(code).inserted { sendKey(code, true) }
-                if !down, pressedKeys.remove(code) != nil { sendKey(code, false) }
+                if down {
+                    let meta = code == KEY.LEFTMETA || code == KEY.RIGHTMETA
+                    let tap = meta && nativeEditing && !nativeTextBindings && heldModifiers.isEmpty
+                    cancelDeferredMetaTaps()
+                    heldModifiers.insert(code)
+                    if tap { deferredMetaTaps.insert(code) }
+                    if (!nativeTextBindings || mods.contains(.control)) && !(meta && nativeEditing) {
+                        if pressedKeys.insert(code).inserted { sendKey(code, true) }
+                    }
+                } else {
+                    heldModifiers.remove(code)
+                    if pressedKeys.remove(code) != nil { sendKey(code, false) }
+                    if deferredMetaTaps.remove(code) != nil {
+                        sendKey(code, true)
+                        sendKey(code, false)
+                    }
+                }
             }
             if captured && mods.contains([.control, .option]) { releasePointer() }
             return true
         }
     }
 
-    private func sendKey(_ code: UInt16, _ down: Bool) {
-        inputs?.keyboard.send([(EV.KEY, code, down ? 1 : 0)])
+    var nativeEditing: Bool {
+        inputs != nil && !captured && focusedGame == nil && !guestAsleep && pausedGame == nil
     }
 
-    private func toggleFullScreen() {
-        window.toggleFullScreen(nil)
+    private var nativeTextBindings: Bool { nativeEditing && guestFocus == .steam }
+
+    func performGuestEdit(_ selector: Selector) {
+        guard nativeEditing, let commands = GuestEditCommand.keys(for: selector) else { return }
+        sendGuestCommands(commands)
+    }
+
+    func cancelDeferredMetaTaps() { deferredMetaTaps.removeAll() }
+
+    private func sendGuestCommands(_ commands: [[UInt16]]) {
+        cancelDeferredMetaTaps()
+        for modifier in heldModifiers.sorted() where pressedKeys.remove(modifier) != nil { sendKey(modifier, false) }
+        for keys in commands {
+            for code in keys { sendKey(code, true) }
+            for code in keys.reversed() { sendKey(code, false) }
+        }
+    }
+
+    private func sendHeldModifiers() {
+        cancelDeferredMetaTaps()
+        for modifier in heldModifiers.sorted() where pressedKeys.insert(modifier).inserted { sendKey(modifier, true) }
+    }
+
+    private func sendKey(_ code: UInt16, _ down: Bool) {
+        inputs?.keyboard.send([(EV.KEY, code, down ? 1 : 0)])
     }
 
     // MARK: pointer
@@ -721,6 +781,11 @@ final class WindowController: NSObject, NSWindowDelegate {
 
     private var usesTablet: Bool {
         mouseMode == .tablet
+    }
+
+    var hostCursorRect: NSRect? {
+        guard inputs != nil, !usesTablet, !captured, !overlay.shown, pausedGame == nil, !guestAsleep else { return nil }
+        return pointerRect
     }
 
     /// The surface relative motion lands on, in its pixels: the Desktop Mode desktop window, else
@@ -769,6 +834,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             noPicture?.heartbeatsEnded()
         }
         guard f != guestFocus else { return }
+        cancelDeferredMetaTaps()
         guestFocus = f
         // The agent sends the new game's `game-size` right after `focus game`; until then none is known.
         focusedGameSize = nil
@@ -783,7 +849,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         updateTitle()
         if let id = focusedGame, mouseMode == .auto {
             flashStatus(settings.autoCapture(for: id) ? String(localized: "click to capture the mouse (Ctrl+Option releases)")
-                                                      : String(localized: "auto-capture off for \(gameLabel(id)) (Ctrl+Cmd+G captures)"))
+                                                      : String(localized: "auto-capture off for \(gameLabel(id))"))
         }
     }
 
@@ -830,7 +896,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         let entries: [(LocalizedStringResource, Selector)] = [
             ("Capture Mouse in This Game", #selector(toggleGameAutoCapture(_:))),
             ("Auto-Capture Mouse in Games", #selector(toggleGlobalAutoCapture(_:))),
-            ("Capture / Release Mouse Now (Ctrl+Cmd+G)", #selector(toggleCaptureNow(_:))),
+            ("Capture / Release Mouse Now", #selector(toggleCaptureNow(_:))),
         ]
         for (title, action) in entries {
             let i = NSMenuItem(title: String(localized: title), action: action, keyEquivalent: "")
@@ -903,6 +969,8 @@ extension WindowController {
     func releaseAll() {
         for k in pressedKeys { sendKey(k, false) }
         pressedKeys.removeAll()
+        heldModifiers.removeAll()
+        cancelDeferredMetaTaps()
         releasePointer()
         releaseButtons()
         guestCursor = nil
@@ -1011,6 +1079,7 @@ extension WindowController {
         if !down && swallowedButtons.remove(b) != nil { return }
         if down { userInput("click") }
         if captured {
+            if down { sendHeldModifiers() }
             if down ? mouseButtons.insert(b).inserted : mouseButtons.remove(b) != nil {
                 inputs.mouse.send([(EV.KEY, b, down ? 1 : 0)])
             }
@@ -1025,6 +1094,7 @@ extension WindowController {
         }
         // The tablet only advertises LEFT/RIGHT/MIDDLE (see InputDevices); other buttons and the
         // auto mode use the relative mouse.
+        if down { sendHeldModifiers() }
         if usesTablet && InputDevices.tabletButtons.contains(b) {
             if down {
                 moveTablet(e)
@@ -1048,6 +1118,7 @@ extension WindowController {
             guard inPicture(e) else { return }
             if usesTablet { moveTablet(e) } else { moveEmulated(e) }
         }
+        sendHeldModifiers()
         // 120 = one wheel notch. Precise (trackpad) deltas are points: ~30 pt per notch.
         let scale = e.hasPreciseScrollingDeltas ? 4.0 : 120.0
         sendWheel(hiResY: Double(e.scrollingDeltaY) * scale, hiResX: -Double(e.scrollingDeltaX) * scale)
@@ -1076,6 +1147,16 @@ extension WindowController {
 }
 
 enum MainMenu {
+    private static weak var editMenu: NSMenu?
+
+    static func performKeyEquivalent(with event: NSEvent, editing: Bool) -> Bool {
+        for item in NSApp.mainMenu?.items ?? [] {
+            guard let menu = item.submenu, editing || menu !== editMenu else { continue }
+            if menu.performKeyEquivalent(with: event) { return true }
+        }
+        return false
+    }
+
     static func install(target: AnyObject, settings: Selector, report: Selector, checkForUpdates: Selector, restart: Selector,
                         suspend: Selector, shutdown: Selector, forceQuit: Selector, fullscreen: Selector, grab: Selector,
                         overlay: Selector, metalHUD: Selector) {
@@ -1090,7 +1171,6 @@ enum MainMenu {
         appMenu.addItem(item("Settings…", settings, target, key: ","))
         appMenu.addItem(item("Report a Problem…", report, target))
         appMenu.addItem(.separator())
-        // Ctrl+Cmd+S also works while the VM window has the keyboard (WindowController.processKey).
         let suspendItem = item(LocalizedStringResource("Suspend", comment: "App menu: freeze the VM in memory"), suspend, target, key: "s")
         suspendItem.keyEquivalentModifierMask = [.command, .control]
         appMenu.addItem(suspendItem)
@@ -1099,18 +1179,23 @@ enum MainMenu {
         appMenu.addItem(item("Force Quit", forceQuit, target))
         appMenu.addItem(.separator())
         // Lifecycle.applicationShouldTerminate decides (shut down; asks first while suspended).
-        // While the VM window has the keyboard, Cmd+Q goes to the guest like every key.
         appMenu.addItem(NSMenuItem(title: String(localized: "Quit FX Steam Launcher"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         addEditAndWindowMenus(main)
         let viewItem = NSMenuItem()
         main.insertItem(viewItem, at: 2)
         let viewMenu = NSMenu(title: String(localized: "View", comment: "Menu for display controls"))
         viewItem.submenu = viewMenu
-        viewMenu.addItem(item("Toggle Full Screen (Ctrl+Cmd+F)", fullscreen, target))
-        viewMenu.addItem(item("Grab Pointer (Ctrl+Cmd+G; Ctrl+Option releases)", grab, target))
+        let fullscreenItem = item("Toggle Full Screen", fullscreen, target, key: "f")
+        fullscreenItem.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(fullscreenItem)
+        let grabItem = item("Grab Pointer", grab, target, key: "g")
+        grabItem.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(grabItem)
         viewMenu.addItem(item("Show Boot Progress", overlay, target))
         // Ticked by the target's validateMenuItem (follows Settings > Display and Ctrl+Cmd+P).
-        viewMenu.addItem(item("Show Metal Performance HUD (Ctrl+Cmd+P)", metalHUD, target))
+        let hudItem = item("Show Metal Performance HUD", metalHUD, target, key: "p")
+        hudItem.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(hudItem)
         let help = NSMenu(title: String(localized: "Help", comment: "Application help menu"))
         help.addItem(item("Report a Problem…", report, target))
         let helpItem = NSMenuItem()
@@ -1136,6 +1221,7 @@ enum MainMenu {
     /// Standard Edit (text fields in Settings) and Window (Cmd+W closes Settings) menus.
     private static func addEditAndWindowMenus(_ main: NSMenu) {
         let edit = NSMenu(title: String(localized: "Edit", comment: "Standard text editing menu"))
+        editMenu = edit
         let entries: [(LocalizedStringResource, Selector, String)] = [
             ("Undo", Selector(("undo:")), "z"), ("Redo", Selector(("redo:")), "Z"),
             ("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"),
@@ -1145,6 +1231,10 @@ enum MainMenu {
         for (title, action, key) in entries {
             edit.addItem(NSMenuItem(title: String(localized: title), action: action, keyEquivalent: key))
         }
+        let find = NSMenuItem(title: String(localized: "Find…"), action: Selector(("performFindPanelAction:")), keyEquivalent: "f")
+        find.tag = 1
+        edit.addItem(.separator())
+        edit.addItem(find)
         let editItem = NSMenuItem()
         editItem.submenu = edit
         main.addItem(editItem)

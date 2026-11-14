@@ -13,6 +13,8 @@ final class Presenter: DisplaySink {
     var onScanoutResize: ((Int, Int) -> Void)?
     private var lock = os_unfair_lock()
     private var pending = false
+    /// Main thread: the window is on screen. While hidden, guest frames are not taken, uploaded or drawn.
+    private var visible = true
     private(set) var framesShown: UInt64 = 0
     /// Main thread, one-shot: runs after the next guest frame is on screen.
     var onNextFrame: (() -> Void)?
@@ -48,8 +50,21 @@ final class Presenter: DisplaySink {
         pending = true
         os_unfair_lock_unlock(&lock)
         if schedule {
-            DispatchQueue.main.async { [weak self] in self?.consume() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.visible else { return }
+                self.consume()
+            }
         }
+    }
+
+    /// Main thread. Showing again takes the newest frame (its damage covers everything missed) and
+    /// redraws, also for an idle guest or a window resized while hidden.
+    func setVisible(_ v: Bool) {
+        guard v != visible else { return }
+        visible = v
+        guard v else { return }
+        consume()
+        view?.redraw()
     }
 
     /// Main thread.
@@ -61,7 +76,9 @@ final class Presenter: DisplaySink {
         let perf = PerfStats.shared
         var stamp = perf?.frameTaken() ?? PerfStats.FrameStamp()
         let t0 = perf != nil ? CACurrentMediaTime() : 0
+        let sizeChanged = renderer.texture?.width != f.buffer.width || renderer.texture?.height != f.buffer.height
         renderer.upload(f)
+        if sizeChanged, let view { view.window?.invalidateCursorRects(for: view) }
         if let perf {
             let ms = (CACurrentMediaTime() - t0) * 1000
             perf.uploaded(ms: ms)
@@ -78,7 +95,7 @@ final class Presenter: DisplaySink {
 }
 
 /// NSView backed by a CAMetalLayer showing the guest scanout, aspect-fit and Retina-aware.
-final class VMView: NSView {
+final class VMView: NSView, NSUserInterfaceValidations {
     let renderer: Renderer
     let metalLayer = CAMetalLayer()
     /// Fallback geometry for pointer mapping before the first frame.
@@ -116,6 +133,38 @@ final class VMView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    @objc func performFindPanelAction(_ sender: Any?) { controller?.performGuestEdit(#selector(performFindPanelAction(_:))) }
+    @objc func copy(_ sender: Any?) { controller?.performGuestEdit(#selector(copy(_:))) }
+    @objc func cut(_ sender: Any?) { controller?.performGuestEdit(#selector(cut(_:))) }
+    @objc func paste(_ sender: Any?) { controller?.performGuestEdit(#selector(paste(_:))) }
+    override func selectAll(_ sender: Any?) { controller?.performGuestEdit(#selector(selectAll(_:))) }
+    @objc func undo(_ sender: Any?) { controller?.performGuestEdit(#selector(undo(_:))) }
+    @objc func redo(_ sender: Any?) { controller?.performGuestEdit(#selector(redo(_:))) }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard let action = item.action else { return false }
+        return controller?.nativeEditing == true && GuestEditCommand.keys(for: action) != nil
+    }
+
+    private static let guestCursor = NSCursor(image: NSImage(size: NSSize(width: 16, height: 16)), hotSpot: .zero)
+
+    override func resetCursorRects() {
+        guard let rect = controller?.hostCursorRect?.intersection(visibleRect), !rect.isEmpty else { return }
+        addCursorRect(rect, cursor: Self.guestCursor)
+    }
+
+    func refreshHostCursor() {
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            guard let self, NSApp.isActive, let window = self.window, window.isKeyWindow,
+                  let rect = self.controller?.hostCursorRect else { return }
+            let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            guard rect.intersection(self.visibleRect).contains(point),
+                  NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber,
+                  self.hitTest(self.convert(point, to: self.superview)) === self else { return }
+            Self.guestCursor.set()
+        }
+    }
+
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         updateDrawableSize()
@@ -127,17 +176,17 @@ final class VMView: NSView {
     }
 
     // Mouse events go to the controller (window.acceptsMouseMovedEvents delivers mouseMoved here).
-    override func mouseMoved(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func mouseDragged(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func rightMouseDragged(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func otherMouseDragged(with e: NSEvent) { controller?.pointerMoved(e) }
-    override func mouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true) }
-    override func mouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false) }
-    override func rightMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true) }
-    override func rightMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false) }
-    override func otherMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true) }
-    override func otherMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false) }
-    override func scrollWheel(with e: NSEvent) { controller?.scroll(e) }
+    override func mouseMoved(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func mouseDragged(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func rightMouseDragged(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func otherMouseDragged(with e: NSEvent) { controller?.pointerMoved(e); refreshHostCursor() }
+    override func mouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true); refreshHostCursor() }
+    override func mouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false); refreshHostCursor() }
+    override func rightMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true); refreshHostCursor() }
+    override func rightMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false); refreshHostCursor() }
+    override func otherMouseDown(with e: NSEvent) { controller?.pointerButton(e, down: true); refreshHostCursor() }
+    override func otherMouseUp(with e: NSEvent) { controller?.pointerButton(e, down: false); refreshHostCursor() }
+    override func scrollWheel(with e: NSEvent) { controller?.scroll(e); refreshHostCursor() }
 
     private func updateDrawableSize() {
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2

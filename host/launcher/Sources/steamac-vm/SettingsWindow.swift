@@ -420,8 +420,9 @@ private struct DisplayTab: View {
                     }
                 }
                 Picker(selection: $settings.refreshRate) {
+                    Text("Auto (this screen, \(String(LauncherSettings.screenRefreshRate())) Hz)").tag(LauncherSettings.autoRefresh)
                     ForEach(DisplayTab.refreshRates, id: \.self) { Text("\($0) Hz").tag($0) }
-                    if !DisplayTab.refreshRates.contains(settings.refreshRate) {
+                    if settings.refreshRate != LauncherSettings.autoRefresh && !DisplayTab.refreshRates.contains(settings.refreshRate) {
                         Text("\(settings.refreshRate) Hz").tag(settings.refreshRate)
                     }
                 } label: {
@@ -484,7 +485,7 @@ private struct DisplayTab: View {
             Section {
                 Toggle(isOn: $settings.metalHUD) {
                     Label2(title: "Metal Performance HUD",
-                           detail: String(localized: "Apple's frame-rate overlay in the top-right corner of the window: FPS, frame interval, GPU time, memory (Ctrl+Cmd+P, View menu)."),
+                           detail: String(localized: "Apple's frame-rate overlay in the top-right corner of the window: FPS, frame interval, GPU time, memory (View menu)."),
                            now: true)
                 }
                 Toggle(isOn: $settings.superResolution) {
@@ -518,7 +519,7 @@ private struct MouseTab: View {
                            detail: String(localized: "While a game has focus, a click captures the pointer (relative motion for mouse-look)."),
                            now: true, key: .autoCaptureGames)
                 }
-                LabeledContent("Release the mouse") { Text("Ctrl+Option  (Ctrl+Cmd+G toggles)").foregroundStyle(.secondary) }
+                LabeledContent("Release the mouse") { Text("Ctrl+Option").foregroundStyle(.secondary) }
                 LabeledContent("Steam UI and desktop") {
                     Text("pointer follows the Mac cursor 1:1 (fixed)").foregroundStyle(.secondary)
                 }
@@ -596,7 +597,7 @@ private struct ControllerTab: View {
             Section {
                 Toggle(isOn: $settings.virtualPad) {
                     Label2(title: "Virtual controller",
-                           detail: String(localized: "SteamOS gets a gamepad while a controller is connected."),
+                           detail: String(localized: "SteamOS gets a gamepad once a connected controller is used."),
                            now: true, key: .virtualPad)
                 }
                 Picker(selection: $settings.padType) {

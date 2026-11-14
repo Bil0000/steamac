@@ -3,6 +3,7 @@
 // without a window or input devices, and takes commands on a FIFO while the VM runs:
 //
 //   resize W H WMM HMM   krun_display_resize(ctx, 0, W, H, WMM, HMM)
+//   mode W H WMM HMM HZ  krun_display_set_mode(ctx, 0, W, H, WMM, HMM, HZ)
 //   dump PATH            write the last presented frame as PNG
 //
 // The display backend logs every configure_scanout (scanout and display size) on stderr.
@@ -212,9 +213,12 @@ static void *control_thread(void *arg)
     }
     char line[4096];
     while (fgets(line, sizeof(line), f)) {
-        unsigned w, h, wmm, hmm;
+        unsigned w, h, wmm, hmm, hz;
         char path[4000];
-        if (sscanf(line, "resize %u %u %u %u", &w, &h, &wmm, &hmm) == 4) {
+        if (sscanf(line, "mode %u %u %u %u %u", &w, &h, &wmm, &hmm, &hz) == 5) {
+            int32_t r = krun_display_set_mode(ctx, 0, w, h, (uint16_t)wmm, (uint16_t)hmm, hz);
+            say("krun_display_set_mode(%ux%u, %ux%u mm, %u Hz) = %d", w, h, wmm, hmm, hz, r);
+        } else if (sscanf(line, "resize %u %u %u %u", &w, &h, &wmm, &hmm) == 4) {
             int32_t r = krun_display_resize(ctx, 0, w, h, (uint16_t)wmm, (uint16_t)hmm);
             say("krun_display_resize(%ux%u, %ux%u mm) = %d", w, h, wmm, hmm, r);
         } else if (sscanf(line, "dump %3999s", path) == 1) {

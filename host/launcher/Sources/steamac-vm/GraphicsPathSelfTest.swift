@@ -60,6 +60,11 @@ enum GraphicsPathSelfTest {
                              (["--experimental-game-support", "--no-experimental-game-support"], false)] {
             check((try? Options.parse(["steamac-vm"] + argv))?.experimentalGameSupport == want, "\(argv) must give experimental game support \(want)")
         }
+        check((try? Options.parse(["steamac-vm", "--launch-app", "2406770"]))?.launchApp == 2406770, "--launch-app must parse")
+        for bad in ["x", "0", "-5", "1 steamac.ssh=1"] {
+            check((try? Options.parse(["steamac-vm", "--launch-app", bad])) == nil, "--launch-app must reject \(bad)")
+        }
+        check(Options.kernelArg("steamac.launch_app", nil, unlessSetIn: "").isEmpty, "no --launch-app must add no key")
         log("selftest-graphics-path: experimental game support \(fexWords.joined(separator: " "))")
         log(failures == 0 ? "selftest-graphics-path: PASS" : "selftest-graphics-path: \(failures) FAILED")
         exit(failures == 0 ? 0 : 1)

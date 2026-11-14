@@ -214,6 +214,28 @@ final class InputDevice {
         Unmanaged<InputDevice>.fromOpaque(p!).takeUnretainedValue()
     }
 
+    func makeEventProvider() -> krun_input_event_provider {
+        let me = Unmanaged.passUnretained(self).toOpaque()
+        var events = krun_input_event_provider()
+        events.features = UInt64(KRUN_INPUT_EVENT_PROVIDER_FEATURE_QUEUE)
+        events.create_userdata = me
+        events.create = { instance, userdata, _ in
+            // Called on libkrun's input worker thread when the guest driver activates the device.
+            let p = UnsafeMutableRawPointer(mutating: userdata)
+            InputDevice.dev(p).activate()
+            instance?.pointee = p
+            return 0
+        }
+        events.vtable.destroy = { _ in 0 }
+        events.vtable.get_ready_efd = { inst in InputDevice.dev(inst).readFd }
+        events.vtable.next_event = { inst, out in
+            guard let out else { return KRUN_INPUT_ERR_INVALID_PARAM }
+            return InputDevice.dev(inst).nextEvent(out)
+        }
+
+        return events
+    }
+
     /// Register with libkrun. The device is retained for the process lifetime.
     func attach(ctx: UInt32) throws {
         let me = Unmanaged.passRetained(self).toOpaque()
@@ -246,22 +268,7 @@ final class InputDevice {
             InputDevice.writeBitmap(InputDevice.dev(inst).properties, buf, len)
         }
 
-        var events = krun_input_event_provider()
-        events.features = UInt64(KRUN_INPUT_EVENT_PROVIDER_FEATURE_QUEUE)
-        events.create_userdata = me
-        events.create = { instance, userdata, _ in
-            // Called on libkrun's input worker thread when the guest driver activates the device.
-            let p = UnsafeMutableRawPointer(mutating: userdata)
-            InputDevice.dev(p).activate()
-            instance?.pointee = p
-            return 0
-        }
-        events.vtable.destroy = { _ in 0 }
-        events.vtable.get_ready_efd = { inst in InputDevice.dev(inst).readFd }
-        events.vtable.next_event = { inst, out in
-            guard let out else { return KRUN_INPUT_ERR_INVALID_PARAM }
-            return InputDevice.dev(inst).nextEvent(out)
-        }
+        var events = makeEventProvider()
 
         let r = krun_add_input_device(ctx, &config, MemoryLayout<krun_input_config>.size,
                                       &events, MemoryLayout<krun_input_event_provider>.size)

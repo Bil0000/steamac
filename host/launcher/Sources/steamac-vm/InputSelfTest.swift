@@ -8,6 +8,17 @@ import Carbon.HIToolbox
 /// virtio-input devices, "pad[<line>]" for fx.pad). Finally it closes the window via
 /// performClose (the real close-button path -> guest power key) a few seconds later.
 enum InputSelfTest {
+    static func wait(_ condition: () -> Bool) -> Bool {
+        let app = NSApplication.shared
+        let deadline = Date().addingTimeInterval(2)
+        repeat {
+            if condition() { return true }
+            if let e = app.nextEvent(matching: .any, until: Date().addingTimeInterval(0.01), inMode: .default, dequeue: true) { app.sendEvent(e) }
+            app.updateWindows()
+        } while Date() < deadline
+        return condition()
+    }
+
     static func schedule(after seconds: Double, window wc: WindowController, gamepad: GamepadBridge?) {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
             log("input selftest: injecting key 'a', Shift+'b', pointer move/click/scroll, gamepad A + left stick")

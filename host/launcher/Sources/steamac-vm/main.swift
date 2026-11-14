@@ -52,6 +52,8 @@ if options.selftestDisplay { SelfTest.run(options) }
 if options.selftestOverlay { OverlaySelfTest.run(options) }
 if options.selftestStall { StallSelfTest.run(options) }
 if options.selftestPill { PillSelfTest.run(options) }
+if options.selftestCursor { CursorSelfTest.run() }
+if options.selftestShortcuts { ShortcutsSelfTest.run() }
 if options.selftestSettings { SettingsSelfTest.run(options, overrides: settingsOverrides) }
 if options.selftestProvision { ProvisionSelfTest.run(options) }
 if options.selftestRemotePlay { RemotePlaySelfTest.run() }
@@ -243,7 +245,10 @@ final class Lifecycle: NSObject, NSApplicationDelegate {
     @objc func menuRestart() { requestRestart() }
     @objc func menuForceQuit() { requestShutdown(force: true) }
     @objc func menuFullscreen() { window?.window.toggleFullScreen(nil) }
-    @objc func menuGrab() { window?.grabPointer() }
+    @objc func menuGrab() {
+        guard let window else { return }
+        window.pointerCaptured ? window.releasePointer() : window.grabPointer()
+    }
     @objc func menuOverlay() { window?.toggleOverlay() }
     @objc func menuMetalHUD() { window?.toggleMetalHUD() }
     @objc func menuSettings() { settingsWindow?.show() }
@@ -434,7 +439,6 @@ do {
     app.router = wc
     lifecycle.window = wc
     wc.onCloseRequest = { lifecycle.windowCloseRequested() }
-    wc.onSuspendRequest = { lifecycle.menuSuspend() }
     wc.attach(progress: progress)
     let ctxId = vm.ctx
     let gpuCounters: () -> StallMonitor.Counters? = {
@@ -473,13 +477,15 @@ do {
     sleepPort?.start { line in suspender.sleepPortLine(line, allowed: lifecycle.canPause) }
     wc.onWakeRequest = { what in suspender.resume(origin: what) }
     wc.onGuestSizeRequest = { w, h in vm.resizeDisplay(width: w, height: h) }
+    if options.refreshFollowsScreen { wc.onScreenRefreshRate = { hz in vm.setRefreshRate(hz) } }
+    // Hidden window: guest frames are not uploaded or drawn.
+    wc.onVisibleChange = { presenter.setVisible($0) }
     let settingsContext = SettingsContext(settings: settings, sound: sound, restart: { lifecycle.requestRestart() },
                                           vmHasPad: gamepad != nil, vmHasSound: vm.hasSound,
                                           diskPath: options.disks.first?.path)
     let settingsWindow = SettingsWindowController(context: settingsContext)
     lifecycle.settingsContext = settingsContext
     lifecycle.settingsWindow = settingsWindow
-    wc.onOpenSettings = { settingsWindow.show() }
     func openReport(_ origin: String, on parent: NSWindow) {
         wc.releasePointer()
         let context = ReportContext(origin: origin, options: options, runDir: Supervisor.runDir, guest: guestLogs,

@@ -30,7 +30,7 @@ enum SettingsSelfTest {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         // Crash-report scrubbing: the user, host, computer and Bonjour names never leave the Mac.
         var failures = CrashReporting.scrubSelfCheck() + CrashReporting.scannerSelfCheck() + VMSizing.selfCheck()
-            + UpdateChecker.selfCheck() + MacTime.selfCheck() + ClipboardSync.selfCheck() + experimentalGameSupportCheck()
+            + UpdateChecker.selfCheck() + MacTime.selfCheck() + ClipboardSync.selfCheck() + experimentalGameSupportCheck() + refreshRateCheck()
         var tabs = SettingsWindowController.Tab.allCases[...]
 
         func capture(_ name: String, _ rep: NSBitmapImageRep?) {
@@ -323,6 +323,40 @@ enum SettingsSelfTest {
         s.resetAll()
         check(!s.experimentalGameSupport && !LauncherSettings().experimentalGameSupport, "reset does not turn it off")
         log("selftest-settings: experimental game support: \(failures.isEmpty ? "ok" : failures.joined(separator: ", "))")
+        return failures
+    }
+
+    private static func refreshRateCheck() -> [String] {
+        var failures: [String] = []
+        func check(_ ok: Bool, _ what: String) { if !ok { failures.append("refresh rate: \(what)") } }
+        let domain = "\(LauncherSettings.defaultDomain).selftest-refresh-\(getpid())"
+        let previous = ProcessInfo.processInfo.environment["STEAMAC_DEFAULTS_DOMAIN"]
+        setenv("STEAMAC_DEFAULTS_DOMAIN", domain, 1)
+        defer {
+            if let previous { setenv("STEAMAC_DEFAULTS_DOMAIN", previous, 1) } else { unsetenv("STEAMAC_DEFAULTS_DOMAIN") }
+            UserDefaults.standard.removePersistentDomain(forName: domain)
+        }
+        let s = LauncherSettings()
+        check(s.refreshRate == LauncherSettings.autoRefresh, "default is not Auto")
+        do {
+            var o = try Options.parse(["steamac-vm"]); _ = o.applySettings(s)
+            check(o.refreshRate == LauncherSettings.screenRefreshRate() && o.refreshFollowsScreen, "Auto does not follow the screen")
+            var h = try Options.parse(["steamac-vm", "--headless"]); _ = h.applySettings(s)
+            check(h.refreshRate == 60 && !h.refreshFollowsScreen, "headless Auto is not 60")
+            check(s.set("refreshRate", "75") && LauncherSettings().refreshRate == 75, "75 not persisted")
+            var f = try Options.parse(["steamac-vm"]); _ = f.applySettings(s)
+            check(f.refreshRate == 75 && !f.refreshFollowsScreen, "a fixed rate is not applied")
+            var c = try Options.parse(["steamac-vm", "--refresh", "50"]); let ov = c.applySettings(s)
+            check(c.refreshRate == 50 && ov[.refreshRate] != nil && !c.refreshFollowsScreen, "--refresh does not override")
+        } catch {
+            check(false, "\(error)")
+        }
+        check(s.set("refreshRate", "auto") && s.refreshRate == LauncherSettings.autoRefresh, "set auto failed")
+        check(!s.set("refreshRate", "500") && !s.set("refreshRate", "x"), "accepted a bad value")
+        s.refreshRate = 120
+        s.resetAll()
+        check(s.refreshRate == LauncherSettings.autoRefresh, "reset is not Auto")
+        log("selftest-settings: refresh rate: \(failures.isEmpty ? "ok" : failures.joined(separator: ", "))")
         return failures
     }
 }
