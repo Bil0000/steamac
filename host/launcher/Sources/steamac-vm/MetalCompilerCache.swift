@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Metal
@@ -5,6 +6,11 @@ import Metal
 /// STEAMAC-2E: Metal's frontend cannot compile monolithic_metal.pcm in an inaccessible or
 /// immutable cache. TMPDIR does not redirect confstr(_CS_DARWIN_USER_CACHE_DIR). Metal's
 /// optional cache-path SPI must run before any device/library or cache getter is used.
+/// The SPI redirects both com.apple.metal (library cache) and com.apple.metalfe (module cache).
+/// The library cache is capped at 1 GiB, evicts oldest first and keys entries by the bundle's
+/// resourcePath, so app copies sharing one bundle id evict each other's shaders: each copy gets
+/// its own directory. App Translocation runs a quarantined copy from a new random path on every
+/// launch: those launches share one directory.
 enum MetalCompilerCache {
     private typealias SetPath = @convention(c) (UnsafeRawPointer) -> Void
 
@@ -26,27 +32,55 @@ enum MetalCompilerCache {
             log("Metal compiler cache: cannot locate DARWIN_USER_CACHE_DIR (\(String(cString: strerror(errno))))")
             return
         }
-        let bundle = Bundle.main.bundleIdentifier ?? LauncherSettings.defaultDomain
-        let primary = String(cString: buffer) + bundle + "/com.apple.metalfe"
-        let fallback = NSHomeDirectory() + "/Library/Caches/" + LauncherSettings.defaultDomain + "/metal-compiler"
-        do { _ = try prepare(primary: primary, fallback: fallback) }
+        let (primary, fallback) = paths(userCache: String(cString: buffer), home: NSHomeDirectory(),
+                                        bundleID: Bundle.main.bundleIdentifier, bundlePath: Bundle.main.bundlePath)
+        if Bundle.main.bundlePath.hasSuffix(".app") { adoptLegacyCache(primary: primary) }
+        do { log("Metal shader cache: \(try prepare(primary: primary, fallback: fallback))") }
         catch { log("Metal compiler cache: cannot use a writable replacement: \(error)") }
+    }
+
+    static func paths(userCache: String, home: String, bundleID: String?, bundlePath: String) -> (primary: String, fallback: String) {
+        let name = directoryName(bundlePath: bundlePath)
+        return (userCache + (bundleID ?? LauncherSettings.defaultDomain) + "/" + name,
+                home + "/Library/Caches/" + LauncherSettings.defaultDomain + "/" + name)
+    }
+
+    /// Builds before the per-copy cache used Metal's default <bundle id>/com.apple.metal, which has the
+    /// same layout: the first app copy that starts after the update takes it over, so its shaders do
+    /// not compile again (a bare development binary does not).
+    static func adoptLegacyCache(primary: String) {
+        let legacy = (primary as NSString).deletingLastPathComponent + "/com.apple.metal"
+        guard !FileManager.default.fileExists(atPath: primary), FileManager.default.fileExists(atPath: legacy) else { return }
+        do {
+            try FileManager.default.moveItem(atPath: legacy, toPath: primary)
+            log("Metal shader cache: moved \(legacy) to \(primary)")
+        } catch {
+            log("Metal shader cache: cannot move \(legacy): \(error)")
+        }
+    }
+
+    static func directoryName(bundlePath: String) -> String {
+        let path = URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath().path
+        guard !path.contains("/AppTranslocation/") else { return "metal-translocated" }
+        return "metal-" + SHA256.hash(data: Data(path.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Probe the existing module tree, not just its parent: one stale immutable .pcm or hash
     /// directory is enough to break compilation. Do not change ownership, ACLs or file flags,
     /// and never delete the original cache (another VM process may still be using it).
+    /// Returns the directory Metal now uses.
     @discardableResult
-    static func prepare(primary: String, fallback: String) throws -> Bool {
+    static func prepare(primary: String, fallback: String) throws -> String {
         do {
             try checkWritableTree(primary)
-            return false
+            try setPath(primary)
+            return primary
         } catch {
             let reason = "\(error)"
             try checkWritableTree(fallback)
             try setPath(fallback)
             log("Metal compiler cache: \(primary) is not writable (\(reason)); using \(fallback) before Metal initialises")
-            return true
+            return fallback
         }
     }
 
@@ -95,12 +129,13 @@ enum MetalCompilerCache {
         if let root = environment["STEAMAC_METAL_CACHE_SELFTEST_ROOT"],
            let mode = environment["STEAMAC_METAL_CACHE_SELFTEST_MODE"] {
             do {
-                let primary = root + "/blocked", fallback = root + "/replacement"
+                let primary = root + (mode == "healthy" ? "/own" : "/blocked"), fallback = root + "/replacement"
                 if mode == "blocked" {
                     try setPath(primary)
                 } else {
-                    guard try prepare(primary: primary, fallback: fallback) else {
-                        throw OptionError("blocked module cache was not detected")
+                    let want = mode == "healthy" ? primary : fallback
+                    guard try prepare(primary: primary, fallback: fallback) == want else {
+                        throw OptionError("\(mode): Metal does not use \(want)")
                     }
                 }
                 guard let device = MTLCreateSystemDefaultDevice() else { throw OptionError("no Metal device") }
@@ -109,8 +144,13 @@ enum MetalCompilerCache {
                 let source = "#include <metal_stdlib>\nusing namespace metal; kernel void cacheProbe\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))(device float* output [[buffer(0)]], uint tid [[thread_position_in_grid]]) { output[tid] = sin(float(tid)); }"
                 do {
                     _ = try device.makeLibrary(source: source, options: options)
-                    guard mode == "repaired" else { throw OptionError("blocked cache unexpectedly compiled") }
-                    log("selftest-metal-cache: PASS Metal source compiles with replacement cache")
+                    guard mode != "blocked" else { throw OptionError("blocked cache unexpectedly compiled") }
+                    if mode == "healthy" {
+                        guard FileManager.default.subpaths(atPath: primary)?.contains(where: { $0.hasSuffix("/libraries.list") }) == true else {
+                            throw OptionError("Metal library cache is not in \(primary)")
+                        }
+                    }
+                    log("selftest-metal-cache: PASS Metal source compiles with \(mode == "healthy" ? "this copy's own cache" : "replacement cache")")
                 } catch {
                     let detail = "\(error)"
                     guard mode == "blocked", detail.contains("monolithic_metal.pcm"),
@@ -128,7 +168,7 @@ enum MetalCompilerCache {
         do {
             try FileManager.default.createDirectory(atPath: blocked, withIntermediateDirectories: true)
             guard chflags(blocked, UInt32(UF_IMMUTABLE)) == 0 else { throw OptionError("chflags: \(String(cString: strerror(errno)))") }
-            for mode in ["blocked", "repaired"] {
+            for mode in ["blocked", "repaired", "healthy"] {
                 let process = Process()
                 process.executableURL = Bundle.main.executableURL
                 process.arguments = ["--selftest-metal-cache"]
@@ -142,8 +182,8 @@ enum MetalCompilerCache {
                     throw OptionError("\(mode) child failed: \(process.terminationStatus)")
                 }
             }
-            guard try !prepare(primary: root + "/healthy", fallback: root + "/unused") else {
-                throw OptionError("healthy cache must not be redirected")
+            guard try prepare(primary: root + "/healthy", fallback: root + "/unused") == root + "/healthy" else {
+                throw OptionError("healthy per-copy cache was not used")
             }
             guard !FileManager.default.fileExists(atPath: root + "/unused") else {
                 throw OptionError("healthy cache created an unnecessary replacement")
@@ -163,9 +203,35 @@ enum MetalCompilerCache {
             chflags(pcm, 0)
             guard rejected else { throw OptionError("immutable existing module was not detected") }
             log("selftest-metal-cache: PASS inaccessible hash directory and immutable existing module detected")
+            let fm = FileManager.default
+            let copies = ["/a/FX Steam Launcher.app", "/b/FX Steam Launcher.app", "/AppTranslocation/X1/d/FX Steam Launcher.app",
+                          "/AppTranslocation/X2/d/FX Steam Launcher.app"].map { root + "/apps" + $0 }
+            for copy in copies { try fm.createDirectory(atPath: copy, withIntermediateDirectories: true) }
+            try fm.createSymbolicLink(atPath: root + "/apps/link.app", withDestinationPath: copies[0])
+            func cache(_ app: String) -> String { paths(userCache: root + "/cache/", home: root + "/home", bundleID: "id", bundlePath: app).primary }
+            let own = cache(copies[0])
+            let legacy = root + "/cache/id/com.apple.metal/32024"
+            try fm.createDirectory(atPath: legacy, withIntermediateDirectories: true)
+            try Data([0]).write(to: URL(fileURLWithPath: legacy + "/libraries.list"))
+            adoptLegacyCache(primary: own)
+            adoptLegacyCache(primary: cache(copies[1]))
+            guard fm.fileExists(atPath: own + "/32024/libraries.list"), !fm.fileExists(atPath: cache(copies[1])) else {
+                throw OptionError("the old shared cache did not move to the first copy's directory")
+            }
+            guard own.hasPrefix(root + "/cache/id/metal-"), cache(copies[0] + "/") == own, cache(root + "/apps/link.app") == own else {
+                throw OptionError("one app copy reached by another path gets another cache directory: \(own), \(cache(root + "/apps/link.app"))")
+            }
+            guard cache(copies[1]) != own else { throw OptionError("two app copies share one cache directory") }
+            guard cache(copies[2]) == cache(copies[3]), cache(copies[2]) == root + "/cache/id/metal-translocated" else {
+                throw OptionError("translocated launches get new cache directories: \(cache(copies[2])), \(cache(copies[3]))")
+            }
+            guard directoryName(bundlePath: "/nonexistent/FX Steam Launcher.app") == "metal-5a55a084f63f" else {
+                throw OptionError("cache directory name changed: \(directoryName(bundlePath: "/nonexistent/FX Steam Launcher.app"))")
+            }
             chflags(blocked, 0)
-            try FileManager.default.removeItem(atPath: root)
-            log("selftest-metal-cache: PASS healthy cache is unchanged; all passed")
+            try fm.removeItem(atPath: root)
+            log("selftest-metal-cache: PASS each app copy gets its own stable cache directory, translocated launches share one")
+            log("selftest-metal-cache: PASS healthy per-copy cache is used without a replacement; all passed")
             exit(0)
         } catch {
             chflags(blocked, 0)

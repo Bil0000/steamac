@@ -36,7 +36,7 @@ struct Options {
         let prefix = "steamac.gpu_mib="
         let word = cmdline.split(separator: " ").last { $0.hasPrefix(prefix) }
         return word.flatMap { Int($0.dropFirst(prefix.count)) }
-            ?? VMSizing.gpuBudgetMiB(memMiB: memMiB)
+            ?? VMSizing.gpuBudgetMiB(memMiB: memMiB, auto: memSource == .auto)
     }
     /// Initial window content size in points (`--display`, Settings > Display window size).
     var displayWidth = 1280
@@ -557,7 +557,7 @@ struct Options {
             func add(_ key: String, _ value: @autoclosure () -> String?) { o.cmdline += Options.kernelArg(key, value(), unlessSetIn: given) }
             add("steamac.ssh", o.sshPort == 0 ? "0" : "1")
             add("steamac.steam_client", o.steamClient.rawValue)
-            add("steamac.gpu_mib", String(VMSizing.gpuBudgetMiB(memMiB: o.memMiB)))
+            add("steamac.gpu_mib", String(VMSizing.gpuBudgetMiB(memMiB: o.memMiB, auto: o.memSource == .auto)))
             // the guest's Proton-lean tool uses DXMT only when the host offers the wmtr context
             add("steamac.gfx", o.graphicsPath.rawValue)
             // only written when on; absent is the default (off), so an explicit =0 needs no key

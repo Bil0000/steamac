@@ -927,14 +927,14 @@ private struct AdvancedTab: View {
                     }
                 }
                 Picker(selection: Binding(get: { settings.memMiB == 0 },
-                                          set: { settings.memMiB = $0 ? 0 : min(AdvancedTab.maxGiB, AdvancedTab.autoGiB) * 1024 })) {
+                                          set: { settings.memMiB = $0 ? 0 : min(AdvancedTab.maxGiB, VMSizing.autoMemMiB(AdvancedTab.host.idle) / 1024) * 1024 })) {
                     Text("Automatic (\(AdvancedTab.autoGiB) GB for this Mac)").tag(true)
                     Text("Custom").tag(false)
                 } label: {
-                    Label2(title: "Memory", detail: String(localized: "Automatic: half of this Mac's RAM (4 to 16 GB). The Mac's GPU memory comes from the same RAM, so the rest stays with macOS and the games' graphics."),
+                    Label2(title: "Memory", detail: String(localized: "Automatic: half of this Mac's RAM (4 to 16 GB), less when other apps already use memory at start. The Mac's GPU memory comes from the same RAM, so the rest stays with macOS and the games' graphics."),
                            now: false, key: .memMiB)
                 }
-                Text("GPU budget: \(VMSizing.gpuBudgetMiB(memMiB: settings.memMiB > 0 ? settings.memMiB : AdvancedTab.autoGiB * 1024, host: AdvancedTab.host)) MiB. macOS and driver reserve: \(VMSizing.hostReserveMiB(AdvancedTab.host)) MiB.")
+                Text("GPU budget: \(VMSizing.gpuBudgetMiB(memMiB: settings.memMiB, auto: settings.memMiB == 0, host: AdvancedTab.host)) MiB. macOS and driver reserve: \(VMSizing.hostReserveMiB(AdvancedTab.host)) MiB.")
                     .font(.caption).foregroundStyle(.secondary)
                 if settings.memMiB > 0 {
                     Stepper(value: Binding(get: { settings.memMiB / 1024 },

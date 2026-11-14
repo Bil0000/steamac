@@ -95,6 +95,7 @@ enum Supervisor {
         var frame: String?
         while true {
             let o: Options
+            VMSizing.Host.refresh()
             do {
                 o = try resolve()
             } catch {
@@ -152,6 +153,7 @@ enum Supervisor {
             env[bootEnv] = String(boot)
             env[netSockEnv] = gvproxy?.vfkitSocket
             env[frameEnv] = frame
+            env[VMSizing.availEnv] = VMSizing.Host.current.availMiB.map(String.init)
             CrashReporting.supervisorBoot(o, boot: boot, runDir: dir, env: &env)
             let vmExit = spawnAndWait(exe, CommandLine.arguments, env)
             let status = vmExit.status

@@ -9,11 +9,14 @@ driver at runtime (no Vulkan loader): the launcher sets `VKR_VULKAN_DRIVER` to
 overlay shows the driver (“Venus → KosmicKrisp”); crash reports carry `vulkan_driver` and the
 driver's patch revision.
 
-Before Metal initialises, the launcher checks that its runtime compiler's module cache
-(`DARWIN_USER_CACHE_DIR/<bundle id>/com.apple.metalfe`, including existing hash directories and
-`.pcm` files) is writable. If permissions, ACLs or immutable file flags block it, the launcher logs
-the failing path and redirects Metal to `~/Library/Caches/es.fxgam.steamac/metal-compiler`.
-It does not delete the old cache or change its permissions. This uses Metal's optional cache-path
+Before Metal initialises, the launcher points Metal's shader cache at a directory of its own app
+copy: `DARWIN_USER_CACHE_DIR/<bundle id>/metal-<hash of the app path>`, or `metal-translocated` for
+App Translocation. Metal caps this cache at 1 GiB and keys entries by the app's path, so copies at
+different paths that shared one cache evicted each other's shaders. The first copy that starts after
+the update takes over the old shared `<bundle id>/com.apple.metal`, so its shaders do not compile again.
+The launcher checks that the directory, including existing hash directories and `.pcm` files, is
+writable. If permissions, ACLs or immutable file flags block it, the launcher logs the failing path
+and uses `~/Library/Caches/es.fxgam.steamac/metal-<hash>` instead. It does not change permissions. This uses Metal's optional cache-path
 SPI; if the override is unavailable or the replacement is also unwritable, that is logged and
 shader compilation errors remain reportable. `work/out/steamac-vm --selftest-metal-cache` reproduces
 the `monolithic_metal.pcm: Operation not permitted` failure in a private immutable cache, then

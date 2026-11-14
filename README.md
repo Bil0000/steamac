@@ -31,7 +31,7 @@ DXMT (single runs, see [docs/eac-performance.md](docs/eac-performance.md)).
 | an Apple silicon Mac | verified on an M2 MacBook Air, 16 GB, macOS 27.0; other Macs are untested |
 | macOS 15 or newer | KosmicKrisp (the faster Vulkan driver) needs macOS 26. The DXMT path's host library is built for macOS 15.5 or newer |
 | free disk space | we recommend about 20 GB free on the Mac for the SteamOS disk and its download cache, plus room for the games themselves (our estimate; it may vary). Measured: about 14 GB on the disk's volume while the disk is created, about 9 GB afterwards. The home size is chosen at creation and can be enlarged later with Grow Disk |
-| memory | 16 GB minimum; less is not supported. Automatic VM RAM is half of the Mac's RAM (4-16 GiB) |
+| memory | 16 GB minimum; less is not supported. Automatic VM RAM is half of the Mac's RAM (4-16 GiB), less when other apps already use memory at start |
 | a Steam account | games are installed and run inside SteamOS |
 
 ## Install and first launch
@@ -125,7 +125,7 @@ More: [docs/eac-troubleshooting.md](docs/eac-troubleshooting.md).
 
 ## Memory
 
-The VM's memory is set in Settings > Advanced > **Memory** (automatic: half of the Mac's RAM, 4-16 GB). The Mac's GPU
+The VM's memory is set in Settings > Advanced > **Memory** (automatic: half of the Mac's RAM, 4-16 GB, less when other apps already use memory at start). The Mac's GPU
 memory comes from the same RAM, so a larger VM leaves less for macOS and the game's graphics. Memory the guest no longer
 uses goes back to the Mac:
 

@@ -18,7 +18,11 @@ over saved values, but only for that launch: the field displays “overridden by
 | Advanced | — | vCPU (`--cpus`), RAM (`--mem`), SSH enable/disable + port (`--ssh-port`, `--no-ssh`) and generated password, network (`--no-net`), disk image (`--disk`), Create New Disk…, Steam client (`--steam-client`, see “Steam client”), Vulkan driver (`--vulkan-driver`, see “Vulkan driver”) |
 
 **VM RAM and graphics share the Mac's memory.** Automatic VM RAM is half of physical RAM
-(4–16 GiB). On every boot the launcher also reserves at least 3 GiB, or a quarter of host RAM,
+(4–16 GiB), less when other apps already use memory at start: if VM RAM, GPU budget and a
+headroom (2 GiB, or 1/16 of host RAM when larger) do not fit in the memory macOS reports as available
+at boot (the free percentage of `memory_pressure`), both shrink by the same share: VM RAM not below
+8 GiB, the GPU budget not below 2 GiB (or their normal sizes when smaller). A custom VM size ignores this. On every boot the
+launcher also reserves at least 3 GiB, or a quarter of host RAM,
 for macOS, other apps and driver overhead; the remainder is the GPU budget (256 MiB–16 GiB,
 rounded down to 256 MiB). For a 16 GiB Mac this is 8 GiB VM + 4 GiB GPU + 4 GiB reserve;
 a custom 9 GiB VM leaves 3 GiB for graphics. Settings → Advanced shows both allowances
