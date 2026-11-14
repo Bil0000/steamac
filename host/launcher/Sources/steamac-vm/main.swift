@@ -80,6 +80,10 @@ if let disk = options.showSSHPassword {
 // The process the user runs supervises one VM process per boot (see Supervisor); it re-reads
 // the settings before every boot.
 if !Supervisor.isChild {
+    if !options.headless {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        NSApplication.shared.yieldActivation(toApplicationWithBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+    }
     Supervisor.run { try Options.resolve(CommandLine.arguments, settings: LauncherSettings()).0 }
 }
 if options.needsDisk { FirstRun.run(settings: settings) }
