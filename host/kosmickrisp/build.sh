@@ -175,6 +175,10 @@
 #              stayed used for the life of the VMM; after a few launches of a vkd3d-proton game (timestamp pools of
 #              8192) every one of the 32 counter heaps was taken, vkCreateQueryPool failed ("too many heaps already
 #              allocated") and the game's next start closed itself (Bodycam). Test: tests/ts-heap-leak.c.
+#   0049       steamac: a timestamp pool that gets no counter heap entries (all 32 shared heaps taken: 16 pools of
+#              8192 fill them) is still created; its timestamps are written as 0 and become available at once.
+#              Failing vkCreateQueryPool lost the pool in Venus and the game's GPU context: Bodycam closed itself
+#              during its first start with Steam's devices alive. Test: tests/ts-heap-leak.c (20 pools on a device).
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver

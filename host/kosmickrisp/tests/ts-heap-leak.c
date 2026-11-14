@@ -4,7 +4,9 @@
  * chunks of the process' 32 shared Metal counter heaps (0037) must return with the device: without that, vkd3d-proton's
  * timestamp pools of 8192 used every heap after a few game launches and vkCreateQueryPool failed ("too many heaps
  * already allocated"). 40 rounds of: a device, 4 timestamp pools of 8192 with one timestamp written each, the device
- * destroyed without destroying the pools. Prints "RESULT: PASS|FAIL ...". Run through tests/run.sh.
+ * destroyed without destroying the pools. Then 20 timestamp pools of 8192 on one device, more than the heaps hold
+ * (0049): all are created and a timestamp of the last becomes available. Prints "RESULT: PASS|FAIL ...". Run through
+ * tests/run.sh.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,7 +50,39 @@ int main(void)
       vkDestroyCommandPool(dev, cp, NULL);
       vkDestroyDevice(dev, NULL);
    }
-   printf("RESULT: PASS %d devices destroyed with %d live timestamp pools of 8192 each\n", ROUNDS, POOLS);
+   /* More timestamp pools than the 32 shared counter heaps hold (16 of 8192): every pool is still created
+    * (0049), and a timestamp written to the last one becomes available. */
+   round = ROUNDS;
+   {
+      float prio = 1;
+      VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueCount = 1, .pQueuePriorities = &prio};
+      VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci};
+      VkDevice dev; CHECK(vkCreateDevice(pd, &dci, NULL, &dev));
+      VkQueue q; vkGetDeviceQueue(dev, 0, 0, &q);
+      VkQueryPool pool = VK_NULL_HANDLE;
+      for (int i = 0; i < 20; i++) {
+         VkQueryPoolCreateInfo qpi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 8192};
+         CHECK(vkCreateQueryPool(dev, &qpi, NULL, &pool));
+      }
+      VkCommandPoolCreateInfo cpi = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+      VkCommandPool cp; CHECK(vkCreateCommandPool(dev, &cpi, NULL, &cp));
+      VkCommandBufferAllocateInfo cba = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = cp, .commandBufferCount = 1};
+      VkCommandBuffer cb; CHECK(vkAllocateCommandBuffers(dev, &cba, &cb));
+      VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+      CHECK(vkBeginCommandBuffer(cb, &bi));
+      vkCmdResetQueryPool(cb, pool, 0, 1);
+      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 0);
+      CHECK(vkEndCommandBuffer(cb));
+      VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cb};
+      CHECK(vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE));
+      CHECK(vkQueueWaitIdle(q));
+      uint64_t value[2];
+      CHECK(vkGetQueryPoolResults(dev, pool, 0, 1, sizeof(value), value, sizeof(value), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT));
+      if (!value[1]) { printf("RESULT: FAIL timestamp of the 20th pool never became available\n"); return 1; }
+      vkDestroyCommandPool(dev, cp, NULL);
+      vkDestroyDevice(dev, NULL);
+   }
+   printf("RESULT: PASS %d devices destroyed with %d live timestamp pools of 8192 each; 20 pools on one device\n", ROUNDS, POOLS);
    vkDestroyInstance(inst, NULL);
    return 0;
 }
