@@ -170,6 +170,11 @@
 #              into gfx->pipe; make the flush and dispatch bails structural (command-buffer error, no dispatch
 #              without a render state) instead of asserts. Not yet live-verified: the recorded runs under
 #              MESA_KK_ASYNC_PIPELINES=2 predate this patch's build.
+#   0048       steamac: a destroyed device returns the timestamp chunks (0037) of query pools it still holds. Under
+#              virglrenderer a guest game that exits has its device destroyed with its pools alive, so the chunks
+#              stayed used for the life of the VMM; after a few launches of a vkd3d-proton game (timestamp pools of
+#              8192) every one of the 32 counter heaps was taken, vkCreateQueryPool failed ("too many heaps already
+#              allocated") and the game's next start closed itself (Bodycam). Test: tests/ts-heap-leak.c.
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver
