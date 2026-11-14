@@ -8,8 +8,8 @@ struct DiskSpec {
 enum MouseMode: String {
     /// Default. The host pointer drives the guest cursor 1:1 through the relative mouse
     /// (gamescope ignores absolute pointer motion; Desktop Mode's Plasma runs inside it too); while
-    /// a game is focused in the guest, a click captures the pointer (raw relative motion for
-    /// mouse-look), Ctrl+Option releases.
+    /// a game is focused in the guest and the window is active, the pointer is captured (raw
+    /// relative motion for mouse-look); another window or Ctrl+Option releases.
     case auto
     /// Absolute virtio tablet, for a guest compositor that accepts absolute pointers (gamescope,
     /// and so both SteamOS modes, does not).
@@ -215,10 +215,11 @@ struct Options {
       --gvproxy PATH       gvproxy binary (default: <exe dir>/host/bin/gvproxy, Homebrew, PATH)
       --frame-dump PNG     where SIGUSR1 writes the current frame (default ./steamac-frame.png)
       --mouse MODE         auto (default): pointer follows the host cursor 1:1 (also in Desktop Mode);
-                           while a game has focus a click captures the mouse (relative, for mouse-look),
-                           Ctrl+Option releases. tablet: absolute virtio tablet (ignored by gamescope, so
-                           only for other guest compositors). capture: always click-to-capture.
-      --auto-capture on|off  auto mode: capture on click in games, for this run (default: the saved
+                           while a game has focus and the window is active the mouse is captured
+                           (relative, for mouse-look); another window or Ctrl+Option releases.
+                           tablet: absolute virtio tablet (ignored by gamescope, so only for other
+                           guest compositors). capture: always click-to-capture.
+      --auto-capture on|off  auto mode: capture the mouse in games, for this run (default: the saved
                            setting, menu Mouse > Auto-Capture Mouse in Games; per-game overrides apply)
       --no-gamepad         no virtual gamepad this run (default: Settings > Controller "Virtual
                            controller", which applies while the VM runs)

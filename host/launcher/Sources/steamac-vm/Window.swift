@@ -377,6 +377,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             pauseView.show(gameName: settings.gameName(appid))
         } else {
             pauseView.hide()
+            captureIfGameActive()
         }
         updateTitle()
         updateNoPictureGate()
@@ -391,6 +392,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             sleepView.show(gameName: nil)
         } else {
             sleepView.hide()
+            captureIfGameActive()
         }
         updateTitle()
         updateNoPictureGate()
@@ -659,7 +661,13 @@ final class WindowController: NSObject, NSWindowDelegate {
         log("display: window on \"\(s.localizedName)\" (\(s.maximumFramesPerSecond) Hz, \(s.backingScaleFactor)x)")
         onScreenRefreshRate?(LauncherSettings.refreshRate(of: s))
     }
-    func windowDidBecomeKey(_ notification: Notification) { view.refreshHostCursor() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        view.refreshHostCursor()
+        // Activated by a click: a click in the picture captures through pointerButton (not sent to the
+        // game); one on the title bar may start a window drag, which a capture would freeze.
+        let byClick = NSApp.currentEvent.map { [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains($0.type) } ?? false
+        if !byClick { captureIfGameActive() }
+    }
     func windowDidResignKey(_ notification: Notification) { releaseAll() }
     func windowDidMiniaturize(_ notification: Notification) { releaseAll() }
 
@@ -849,11 +857,22 @@ final class WindowController: NSObject, NSWindowDelegate {
         guestCursor = nil
         // Back in Steam / desktop (or a game without auto-capture): give the pointer back.
         if captured && mouseMode == .auto && !clickCaptures { releasePointer() }
+        captureIfGameActive()
         updateTitle()
-        if let id = focusedGame, mouseMode == .auto {
-            flashStatus(settings.autoCapture(for: id) ? String(localized: "click to capture the mouse (Ctrl+Option releases)")
-                                                      : String(localized: "auto-capture off for \(gameLabel(id))"))
+        if let id = focusedGame, mouseMode == .auto, !settings.autoCapture(for: id) {
+            flashStatus(String(localized: "auto-capture off for \(gameLabel(id))"))
         }
+    }
+
+    private func captureIfGameActive() {
+        guard !captured, focusedGame != nil, clickCaptures, NSApp.isActive, window.isKeyWindow,
+              !pauseView.shown, !guestAsleep, !overlay.shown else { return }
+        // A pointer outside the picture (another screen) would stay there hidden and send clicks to other windows.
+        if !view.bounds.contains(view.convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
+            let c = window.convertPoint(toScreen: view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil))
+            CGWarpMouseCursorPosition(CGPoint(x: c.x, y: NSScreen.screens[0].frame.maxY - c.y))
+        }
+        grabPointer()
     }
 
     /// Window-title hint for a few seconds, then back to the regular status.

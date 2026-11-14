@@ -516,7 +516,7 @@ private struct MouseTab: View {
             Section {
                 Toggle(isOn: $settings.autoCaptureGames) {
                     Label2(title: "Capture the mouse in games",
-                           detail: String(localized: "While a game has focus, a click captures the pointer (relative motion for mouse-look)."),
+                           detail: String(localized: "While a game has focus and the FX window is active, the mouse is captured without a click (relative motion for mouse-look). Another window or Ctrl+Option releases it."),
                            now: true, key: .autoCaptureGames)
                 }
                 Toggle(isOn: $settings.rawMouse) {
