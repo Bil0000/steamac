@@ -519,6 +519,11 @@ private struct MouseTab: View {
                            detail: String(localized: "While a game has focus, a click captures the pointer (relative motion for mouse-look)."),
                            now: true, key: .autoCaptureGames)
                 }
+                Toggle(isOn: $settings.rawMouse) {
+                    Label2(title: "Raw mouse input",
+                           detail: String(localized: "While the mouse is captured, games get the mouse's own motion without macOS pointer acceleration, so the same hand movement always turns the view the same amount. Game sensitivity may need a new value."),
+                           now: true, key: .rawMouse)
+                }
                 LabeledContent("Release the mouse") { Text("Ctrl+Option").foregroundStyle(.secondary) }
                 LabeledContent("Steam UI and desktop") {
                     Text("pointer follows the Mac cursor 1:1 (fixed)").foregroundStyle(.secondary)

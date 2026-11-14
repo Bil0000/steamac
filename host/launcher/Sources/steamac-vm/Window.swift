@@ -943,9 +943,11 @@ extension WindowController {
         captured = true
         relRemainder = (0, 0)
         rawMouse = false
-        GCMouse.mice().forEach(attachRawMouse)
-        mouseConnectObserver = NotificationCenter.default.addObserver(forName: .GCMouseDidConnect, object: nil, queue: .main) {
-            [weak self] in ($0.object as? GCMouse).map { self?.attachRawMouse($0) }
+        if settings.rawMouse {
+            GCMouse.mice().forEach(attachRawMouse)
+            mouseConnectObserver = NotificationCenter.default.addObserver(forName: .GCMouseDidConnect, object: nil, queue: .main) {
+                [weak self] in ($0.object as? GCMouse).map { self?.attachRawMouse($0) }
+            }
         }
         CGAssociateMouseAndMouseCursorPosition(0)
         NSCursor.hide()

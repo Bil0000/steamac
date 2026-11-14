@@ -320,8 +320,11 @@ enum SettingsSelfTest {
         } catch {
             check(false, "\(error)")
         }
+        check(!s.rawMouse, "raw mouse default on")
+        check(s.set("rawMouse", "on") && LauncherSettings().rawMouse, "raw mouse on not persisted")
         s.resetAll()
         check(!s.experimentalGameSupport && !LauncherSettings().experimentalGameSupport, "reset does not turn it off")
+        check(!s.rawMouse && !LauncherSettings().rawMouse, "reset does not turn raw mouse off")
         log("selftest-settings: experimental game support: \(failures.isEmpty ? "ok" : failures.joined(separator: ", "))")
         return failures
     }

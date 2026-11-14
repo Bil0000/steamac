@@ -26,7 +26,7 @@ final class LauncherSettings: ObservableObject {
         case dpiSource, fixedDPI, fixedWidthMM, fixedHeightMM, refreshRate, followWindowSize, windowWidth, windowHeight,
              windowSizePreset, retinaResolution, metalHUD, superResolution, renderScale, upscaleLowerResolutions
         // Mouse
-        case autoCaptureGames, gameNames
+        case autoCaptureGames, rawMouse, gameNames
         // Controller
         case virtualPad, padType, dualSensePassthrough, controllerID, swapABXY, stickDeadzone
         // Sound
@@ -364,6 +364,7 @@ final class LauncherSettings: ObservableObject {
     @Published var upscaleLowerResolutions = false { didSet { save(.upscaleLowerResolutions, upscaleLowerResolutions) } }
     // Mouse
     @Published var autoCaptureGames = true { didSet { save(.autoCaptureGames, autoCaptureGames) } }
+    @Published var rawMouse = false { didSet { save(.rawMouse, rawMouse) } }
     @Published private(set) var games: [Game] = []
     // Controller
     /// SteamOS gets a gamepad while a controller is connected.
@@ -466,6 +467,7 @@ final class LauncherSettings: ObservableObject {
         bool(.upscaleLowerResolutions, &upscaleLowerResolutions)
         if let v = d.object(forKey: Key.renderScale.rawValue) as? Double { renderScale = min(1, max(0.25, v)) }
         bool(.autoCaptureGames, &autoCaptureGames)
+        bool(.rawMouse, &rawMouse)
         bool(.virtualPad, &virtualPad)
         if let s = d.string(forKey: Key.padType.rawValue).flatMap(PadType.init(rawValue:)) { padType = s }
         bool(.dualSensePassthrough, &dualSensePassthrough)
@@ -549,6 +551,7 @@ final class LauncherSettings: ObservableObject {
         case .upscaleLowerResolutions: guard let b else { return false }; upscaleLowerResolutions = b
         case .renderScale: guard let d, (0.25...1.0).contains(d) else { return false }; renderScale = d
         case .autoCaptureGames: guard let b else { return false }; autoCaptureGames = b
+        case .rawMouse: guard let b else { return false }; rawMouse = b
         case .gameNames: return false
         case .virtualPad: guard let b else { return false }; virtualPad = b
         case .padType: guard let v = PadType(rawValue: text) else { return false }; padType = v
@@ -597,7 +600,7 @@ final class LauncherSettings: ObservableObject {
         retinaResolution = fresh.retinaResolution
         metalHUD = fresh.metalHUD; superResolution = fresh.superResolution; renderScale = fresh.renderScale
         upscaleLowerResolutions = fresh.upscaleLowerResolutions
-        autoCaptureGames = fresh.autoCaptureGames
+        autoCaptureGames = fresh.autoCaptureGames; rawMouse = fresh.rawMouse
         virtualPad = fresh.virtualPad; padType = fresh.padType; dualSensePassthrough = fresh.dualSensePassthrough
         controllerID = fresh.controllerID; swapABXY = fresh.swapABXY
         stickDeadzone = fresh.stickDeadzone; soundEnabled = fresh.soundEnabled; soundOutputUID = fresh.soundOutputUID
