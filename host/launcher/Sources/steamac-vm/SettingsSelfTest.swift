@@ -340,14 +340,14 @@ enum SettingsSelfTest {
         check(s.refreshRate == LauncherSettings.autoRefresh, "default is not Auto")
         do {
             var o = try Options.parse(["steamac-vm"]); _ = o.applySettings(s)
-            check(o.refreshRate == LauncherSettings.screenRefreshRate(), "Auto does not follow the screen")
+            check(o.refreshRate == LauncherSettings.screenRefreshRate() && o.refreshFollowsScreen, "Auto does not follow the screen")
             var h = try Options.parse(["steamac-vm", "--headless"]); _ = h.applySettings(s)
-            check(h.refreshRate == 60, "headless Auto is not 60")
+            check(h.refreshRate == 60 && !h.refreshFollowsScreen, "headless Auto is not 60")
             check(s.set("refreshRate", "75") && LauncherSettings().refreshRate == 75, "75 not persisted")
             var f = try Options.parse(["steamac-vm"]); _ = f.applySettings(s)
-            check(f.refreshRate == 75, "a fixed rate is not applied")
+            check(f.refreshRate == 75 && !f.refreshFollowsScreen, "a fixed rate is not applied")
             var c = try Options.parse(["steamac-vm", "--refresh", "50"]); let ov = c.applySettings(s)
-            check(c.refreshRate == 50 && ov[.refreshRate] != nil, "--refresh does not override")
+            check(c.refreshRate == 50 && ov[.refreshRate] != nil && !c.refreshFollowsScreen, "--refresh does not override")
         } catch {
             check(false, "\(error)")
         }

@@ -633,10 +633,12 @@ final class WindowController: NSObject, NSWindowDelegate {
         return false
     }
 
+    /// The window's screen changed: the guest gets that screen's refresh rate (set when it follows the screen).
+    var onScreenRefreshRate: ((Int) -> Void)?
     func windowDidChangeScreen(_ notification: Notification) {
         guard let s = window.screen else { return }
-        log("display: window on \"\(s.localizedName)\" (\(s.maximumFramesPerSecond) Hz, \(s.backingScaleFactor)x);"
-            + " guest refresh rate keeps its boot value until the next start")
+        log("display: window on \"\(s.localizedName)\" (\(s.maximumFramesPerSecond) Hz, \(s.backingScaleFactor)x)")
+        onScreenRefreshRate?(LauncherSettings.refreshRate(of: s))
     }
     func windowDidBecomeKey(_ notification: Notification) { view.refreshHostCursor() }
     func windowDidResignKey(_ notification: Notification) { releaseAll() }

@@ -296,9 +296,8 @@ final class LauncherSettings: ObservableObject {
 
     static let autoRefresh = 0
     /// The refresh rate of the screen the VM window opens on (24...240 Hz).
-    static func screenRefreshRate() -> Int {
-        min(240, max(24, WindowController.targetScreen()?.maximumFramesPerSecond ?? 60))
-    }
+    static func screenRefreshRate() -> Int { refreshRate(of: WindowController.targetScreen()) }
+    static func refreshRate(of screen: NSScreen?) -> Int { min(240, max(24, screen?.maximumFramesPerSecond ?? 60)) }
 
     struct Game: Identifiable, Equatable {
         let appid: Int

@@ -7,6 +7,8 @@
 #
 #   host/libkrun/test/resize-test.sh [OUTDIR]   (default work/scratch/resize-test)
 #
+# A size may end in @HZ (1600x1000@120): krun_display_set_mode with that refresh rate.
+#
 # Env: SSH_PORT (default 2230), SIZES ("1600x1000 1024x640"), BOOT_WAIT (s, default 600),
 # SETTLE (s after each resize, default 45: the Steam UI may restart its GPU process on a
 # mode change), KEEP_CLONE=1 keeps the cloned disk.
@@ -74,6 +76,9 @@ report() { # label
 		echo "=== $1"
 		echo "--- /sys/class/drm/card0-Virtual-1/modes (first 3)"
 		q 'head -3 /sys/class/drm/card0-Virtual-1/modes'
+		echo "--- preferred mode refresh (EDID detailed timing, Hz)"
+		q 'od -An -w18 -tu1 -j54 -N18 /sys/class/drm/card0-Virtual-1/edid |
+			awk "{c=(\$1+\$2*256)*10000; w=\$3+int(\$5/16)*256; hb=\$4+(\$5%16)*256; h=\$6+int(\$8/16)*256; vb=\$7+(\$8%16)*256; printf \"%.1f\n\", c/((w+hb)*(h+vb))}"'
 		# Steam's X display is gamescope's first Xwayland (:0, no access control).
 		echo "--- xrandr (DISPLAY=:0)"
 		q 'DISPLAY=:0 xrandr --current 2>&1 | head -4'
@@ -108,15 +113,23 @@ sleep 30 # Steam UI load
 report 1280x800
 
 for s in $sizes; do
+	hz=${s#*@}
+	[ "$hz" = "$s" ] && hz=
+	s=${s%@*}
 	w=${s%x*} h=${s#*x}
 	# constant DPI: 96 px per inch
 	wmm=$(((w * 254 + 480) / 960)) hmm=$(((h * 254 + 480) / 960))
-	echo "resize $w $h $wmm $hmm" >&3
+	if [ -n "$hz" ]; then
+		echo "mode $w $h $wmm $hmm $hz" >&3
+		s=$s@$hz
+	else
+		echo "resize $w $h $wmm $hmm" >&3
+	fi
 	sleep "$settle"
 	report "$s"
 done
 
 cat "$dir/report.txt"
-grep -E "configure_scanout|krun_display_resize|dump" "$dir/harness.log"
+grep -E "configure_scanout|krun_display_resize|krun_display_set_mode|dump" "$dir/harness.log"
 g 'echo steamos | sudo -S -p "" systemctl poweroff' > /dev/null 2>&1 || true
 for _ in $(seq 60); do kill -0 "$vm_pid" 2> /dev/null || break; sleep 1; done

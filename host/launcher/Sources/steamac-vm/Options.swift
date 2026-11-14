@@ -56,6 +56,8 @@ struct Options {
                                    scale: pixelScale * renderScale)
     }
     var refreshRate = 60
+    /// Settings > Display > Refresh rate is Auto: the guest follows the window's screen at runtime.
+    var refreshFollowsScreen = false
     var dpi: Int?
     var displayMM: (Int, Int)?
     var selftestOverlay = false
@@ -626,7 +628,10 @@ struct Options {
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }
         if given("--refresh") { ov[.refreshRate] = "--refresh \(refreshRate)" }
-        else if s.refreshRate == LauncherSettings.autoRefresh { refreshRate = headless ? 60 : LauncherSettings.screenRefreshRate() }
+        else if s.refreshRate == LauncherSettings.autoRefresh {
+            refreshRate = headless ? 60 : LauncherSettings.screenRefreshRate()
+            refreshFollowsScreen = !headless
+        }
         else { refreshRate = min(240, max(24, s.refreshRate)) }
         if given("--display") {
             ov[.windowWidth] = "--display \(displayWidth)x\(displayHeight)"

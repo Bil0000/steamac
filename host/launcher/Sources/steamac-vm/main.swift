@@ -477,6 +477,7 @@ do {
     sleepPort?.start { line in suspender.sleepPortLine(line, allowed: lifecycle.canPause) }
     wc.onWakeRequest = { what in suspender.resume(origin: what) }
     wc.onGuestSizeRequest = { w, h in vm.resizeDisplay(width: w, height: h) }
+    if options.refreshFollowsScreen { wc.onScreenRefreshRate = { hz in vm.setRefreshRate(hz) } }
     let settingsContext = SettingsContext(settings: settings, sound: sound, restart: { lifecycle.requestRestart() },
                                           vmHasPad: gamepad != nil, vmHasSound: vm.hasSound,
                                           diskPath: options.disks.first?.path)
