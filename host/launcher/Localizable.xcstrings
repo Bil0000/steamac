@@ -3948,6 +3948,22 @@
         }
       }
     },
+    "Raw mouse input" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Необработанный ввод мыши"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原始鼠标输入"
+          }
+        }
+      }
+    },
     "Reading the bundle manifest…" : {
       "localizations" : {
         "ru" : {
@@ -6686,6 +6702,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "游戏获得焦点时，点按即可捕获指针（通过相对移动控制视角）。"
+          }
+        }
+      }
+    },
+    "While the mouse is captured, games get the mouse's own motion without macOS pointer acceleration, so the same hand movement always turns the view the same amount. Game sensitivity may need a new value." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Когда мышь захвачена, игры получают собственное движение мыши без ускорения указателя macOS, поэтому одно и то же движение руки всегда поворачивает обзор на одинаковый угол. Возможно, чувствительность в игре придётся настроить заново."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "捕获鼠标时，游戏会收到鼠标本身的移动，不经过 macOS 指针加速，因此相同的手部动作总是让视角转动相同的幅度。可能需要重新设置游戏内灵敏度。"
           }
         }
       }
