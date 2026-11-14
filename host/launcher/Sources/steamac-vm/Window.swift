@@ -3,6 +3,7 @@ import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
+import GameController
 
 /// Routes key events to the guest before AppKit's key-equivalent/menu machinery (which would
 /// otherwise swallow Cmd-combos and their keyUps).
@@ -70,6 +71,8 @@ final class WindowController: NSObject, NSWindowDelegate {
     private var lastAbs: (Int32, Int32) = (-1, -1)
     private var captured = false { didSet { window.invalidateCursorRects(for: view) } }
     private var relRemainder = (0.0, 0.0)
+    private var rawMouse = false
+    private var mouseConnectObserver: NSObjectProtocol?
     /// Auto mode: where the guest cursor is (guest pixels); nil = unknown, re-anchor first.
     private var guestCursor: (Int, Int)?
     private var lastPointerMotion = Date.distantPast
@@ -939,6 +942,11 @@ extension WindowController {
         releaseButtons()
         captured = true
         relRemainder = (0, 0)
+        rawMouse = false
+        GCMouse.mice().forEach(attachRawMouse)
+        mouseConnectObserver = NotificationCenter.default.addObserver(forName: .GCMouseDidConnect, object: nil, queue: .main) {
+            [weak self] in ($0.object as? GCMouse).map { self?.attachRawMouse($0) }
+        }
         CGAssociateMouseAndMouseCursorPosition(0)
         NSCursor.hide()
         log("input: mouse captured")
@@ -950,6 +958,9 @@ extension WindowController {
         guard captured else { return }
         releaseButtons()
         captured = false
+        mouseConnectObserver.map(NotificationCenter.default.removeObserver)
+        mouseConnectObserver = nil
+        GCMouse.mice().forEach { $0.mouseInput?.mouseMovedHandler = nil }
         CGAssociateMouseAndMouseCursorPosition(1)
         NSCursor.unhide()
         lastAbs = (-1, -1)
@@ -957,6 +968,14 @@ extension WindowController {
         log("input: mouse released")
         updateTitle()
         window.invalidateCursorRects(for: pill)
+    }
+
+    private func attachRawMouse(_ mouse: GCMouse) {
+        mouse.mouseInput?.mouseMovedHandler = { [weak self] _, dx, dy in
+            guard let self, self.captured, !self.pauseView.shown, !self.guestAsleep else { return }
+            self.rawMouse = true
+            self.moveRelative(dx: Double(dx), dy: -Double(dy))
+        }
     }
 
     private func releaseButtons() {
@@ -1052,7 +1071,7 @@ extension WindowController {
     func pointerMoved(_ e: NSEvent) {
         if pauseView.shown || guestAsleep { return }   // nothing reaches a frozen game / sleeping guest
         if captured {
-            moveRelative(dx: Double(e.deltaX), dy: Double(e.deltaY))
+            if !rawMouse { moveRelative(dx: Double(e.deltaX), dy: Double(e.deltaY)) }
         } else if inPicture(e) || NSEvent.pressedMouseButtons != 0 {
             if usesTablet { moveTablet(e) } else { moveEmulated(e) }
         } else {
