@@ -179,6 +179,21 @@
 #              8192 fill them) is still created; its timestamps are written as 0 and become available at once.
 #              Failing vkCreateQueryPool lost the pool in Venus and the game's GPU context: Bodycam closed itself
 #              during its first start with Steam's devices alive. Test: tests/ts-heap-leak.c (20 pools on a device).
+#   0050       steamac: MESA_KK_ASYNC_PIPELINES=1 lost every ONE_TIME_SUBMIT command buffer with a draw whose state was
+#              still compiling: the draw was skipped for a replay, but such buffers keep no command list
+#              (kk_dispatch_cmd_gen.py), so the replay was empty, queries timed out (VK_ERROR_DEVICE_LOST) and nothing
+#              rendered (DXVK/vkd3d-proton record one-time-submit buffers every frame). Such a draw now gets its
+#              state at record time. A thread that needs a state builds it itself when no worker has started it
+#              (a per-state lock; the worker skips a built state): waiting for the job's fence waited for every job
+#              queued before it in the one FIFO. The pipeline queue gets one worker per CPU (at least 4, was 4): a
+#              game creates most pipelines on one thread, whose guest Venus ring reaches the host on one thread, so
+#              the workers are Metal's only compile parallelism (one MTL4Compiler takes 18 concurrent tasks on an M5
+#              Pro). The workers take the QoS class of the thread that creates the device, at least user-initiated
+#              (macOS threads start at the default class; MTLCompilerService compiles at its caller's; the Linux-only
+#              minimum-priority flag is gone). Still opt-in: the launcher does not set it. Test:
+#              tests/pipeline-parallel.c (untimed warm-up, 48 unique pipelines from one thread, every draw must pass
+#              samples, async at most 3/4 of the synchronous time, workers at the caller's QoS, a one-time-submit
+#              draw behind 200 queued pipelines at most half the queue's drain time).
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver
@@ -412,6 +427,7 @@ mv -f "$lib.tmp.$$" "$lib"
 	echo "  0042 = steamac: robustness fixes (XFB counter bounds, sparse container_of, minmax update-after-bind scan, sparse view underflow)"
 	echo "  0043 = steamac: drop a draw whose async render pipeline state failed instead of recording it with a NULL state"
 	echo "  0047 = steamac: gate the async draw on the program the draw actually uses (not the bound VS)"
+	echo "  0050 = steamac: async pipelines safe for one-time-submit buffers, no queue-order wait, one worker per CPU at the caller's QoS"
 	echo
 	echo "Known gaps (host/moltenvk/repro/run.sh): transform feedback with strip geometry shaders and"
 	echo "the overflow counter (draft !44928)."
