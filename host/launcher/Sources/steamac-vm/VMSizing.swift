@@ -77,18 +77,19 @@ enum VMSizing {
     /// Half the Mac's RAM, rounded to whole GiB, 4...16 GiB: 8 GB Mac → 4 GiB, 16 → 8, 32 and up → 16.
     /// The other half stays with macOS and the GPU (MoltenVK device memory, Metal heaps, the
     /// virtio-gpu blobs the guest maps). When guest RAM, the GPU budget and headroomMiB (the VM process
-    /// itself, gvproxy, macOS) do not fit in the memory available at boot, both shrink by the same share,
-    /// guest RAM not below 8 GiB (games run out of guest memory first) and the GPU budget not below
-    /// 2 GiB: a 48 GB Mac with 16 + 16 GiB and other apps open swapped 51 GB and macOS killed the VM.
+    /// itself, gvproxy, macOS) do not fit in the memory available at boot, the GPU budget shrinks first
+    /// (not below 2 GiB), then guest RAM (not below 8 GiB): a 48 GB Mac with 16 + 16 GiB and other apps
+    /// open swapped 51 GB and macOS killed the VM. Guest RAM is a hard limit, the budget only steers
+    /// texture quality: a 10 GiB guest swapped 2.5 GiB in a Bodycam match.
     static func autoSizes(_ host: Host) -> (mem: Int, gpu: Int) {
         let halfMiB = Int(host.memBytes >> 21)
         let rounded = (halfMiB + 512) / 1024 * 1024
         let mem = min(maxAutoMemMiB, max(minAutoMemMiB, rounded))
         let gpu = ramGPUBudgetMiB(memMiB: mem, host: host)
         guard let avail = host.availMiB, mem + gpu + headroomMiB(host) > avail else { return (mem, gpu) }
-        let budget = max(0, avail - headroomMiB(host))
-        return (max(min(mem, 8192), budget * mem / (mem + gpu) / 1024 * 1024),
-                max(min(gpu, 2048), budget * gpu / (mem + gpu) / 256 * 256))
+        let room = max(0, avail - headroomMiB(host))
+        let fitGPU = max(min(gpu, 2048), min(gpu, (room - mem) / 256 * 256))
+        return (max(min(mem, 8192), min(mem, (room - fitGPU) / 1024 * 1024)), fitGPU)
     }
 
     /// One vCPU per performance core, 2...8: M1 / M2 / M3 / M4 (4 P) → 4, Pro chips → 6-8, Max → 8.
@@ -175,12 +176,13 @@ enum VMSizing {
             failures.append("sizing: GPU budget \(gb) GB / \(vm) MiB VM, want \(want)")
         }
         // (GB, available GiB, want VM MiB, want GPU MiB, fits): enough available keeps the idle sizes; the 48 GB
-        // Mac with Docker, Zoom and browsers open (about 26 GiB available) no longer gets 16 + 16 GiB. Both
-        // shrink by the same share. Rows that fit leave headroomMiB of the available memory; the others get
-        // the floors (8 GiB VM, 2 GiB GPU, or the idle sizes when smaller): a 16 GB Mac at 50% free keeps 8 GiB.
+        // Mac with Docker, Zoom and browsers open (about 26 GiB available) no longer gets 16 + 16 GiB. The GPU
+        // budget shrinks first and keeps the 16 GiB VM. Rows that fit leave headroomMiB of the available memory;
+        // the others get the floors (8 GiB VM, 2 GiB GPU, or the idle sizes when smaller).
         let busy: [(UInt64, UInt64, Int, Int, Bool)] = [
-            (48, 40, 16384, 16384, true), (48, 32, 14336, 14848, true), (48, 26, 11264, 11776, true),
-            (48, 12, 8192, 4608, false), (16, 12, 8192, 3328, false), (16, 8, 8192, 2048, false), (8, 7, 4096, 1024, true),
+            (48, 40, 16384, 16384, true), (48, 32, 16384, 13312, true), (48, 26, 16384, 7168, true),
+            (48, 20, 15360, 2048, true), (48, 12, 8192, 2048, false), (16, 12, 8192, 2048, true),
+            (16, 8, 8192, 2048, false), (8, 7, 4096, 1024, true),
             (16, 4, 8192, 2048, false), (8, 1, 4096, 1024, false)]
         for (gb, avail, wantMem, wantGPU, fits) in busy {
             var h = host(gb, 4, 8)
