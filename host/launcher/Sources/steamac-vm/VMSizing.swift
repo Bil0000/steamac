@@ -16,12 +16,23 @@ enum VMSizing {
         var perfCores: Int?
         /// All cores (activeProcessorCount).
         var cores: Int
+        /// Memory macOS reports as available (availableMemory); nil when unknown. Other apps' memory
+        /// is not available to the VM.
+        var availBytes: UInt64? = nil
 
-        static let current = Host(memBytes: ProcessInfo.processInfo.physicalMemory,
+        /// The supervisor measures again before each boot (refresh) and hands the value to the VM
+        /// process (availEnv), so both processes size the boot from one measurement.
+        static var current = Host(memBytes: ProcessInfo.processInfo.physicalMemory,
                                   perfCores: fastCoreCount(),
-                                  cores: ProcessInfo.processInfo.activeProcessorCount)
+                                  cores: ProcessInfo.processInfo.activeProcessorCount,
+                                  availBytes: ProcessInfo.processInfo.environment[availEnv].flatMap(UInt64.init).map { $0 << 20 }
+                                      ?? availableMemory())
+
+        static func refresh() { current.availBytes = availableMemory() }
 
         var memGiB: Int { Int((memBytes + (1 << 29)) >> 30) }
+        var availMiB: Int? { availBytes.map { Int($0 >> 20) } }
+        var idle: Host { var h = self; h.availBytes = nil; return h }
         /// Cores a vCPU runs at full speed on.
         var fastCores: Int { perfCores ?? cores }
     }
@@ -36,27 +47,48 @@ enum VMSizing {
     static let minMemMiB = 256
     /// Fewer than 4 vCPUs leave Steam's UI loading for minutes (STEAMAC-2K: 2 vCPUs on a 12-core Mac).
     static let minAutoCPUs = 4, maxAutoCPUs = 8
+    static let availEnv = "STEAMAC_AVAIL_MIB"
     /// macOS, the launcher, driver-internal allocations and other apps need room besides
     /// guest RAM and Vulkan heaps. Keep at least 3 GiB, or a quarter of a larger Mac.
     static func hostReserveMiB(_ host: Host) -> Int {
         max(3072, Int(host.memBytes >> 22))
     }
 
+    static func headroomMiB(_ host: Host) -> Int {
+        max(2048, Int(host.memBytes >> 24))
+    }
+
     /// Shared by both host Vulkan drivers and the guest's VRAM reporting layer. This is
     /// an advertised working-set budget, not an allocation cap: Venus allocations are
     /// asynchronous, so rejecting them here would kill the guest context, not return OOM.
-    static func gpuBudgetMiB(memMiB: Int, host: Host = .current) -> Int {
+    /// A user-set VM size gets RAM minus VM RAM minus the host reserve; the automatic one also fits
+    /// the memory available at boot (autoSizes).
+    static func gpuBudgetMiB(memMiB: Int, auto: Bool, host: Host = .current) -> Int {
+        auto ? autoSizes(host).gpu : ramGPUBudgetMiB(memMiB: memMiB, host: host)
+    }
+
+    private static func ramGPUBudgetMiB(memMiB: Int, host: Host) -> Int {
         let remaining = Int(host.memBytes >> 20) - memMiB - hostReserveMiB(host)
         return min(16384, max(256, remaining / 256 * 256))
     }
 
+    static func autoMemMiB(_ host: Host) -> Int { autoSizes(host).mem }
+
     /// Half the Mac's RAM, rounded to whole GiB, 4...16 GiB: 8 GB Mac → 4 GiB, 16 → 8, 32 and up → 16.
     /// The other half stays with macOS and the GPU (MoltenVK device memory, Metal heaps, the
-    /// virtio-gpu blobs the guest maps).
-    static func autoMemMiB(_ host: Host) -> Int {
+    /// virtio-gpu blobs the guest maps). When guest RAM, the GPU budget and headroomMiB (the VM process
+    /// itself, gvproxy, macOS) do not fit in the memory available at boot, both shrink by the same share,
+    /// guest RAM not below 8 GiB (games run out of guest memory first) and the GPU budget not below
+    /// 2 GiB: a 48 GB Mac with 16 + 16 GiB and other apps open swapped 51 GB and macOS killed the VM.
+    static func autoSizes(_ host: Host) -> (mem: Int, gpu: Int) {
         let halfMiB = Int(host.memBytes >> 21)
         let rounded = (halfMiB + 512) / 1024 * 1024
-        return min(maxAutoMemMiB, max(minAutoMemMiB, rounded))
+        let mem = min(maxAutoMemMiB, max(minAutoMemMiB, rounded))
+        let gpu = ramGPUBudgetMiB(memMiB: mem, host: host)
+        guard let avail = host.availMiB, mem + gpu + headroomMiB(host) > avail else { return (mem, gpu) }
+        let budget = max(0, avail - headroomMiB(host))
+        return (max(min(mem, 8192), budget * mem / (mem + gpu) / 1024 * 1024),
+                max(min(gpu, 2048), budget * gpu / (mem + gpu) / 256 * 256))
     }
 
     /// One vCPU per performance core, 2...8: M1 / M2 / M3 / M4 (4 P) → 4, Pro chips → 6-8, Max → 8.
@@ -71,7 +103,7 @@ enum VMSizing {
 
     /// Settings > Advanced: why a custom memory size is risky on this Mac, or nil.
     static func memWarning(memMiB: Int, host: Host) -> String? {
-        let gpu = gpuBudgetMiB(memMiB: memMiB, host: host)
+        let gpu = ramGPUBudgetMiB(memMiB: memMiB, host: host)
         let reserve = hostReserveMiB(host)
         guard memMiB + gpu + reserve > Int(host.memBytes >> 20) || gpu < 2048 else { return nil }
         return String(localized: "\(memMiB) MiB VM RAM + \(gpu) MiB GPU budget + \(reserve) MiB reserved for macOS on this \(host.memGiB) GB Mac. Too little GPU memory remains: lower VM memory or graphics settings to avoid swapping, out-of-memory errors or the VM being killed.")
@@ -89,9 +121,12 @@ enum VMSizing {
         let cores = host.perfCores.map { "\($0) performance cores of \(host.cores)" } ?? "\(host.cores) cores"
         let cpuWhy = cpusSource == .auto ? "automatic: \(cores), \(minAutoCPUs)-\(maxAutoCPUs)" : cpusSource.rawValue
         let memWhy = memSource == .auto
-            ? "automatic: half of \(host.memGiB) GB RAM, \(minAutoMemMiB / 1024)-\(maxAutoMemMiB / 1024) GB" : memSource.rawValue
+            ? "automatic: half of \(host.memGiB) GB RAM, \(minAutoMemMiB / 1024)-\(maxAutoMemMiB / 1024) GB"
+                + (autoSizes(host) != autoSizes(host.idle) ? ", lowered: other apps use memory" : "")
+            : memSource.rawValue
         return "\(cpus) vCPUs (\(cpuWhy)), \(memMiB) MiB memory (\(memWhy)), "
-            + "\(gpuMiB ?? gpuBudgetMiB(memMiB: memMiB, host: host)) MiB GPU budget, \(hostReserveMiB(host)) MiB host reserve"
+            + "\(gpuMiB ?? gpuBudgetMiB(memMiB: memMiB, auto: memSource == .auto, host: host)) MiB GPU budget, \(hostReserveMiB(host)) MiB host reserve"
+            + (host.availMiB.map { ", \($0) MiB available at boot" } ?? "")
     }
 
     /// Settings self-test: the formulas on simulated Macs, and the warnings.
@@ -136,16 +171,51 @@ enum VMSizing {
         let budgets: [(UInt64, Int, Int)] = [(8, 4096, 1024), (16, 8192, 4096), (16, 9216, 3072),
                                             (16, 12288, 256), (32, 16384, 8192), (64, 16384, 16384),
                                             (8, 16384, 256)]
-        for (gb, vm, want) in budgets where gpuBudgetMiB(memMiB: vm, host: host(gb, 4, 8)) != want {
+        for (gb, vm, want) in budgets where gpuBudgetMiB(memMiB: vm, auto: false, host: host(gb, 4, 8)) != want {
             failures.append("sizing: GPU budget \(gb) GB / \(vm) MiB VM, want \(want)")
+        }
+        // (GB, available GiB, want VM MiB, want GPU MiB, fits): enough available keeps the idle sizes; the 48 GB
+        // Mac with Docker, Zoom and browsers open (about 26 GiB available) no longer gets 16 + 16 GiB. Both
+        // shrink by the same share. Rows that fit leave headroomMiB of the available memory; the others get
+        // the floors (8 GiB VM, 2 GiB GPU, or the idle sizes when smaller): a 16 GB Mac at 50% free keeps 8 GiB.
+        let busy: [(UInt64, UInt64, Int, Int, Bool)] = [
+            (48, 40, 16384, 16384, true), (48, 32, 14336, 14848, true), (48, 26, 11264, 11776, true),
+            (48, 12, 8192, 4608, false), (16, 12, 8192, 3328, false), (16, 8, 8192, 2048, false), (8, 7, 4096, 1024, true),
+            (16, 4, 8192, 2048, false), (8, 1, 4096, 1024, false)]
+        for (gb, avail, wantMem, wantGPU, fits) in busy {
+            var h = host(gb, 4, 8)
+            h.availBytes = avail * gib
+            let mem = autoMemMiB(h), gpu = gpuBudgetMiB(memMiB: mem, auto: true, host: h)
+            if mem != wantMem || gpu != wantGPU {
+                failures.append("sizing: \(gb) GB with \(avail) GiB available → \(mem) + \(gpu) MiB, want \(wantMem) + \(wantGPU)")
+            }
+            if fits && mem + gpu + headroomMiB(h) > Int(avail) * 1024 {
+                failures.append("sizing: \(gb) GB with \(avail) GiB available → \(mem) + \(gpu) + \(headroomMiB(h)) MiB headroom does not fit")
+            }
+        }
+        // A user-set VM size keeps the RAM rule on a busy Mac, also when it equals the shrunk automatic size:
+        // custom 16 and 8 GiB on a 32 GB Mac with 8 GiB available.
+        var busy32 = host(32, 4, 8)
+        busy32.availBytes = 8 * gib
+        for (vm, want) in [(16384, 8192), (8192, 16384)] where gpuBudgetMiB(memMiB: vm, auto: false, host: busy32) != want {
+            failures.append("sizing: custom \(vm) MiB on a busy 32 GB Mac → \(gpuBudgetMiB(memMiB: vm, auto: false, host: busy32)) MiB GPU budget, want \(want)")
         }
         if cpuWarning(cpus: 4, host: air) != nil { failures.append("sizing: 4 vCPUs on 4 P-cores warned") }
         if cpuWarning(cpus: 8, host: air) == nil { failures.append("sizing: 8 vCPUs on 4 P-cores not warned") }
         let here = Host.current
         log("selftest-settings: sizing check: \(failures.isEmpty ? "ok" : failures.joined(separator: "; ")) "
             + "(this Mac: \(here.memGiB) GB, \(here.perfCores.map(String.init) ?? "?") P of \(here.cores) cores → "
-            + "\(autoMemMiB(here)) MiB, \(autoCPUs(here)) vCPUs)")
+            + "\(autoMemMiB(here)) MiB, \(autoCPUs(here)) vCPUs, \(here.availMiB.map(String.init) ?? "?") MiB available)")
         return failures
+    }
+
+    /// kern.memorystatus_level: the "free percentage" of memory_pressure. It counts memory macOS can
+    /// compress or page out without pressure, unlike vm_stat's free pages.
+    private static func availableMemory() -> UInt64? {
+        var level: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.memorystatus_level", &level, &size, nil, 0) == 0 else { return nil }
+        return UInt64(max(0, min(100, level))) * ProcessInfo.processInfo.physicalMemory / 100
     }
 
     private static func sysctlInt(_ name: String) -> Int? {

@@ -714,18 +714,18 @@
         }
       }
     },
-    "Automatic: half of this Mac's RAM (4 to 16 GB). The Mac's GPU memory comes from the same RAM, so the rest stays with macOS and the games' graphics." : {
+    "Automatic: half of this Mac's RAM (4 to 16 GB), less when other apps already use memory at start. The Mac's GPU memory comes from the same RAM, so the rest stays with macOS and the games' graphics." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Автоматически: половина ОЗУ этого Mac (от 4 до 16 ГБ). GPU Mac использует ту же ОЗУ, поэтому остальная память остаётся для macOS и графики игр."
+            "value" : "Автоматически: половина ОЗУ этого Mac (от 4 до 16 ГБ), меньше, если при запуске память уже занята другими приложениями. GPU Mac использует ту же ОЗУ, поэтому остальная память остаётся для macOS и графики игр."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自动：此 Mac 内存的一半（4 至 16 GB）。Mac 的 GPU 与系统共用内存，其余内存留给 macOS 和游戏图形。"
+            "value" : "自动：此 Mac 内存的一半（4 至 16 GB），启动时若其他应用已占用内存则更少。Mac 的 GPU 与系统共用内存，其余内存留给 macOS 和游戏图形。"
           }
         }
       }
