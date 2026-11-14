@@ -87,8 +87,9 @@ This development version adds **Settings > Advanced > Experimental game support*
 It builds the pinned FEX runtime inside the Linux guest in the background. Restart Steam after the build finishes;
 the next start installs the prepared runtime and can repair it after a Steam tool update. The guest command
 `/usr/lib/steamac/steam-fex-eac status` shows setup status. The first build requires an internet connection.
-For installed VRChat, it selects Proton Experimental and adds the EAC launch helper only where the user has not set
-their own tool or launch options. Install Proton Experimental and Proton EasyAntiCheat Runtime in guest Steam first.
+For VRChat and every installed game that ships EAC files, in every Steam library, it selects Proton Experimental unless
+the user set another tool, and puts the EAC launch helper before `%command%` in the launch options; other options stay.
+Install Proton Experimental and Proton EasyAntiCheat Runtime in guest Steam first.
 Turning the setting off restores the previous runtime on the next Steam start if its files still match our installation.
 If they were changed by another tool, setup leaves them intact and reports the conflict.
 

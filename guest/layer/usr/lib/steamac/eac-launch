@@ -1,8 +1,12 @@
 #!/bin/bash
 set -euo pipefail
-[[ ${1:-} == 438100 && $# -gt 1 ]] || { echo 'usage: eac-launch 438100 COMMAND [ARGS...]' >&2; exit 64; }
-app=$1
-shift
+appid=
+[[ ${1:-} == 438100 && $# -gt 1 ]] && { appid=438100; shift; }
+[[ $# -gt 0 ]] || { echo 'usage: eac-launch COMMAND [ARGS...]' >&2; exit 64; }
+steam=$HOME/.local/share/Steam
+prefix=${STEAM_COMPAT_DATA_PATH:-}
+[[ -z $prefix && $appid == 438100 ]] && prefix=$steam/steamapps/compatdata/438100
+[[ -n $appid ]] || appid=${prefix##*/}
 enabled=0
 cmdline=$(cat "${STEAMAC_CMDLINE:-/proc/cmdline}")
 read -ra args <<< "$cmdline"
@@ -10,12 +14,19 @@ for arg in "${args[@]}"; do
     case "$arg" in steamac.fex_eac=*) enabled=${arg#*=} ;; esac
 done
 if [[ $enabled == 1 ]]; then
-    runtime="$HOME/.local/share/Steam/steamapps/common/Proton EasyAntiCheat Runtime"
-    [[ -d $runtime ]] || { echo 'Install Proton EasyAntiCheat Runtime in Steam first.' >&2; exit 1; }
-    export EAC_LAUNCHERDIR="${EAC_LAUNCHERDIR:-$HOME/.local/share/Steam/steamapps/compatdata/$app/pfx/drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat}"
-    export PROTON_EAC_RUNTIME="${PROTON_EAC_RUNTIME:-$runtime}"
+    name='Proton EasyAntiCheat Runtime'
+    runtime="${prefix%/compatdata/*}/common/$name"
+    [[ $prefix == */compatdata/* && -d $runtime ]] || runtime="$steam/steamapps/common/$name"
+    if [[ -n ${PROTON_EAC_RUNTIME:-} ]]; then
+        :
+    elif [[ -d $runtime ]]; then
+        export PROTON_EAC_RUNTIME=$runtime
+    else
+        echo "eac-launch: Install $name in Steam first." >&2
+    fi
+    [[ -n $prefix ]] && export EAC_LAUNCHERDIR="${EAC_LAUNCHERDIR:-$prefix/pfx/drive_c/users/steamuser/AppData/Roaming/EasyAntiCheat}"
     export PROTON_USE_XALIA="${PROTON_USE_XALIA:-0}"
-    if [[ -z ${WINE_CPU_TOPOLOGY:-} ]]; then
+    if [[ $appid == 438100 && -z ${WINE_CPU_TOPOLOGY:-} ]]; then
         cpus=$(getconf _NPROCESSORS_ONLN)
         topology=16:
         for ((i=0; i<16; i++)); do topology+="$((i % cpus)),"; done

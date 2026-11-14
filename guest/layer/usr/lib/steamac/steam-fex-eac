@@ -20,7 +20,9 @@ STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "steamac
 FILES = [Path("usr/bin") / name for name in
          ("FEX", "FEXBash", "FEXGetConfig", "FEXOfflineCompiler", "FEXServer", "FEXServerManager", "FEXpidof")]
 FILES += [Path(name) for name in ("FEXCompatTool", "VERSIONS.txt", "ConfigTemplate.json")]
-OPTIONS = "/usr/lib/steamac/eac-launch 438100 %command%"
+WRAPPER = "/usr/lib/steamac/eac-launch"
+OPTIONS = WRAPPER + " %command%"
+EAC_NAMES = ("easyanticheat", "easyanticheat_x64.so", "start_protected_game.exe")
 
 
 def enabled():
@@ -63,40 +65,88 @@ def install(action, backup):
     subprocess.run(["sh", str(PAYLOAD / "install-fex-tool.sh"), action], env=env, check=True)
 
 
-def configure_vrchat():
-    if not (STEAM / "steamapps/appmanifest_438100.acf").is_file():
-        return
-    if not all((STEAM / "steamapps/common" / name).is_dir() for name in
-               ("Proton - Experimental", "Proton EasyAntiCheat Runtime")):
-        print("steam-fex-eac: Install Proton Experimental and Proton EasyAntiCheat Runtime in Steam first.")
-        return
+def configure_eac_games():
     vdf = runpy.run_path(str(Path(__file__).with_name("mac-clock-format")))
 
-    def set_missing(path, key, value):
+    def current(path, key):
+        values, _ = vdf["vdf_entries"](path.read_bytes().decode("utf-8"))
+        return values.get(tuple(part.lower() for part in key), ("",))[0]
+
+    def store(path, key, value):
         text = path.read_bytes().decode("utf-8")
-        values, _ = vdf["vdf_entries"](text)
-        current = values.get(tuple(part.lower() for part in key))
-        if current and current[0]:
-            return current[0] == value
         changed = vdf["vdf_set"](text, key, value)
         if changed != text:
             backup = Path(str(path) + ".steamac-fex-backup")
             if not backup.exists():
                 shutil.copy2(path, backup)
             vdf["atomic_write"](path, changed)
-        return True
 
+    libraries = [STEAM]
+    folders = STEAM / "steamapps/libraryfolders.vdf"
+    if folders.is_file():
+        try:
+            values, _ = vdf["vdf_entries"](folders.read_bytes().decode("utf-8"))
+        except ValueError as error:
+            print(f"steam-fex-eac: Skipping {folders}: {error}")
+            values = {}
+        libraries += [Path(value[0]) for key, value in values.items()
+                      if len(key) == 3 and key[0] == "libraryfolders" and key[2] == "path"]
+    libraries = list(dict.fromkeys(library.resolve() for library in libraries))
+    games = []
+    for library in libraries:
+        for manifest in sorted((library / "steamapps").glob("appmanifest_*.acf")):
+            appid = manifest.stem.split("_", 1)[1]
+            try:
+                installdir = current(manifest, ("AppState", "installdir"))
+            except ValueError as error:
+                print(f"steam-fex-eac: Skipping {manifest}: {error}")
+                continue
+            root = library / "steamapps/common" / installdir
+            if appid == "1826330" or (root / "toolmanifest.vdf").exists():
+                continue
+            if appid == "438100" or installdir and any(
+                    path.name.lower() in EAC_NAMES for pattern in ("*", "*/*", "*/*/*") for path in root.glob(pattern)):
+                games.append(appid)
     config = STEAM / "config/config.vdf"
-    if not config.is_file():
+    if not games or not config.is_file():
         return
-    key = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping", "438100")
-    if not set_missing(config, (*key, "name"), "proton_experimental"):
-        print("steam-fex-eac: Keeping the user's VRChat compatibility tool.")
-        return
-    set_missing(config, (*key, "config"), "")
-    set_missing(config, (*key, "priority"), "250")
-    for account in sorted((STEAM / "userdata").glob("*/config/localconfig.vdf")):
-        set_missing(account, ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps", "438100", "LaunchOptions"), OPTIONS)
+    missing = [name for name in ("Proton - Experimental", "Proton EasyAntiCheat Runtime")
+               if not any((library / "steamapps/common" / name).is_dir() for library in libraries)]
+    if missing:
+        print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
+    accounts = sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
+    for appid in dict.fromkeys(games):
+        key = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping", appid)
+        try:
+            tool = current(config, (*key, "name"))
+            if tool:
+                tool = "kept user tool " + tool
+            else:
+                store(config, (*key, "name"), "proton_experimental")
+                store(config, (*key, "config"), "")
+                store(config, (*key, "priority"), "250")
+                tool = "set to proton_experimental"
+        except ValueError as error:
+            tool = f"not changed ({config}: {error})"
+        results = []
+        for account in accounts:
+            option = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps", appid, "LaunchOptions")
+            try:
+                value = current(account, option)
+                if not value:
+                    store(account, option, OPTIONS)
+                    results.append("added")
+                elif WRAPPER in value:
+                    results.append("present")
+                elif "%command%" in value:
+                    store(account, option, value.replace("%command%", WRAPPER + " %command%", 1))
+                    results.append("wrapped")
+                else:
+                    results.append("unchanged without %command%")
+            except ValueError as error:
+                results.append(f"skipped {account} ({error})")
+        print(f"steam-fex-eac: App {appid}: compatibility tool {tool}; launch options "
+              + (", ".join(dict.fromkeys(results)) or "no account") + ".")
 
 
 def main():
@@ -139,7 +189,7 @@ def main():
             marker.unlink()
             report("Experimental game support is off. The previous runtime is restored.")
             return
-        configure_vrchat()
+        configure_eac_games()
         receipt = STAGE / ".steamac-fex-source"
         if not complete(STAGE) or not receipt.is_file() or receipt.read_text().strip() != source():
             report("Preparing the Linux game runtime. Restart Steam when setup finishes.")
@@ -161,7 +211,7 @@ def main():
         temporary = marker.with_suffix(".new")
         temporary.write_text(json.dumps({"source": source(), "backup": backup, "installed": fingerprint(TOOL)}) + "\n")
         temporary.replace(marker)
-        report("Runtime installed. VRChat setup was checked; online play and other games remain unverified.")
+        report("Runtime installed. EAC game setup was checked; online play and game support remain unverified.")
 
 
 if __name__ == "__main__":
