@@ -201,6 +201,22 @@
 #              23 GiB (a 43 GB process footprint) and macOS ran out of application memory; joining a match froze
 #              while the Mac swapped. Test: tests/cmd-alloc-leak.c (16000 resubmissions of 8 recorded command
 #              buffers, footprint growth under 64 MiB; 838 MiB before).
+#   0052       steamac: timestamps that follow each other in a counter heap and in the query pool are resolved
+#              with one resolveCounterHeap call. Each call takes about 56 KiB of command allocator memory and
+#              vkd3d-proton writes 8192 timestamps in one command buffer: one recording took 526 MiB, and a Bodycam
+#              match grew the process footprint past 12 GB within a minute. Test: tests/ts-heap-leak.c (8192
+#              timestamps in one command buffer, footprint growth 588 MiB before; see 0053).
+#   0053       steamac: a timestamp in a compute encoder records its trigger dispatch (the sentinel rewrite between
+#              two barriers, about 10 KiB of command allocator memory) only when it is the encoder's first; the
+#              reset before it already stored the sentinel. 8192 timestamps took 82 MiB of allocator memory, now
+#              under 1 MiB. Test: tests/ts-heap-leak.c (after a warm-up commit, footprint growth under 60 MiB;
+#              about 100 MiB with 0052 alone).
+#   0054       steamac: a Metal command buffer that began and was never committed is released before its
+#              allocator is reset (0051), and the next begin takes a new one. It still owned the allocator memory
+#              of its recording: when it began again or was released, Metal freed memory of the next recording
+#              on that allocator, whose commit crashed in fillCommandBufferArgs (SIGSEGV; Bodycam training area).
+#              vkd3d-proton leaves one for each closed D3D12 command list it never executes. Test:
+#              tests/cmd-unsubmitted.c (48 submissions after unsubmitted recordings; crashed before).
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver

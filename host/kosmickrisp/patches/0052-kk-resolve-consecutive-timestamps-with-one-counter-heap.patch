@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steamac <steamac@local>
+Date: Sun, 15 Nov 2026 19:05:00 +0300
+Subject: [PATCH] kk: resolve consecutive timestamps with one counter heap
+ resolve
+
+Every timestamp written outside a render pass was resolved from its Metal
+counter heap with its own resolveCounterHeap call, and each call takes about
+56 KiB of Metal command allocator memory. vkd3d-proton writes 8192
+timestamps in one command buffer: one recording took 526 MiB of allocator
+memory (1050 MiB for two), and in a Bodycam match the process footprint
+grew past 12 GB within a minute until macOS ran out of memory.
+
+Timestamps that follow each other in the same heap and in the query pool
+are now resolved with one call.
+
+Generated-by: LLM
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index 9be3f44..ea53c51 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -375,9 +375,18 @@ end_encoder(struct kk_cmd_buffer *cmd, mtl_command_encoder *encoder)
+    mtl_release(encoder);
+ 
+    /* Fold the pending timestamp counter-heap resolves into `cmd_buf` */
+-   util_dynarray_foreach(&cmd->ts_resolves, struct kk_ts_resolve, r) {
+-      mtl_command_resolve_counter_heap(cmd->metal.cmd_buf, r->heap, r->index,
+-                                       1u, r->dst_addr);
++   const struct kk_ts_resolve *r = cmd->ts_resolves.data;
++   const unsigned n =
++      util_dynarray_num_elements(&cmd->ts_resolves, struct kk_ts_resolve);
++   for (unsigned i = 0, count; i < n; i += count) {
++      for (count = 1; i + count < n; count++) {
++         if (r[i + count].heap != r[i].heap ||
++             r[i + count].index != r[i].index + count ||
++             r[i + count].dst_addr != r[i].dst_addr + count * sizeof(uint64_t))
++            break;
++      }
++      mtl_command_resolve_counter_heap(cmd->metal.cmd_buf, r[i].heap,
++                                       r[i].index, count, r[i].dst_addr);
+    }
+ 
+    util_dynarray_clear(&cmd->ts_resolves);
