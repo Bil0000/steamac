@@ -194,6 +194,13 @@
 #              tests/pipeline-parallel.c (untimed warm-up, 48 unique pipelines from one thread, every draw must pass
 #              samples, async at most 3/4 of the synchronous time, workers at the caller's QoS, a one-time-submit
 #              draw behind 200 queued pipelines at most half the queue's drain time).
+#   0051       steamac: Metal command allocators are reset when their command buffer is reset or destroyed, and a
+#              pool keeps at most 4 of them (of at most 4 MiB each) for reuse. An allocator went back to its pool at
+#              vkEndCommandBuffer and was reused without a reset, so it kept every command recorded with it; one
+#              that held a large recording kept that memory for good. In a Bodycam match the allocators held
+#              23 GiB (a 43 GB process footprint) and macOS ran out of application memory; joining a match froze
+#              while the Mac swapped. Test: tests/cmd-alloc-leak.c (16000 resubmissions of 8 recorded command
+#              buffers, footprint growth under 64 MiB; 838 MiB before).
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver
