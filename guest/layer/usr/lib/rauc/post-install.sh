@@ -79,6 +79,8 @@ rc=0
 unshare --mount --propagation private /bin/bash -c '
     set -e
     mount -o ro "$1" "$2"
+    grep -Eq "steamos-chroot .*-- steamos-finalize-install" "$2/usr/lib/rauc/post-install.sh" \
+        || echo "steamac: ERROR: stock post-install.sh has no \"steamos-chroot ... -- steamos-finalize-install\" call: the rauc-shims/steamos-chroot fix does not apply, the update may fail" >&2
     PATH=/usr/lib/steamac/rauc-shims:$PATH
     export PATH
     exec "$2/usr/lib/rauc/post-install.sh"
