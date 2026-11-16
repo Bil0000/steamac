@@ -66,6 +66,11 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
+# holo-sync-var copies only the /etc files listed in atomic-update-keep.conf and
+# /etc/atomic-update.conf.d/*.conf to the new slot; keep the launcher's settings.
+{ mkdir -p /etc/atomic-update.conf.d && echo '/etc/steamac/**' > /etc/atomic-update.conf.d/50-steamac.conf; } \
+    || echo "steamac: cannot write /etc/atomic-update.conf.d/50-steamac.conf: /etc/steamac will not carry over" >&2
+
 root_dev=$(findmnt -n -v -o SOURCE /)
 stock=$(mktemp -d /run/steamac-rauc-stock.XXXXXX)
 rc=0
