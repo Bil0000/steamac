@@ -419,16 +419,16 @@ final class StallMonitor {
 }
 
 /// The indicator: a translucent card in the lower third with a spinner and two lines of text,
-/// over the last guest frame (FX overlay colors). Never takes mouse events, except on its
-/// "Report…" link while it says SteamOS is not responding; when hidden it is `isHidden` with
-/// every animation removed.
+/// over the last guest frame (FX overlay colors). Never takes mouse events, except on its links
+/// ("Report…" while it says SteamOS is not responding, `actions`); when hidden it is `isHidden`
+/// with every animation removed.
 final class StallIndicatorView: NSView {
     private let card = CALayer()
     private let track = CAShapeLayer()
     private let arc = CAShapeLayer()
     private let titleLayer = CATextLayer()
     private let detailLayer = CATextLayer()
-    private let linkLayer = CATextLayer()
+    private var linkLayers: [CATextLayer] = []
     private var title = ""
     private var detail = ""
     private(set) var shown = false
@@ -444,9 +444,22 @@ final class StallIndicatorView: NSView {
     var cardFrame: CGRect { card.frame }
     var spinnerFrame: CGRect { arc.frame.offsetBy(dx: card.frame.minX, dy: card.frame.minY) }
     /// "Report…" on the card (Report a Problem), in view coordinates; empty when not shown.
-    var reportLinkFrame: CGRect {
-        showsReportLink && onReport != nil ? linkLayer.frame.offsetBy(dx: card.frame.minX, dy: card.frame.minY) : .zero
+    var reportLinkFrame: CGRect { hasReportLink ? linkFrames[0] : .zero }
+    /// Every link on the card ("Report…" first, then `actions`), in view coordinates.
+    var linkFrames: [CGRect] { linkLayers.map { $0.frame.offsetBy(dx: card.frame.minX, dy: card.frame.minY) } }
+    private var hasReportLink: Bool { showsReportLink && onReport != nil }
+    /// Links after "Report…": title and click action.
+    var actions: [(title: String, action: () -> Void)] = [] {
+        didSet {
+            guard actions.map(\.title) != oldValue.map(\.title) else { return }
+            reportLinkChanged = true
+            needsLayout = true
+            window?.invalidateCursorRects(for: self)
+        }
     }
+    var currentActions: [String] { actions.map(\.title) }
+    /// The spinner (hidden for a notice that waits on the user).
+    var showsSpinner = true { didSet { if showsSpinner != oldValue { needsLayout = true } } }
     /// Opens Report a Problem (the link is shown only when this is set).
     var onReport: (() -> Void)?
     /// The "not responding" wording: show the link.
@@ -478,7 +491,7 @@ final class StallIndicatorView: NSView {
         arc.strokeColor = OverlayView.color(0x66c0f4)
         arc.lineCap = .round
         arc.strokeEnd = 0.7
-        for t in [titleLayer, detailLayer, linkLayer] {
+        for t in [titleLayer, detailLayer] {
             t.alignmentMode = .left
             t.truncationMode = .end
             t.isWrapped = false
@@ -495,17 +508,31 @@ final class StallIndicatorView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard !isHidden, alphaValue > 0, let superview else { return nil }
-        return reportLinkFrame.contains(convert(point, from: superview)) ? self : nil
+        let p = convert(point, from: superview)
+        return linkFrames.contains { $0.contains(p) } ? self : nil
     }
 
+    /// A link works with the click that activates the window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func mouseDown(with event: NSEvent) {
-        guard reportLinkFrame.contains(convert(event.locationInWindow, from: nil)) else { return }
-        log("stall: Report… clicked")
-        onReport?()
+        let p = convert(event.locationInWindow, from: nil)
+        guard var i = linkFrames.firstIndex(where: { $0.contains(p) }) else { return }
+        if hasReportLink {
+            if i == 0 {
+                log("stall: Report… clicked")
+                onReport?()
+                return
+            }
+            i -= 1
+        }
+        guard i < actions.count else { return }
+        log("stall: \(actions[i].title) clicked")
+        actions[i].action()
     }
 
     override func resetCursorRects() {
-        if !reportLinkFrame.isEmpty { addCursorRect(reportLinkFrame, cursor: .pointingHand) }
+        for f in linkFrames { addCursorRect(f, cursor: .pointingHand) }
     }
 
     override var isOpaque: Bool { false }
@@ -541,14 +568,14 @@ final class StallIndicatorView: NSView {
             self.fading = false
             guard !self.shown else { return }
             self.isHidden = true
-            for l in [self.layer!, self.card, self.track, self.arc, self.titleLayer, self.detailLayer, self.linkLayer] { l.removeAllAnimations() }
+            for l in [self.layer!, self.card, self.track, self.arc, self.titleLayer, self.detailLayer] + self.linkLayers { l.removeAllAnimations() }
             self.onVisibilityChange?()
         })
     }
 
     /// True when hidden and idle (no layer animations running).
     var isIdle: Bool {
-        isHidden && [layer!, card, track, arc, titleLayer, detailLayer, linkLayer].allSatisfy { ($0.animationKeys() ?? []).isEmpty }
+        isHidden && ([layer!, card, track, arc, titleLayer, detailLayer] + linkLayers).allSatisfy { ($0.animationKeys() ?? []).isEmpty }
     }
 
     private func startSpinner() {
@@ -585,8 +612,8 @@ final class StallIndicatorView: NSView {
             .foregroundColor: OverlayView.color(0x8f98a0)])
     }
 
-    private var linkString: NSAttributedString {
-        NSAttributedString(string: String(localized: "Report…", comment: "Link to report an unresponsive VM to the developer"), attributes: [
+    private func linkString(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 13 * scaleFactor, weight: .semibold),
             .foregroundColor: OverlayView.color(0x66c0f4),
             .underlineStyle: NSUnderlineStyle.single.rawValue])
@@ -616,16 +643,25 @@ final class StallIndicatorView: NSView {
         let k = scaleFactor
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         let t = titleString, d = detailString
-        let link = showsReportLink && onReport != nil ? linkString : nil
-        let pad = 18 * k, spin = 26 * k, gap = 14 * k
+        let links = ((hasReportLink ? [String(localized: "Report…", comment: "Link to report an unresponsive VM to the developer")] : [])
+                     + actions.map(\.title)).map(linkString)
+        while linkLayers.count > links.count { linkLayers.removeLast().removeFromSuperlayer() }
+        while linkLayers.count < links.count {
+            let l = CATextLayer()
+            l.alignmentMode = .left
+            l.isWrapped = false
+            card.addSublayer(l)
+            linkLayers.append(l)
+        }
+        let pad = 18 * k, spin = showsSpinner ? 26 * k : 0, gap = 14 * k
         let textWidth = ceil(max(t.size().width, d.size().width)) + 2
-        let linkWidth = link.map { ceil($0.size().width) + 2 } ?? 0
-        let linkSpace = link == nil ? 0 : gap + linkWidth
-        let width = min(b.width - 32, pad + spin + gap + textWidth + linkSpace + pad + 4 * k)
+        let linkWidths = links.map { ceil($0.size().width) + 2 }
+        let linkSpace = linkWidths.reduce(0) { $0 + gap + $1 }
+        let width = min(b.width - 32, pad + (showsSpinner ? spin + gap : 0) + textWidth + linkSpace + pad + 4 * k)
         let height = 62 * k
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for l in [layer!, card, track, arc, titleLayer, detailLayer, linkLayer] { l.contentsScale = scale }
+        for l in [layer!, card, track, arc, titleLayer, detailLayer] + linkLayers { l.contentsScale = scale }
         card.frame = CGRect(x: (b.width - width) / 2, y: (b.height * 0.26 - height / 2).rounded(), width: width, height: height).integral
         card.cornerRadius = 14 * k
         card.shadowRadius = 18 * k
@@ -637,16 +673,21 @@ final class StallIndicatorView: NSView {
             s.frame = spinFrame
             s.path = circle
             s.lineWidth = line
+            s.isHidden = !showsSpinner
         }
-        let textX = pad + spin + gap
+        let textX = pad + (showsSpinner ? spin + gap : 0)
         let textW = max(0, width - textX - pad - linkSpace)
-        titleLayer.frame = CGRect(x: textX, y: height / 2 + 1 * k, width: textW, height: 20 * k)
+        titleLayer.frame = CGRect(x: textX, y: detail.isEmpty ? (height - 20 * k) / 2 : height / 2 + 1 * k, width: textW, height: 20 * k)
         detailLayer.frame = CGRect(x: textX, y: height / 2 - 18 * k, width: textW, height: 16 * k)
-        linkLayer.frame = link == nil ? .zero : CGRect(x: width - pad - linkWidth, y: (height - 18 * k) / 2, width: linkWidth, height: 18 * k)
+        var linkX = width - pad - linkSpace
+        for (i, l) in linkLayers.enumerated() {
+            linkX += gap
+            l.frame = CGRect(x: linkX, y: (height - 18 * k) / 2, width: linkWidths[i], height: 18 * k)
+            l.string = links[i]
+            linkX += linkWidths[i]
+        }
         titleLayer.string = t
         detailLayer.string = d
-        linkLayer.string = link
-        linkLayer.isHidden = link == nil
         CATransaction.commit()
         window?.invalidateCursorRects(for: self)
         if reportLinkChanged {

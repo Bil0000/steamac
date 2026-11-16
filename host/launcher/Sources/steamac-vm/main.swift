@@ -608,6 +608,8 @@ do {
     lifecycle.report = { openReport("menu", on: wc.window) }
     settingsContext.reportProblem = { openReport("settings", on: settingsWindow.window) }
     wc.stallView.onReport = { openReport("stall", on: wc.window) }
+    wc.setupView.onReport = { openReport("setup", on: wc.window) }
+    wc.onRestartSteam = { _ = progressPort.send("restart-steam") }
     MainActor.assumeIsolated { ReportControl.open = { openReport("control", on: wc.window) } }
     MainMenu.install(target: lifecycle, settings: #selector(Lifecycle.menuSettings), report: #selector(Lifecycle.menuReport),
                      checkForUpdates: #selector(Lifecycle.menuCheckForUpdates),

@@ -33,6 +33,11 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// "Loading…" card shown when the guest GPU goes idle (StallMonitor), above the overlay.
     let stallView: StallIndicatorView
     private var stall: StallMonitor?
+    /// Game-runtime setup status (`setup <code> [text]`) over the Steam UI, in the GPU-idle card's style.
+    let setupView: StallIndicatorView
+    private var setupStatus: (code: String, text: String)?
+    /// "Restart Steam" on the setup card: host -> guest `restart-steam`.
+    var onRestartSteam: (() -> Void)?
     /// Compact boot / shutdown progress while the full overlay is not up before `ready`, and the
     /// no-picture guard's report after it (bottom centre, above the GPU-idle card).
     let pill: ProgressPillView
@@ -131,6 +136,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         view = VMView(frame: rect, renderer: renderer, contentPixelSize: CGSize(width: guest.0, height: guest.1))
         overlay = OverlayView(frame: rect)
         stallView = StallIndicatorView(frame: rect)
+        setupView = StallIndicatorView(frame: rect)
         pill = ProgressPillView(frame: rect)
         pauseView = PauseOverlayView(frame: rect)
         sleepView = PauseOverlayView(frame: rect, style: .sleeping)
@@ -152,6 +158,8 @@ final class WindowController: NSObject, NSWindowDelegate {
         view.addSubview(overlay)
         stallView.frame = view.bounds
         view.addSubview(stallView)
+        setupView.frame = view.bounds
+        view.addSubview(setupView)
         pill.frame = view.bounds
         view.addSubview(pill)
         pill.onClick = { [weak self] in self?.expandPill() }
@@ -160,9 +168,11 @@ final class WindowController: NSObject, NSWindowDelegate {
             guard let self else { return }
             self.updateStallGate()
             self.updatePill()
+            self.updateSetupCard()
             self.window.invalidateCursorRects(for: self.view)
         }
         stallView.onVisibilityChange = { [weak self] in self?.refreshHostCursor() }
+        setupView.onVisibilityChange = { [weak self] in self?.refreshHostCursor() }
         pauseView.frame = view.bounds
         view.addSubview(pauseView)
         sleepView.frame = view.bounds
@@ -478,6 +488,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             previousCursorPosition?(x, y, w, h)
             self?.view.guestCursorPosition(x: x, y: y, windowWidth: w, windowHeight: h)
         }
+        progress.onSetup = { [weak self] code, text in self?.setupChanged(code: code, text: text) }
         let previousReady = progress.onReady
         progress.onReady = { [weak self] in previousReady?(); self?.overlay.hide() }
         let previousShutdown = progress.onShutdown
@@ -509,6 +520,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         updatePill()
         updateTitle()
         updateNoPictureGate()
+        updateSetupCard()
     }
 
     /// Booting or shutting down (not `ready` yet, or no longer).
@@ -534,6 +546,50 @@ final class WindowController: NSObject, NSWindowDelegate {
             pill.hide()
         }
         refreshHostCursor()
+    }
+
+    /// `setup <code> [text]` from the guest agent; unknown codes are ignored.
+    private func setupChanged(code: String, text: String) {
+        guard ["preparing", "installed", "need-tools", "need-restart", "failed", "off"].contains(code) else {
+            log("setup: ignoring unknown status \(code)")
+            return
+        }
+        log("setup: \(code)" + (text.isEmpty ? "" : " \(text)"))
+        setupStatus = (code, text)
+        updateSetupCard()
+    }
+
+    /// The setup card shows over the Steam UI after `ready` (never over a game or the overlay).
+    private func updateSetupCard() {
+        let shown = progress?.state.phase == .running && !overlay.shown && focusedGame == nil
+        var title: String?
+        var restart = false
+        switch shown ? setupStatus?.code : nil {
+        case "preparing": title = String(localized: "Setting up game support…")
+        case "need-tools":
+            let tools = ListFormatter.localizedString(byJoining: setupStatus!.text.split(separator: ";")
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+            title = String(localized: "Install \(tools) in Steam to play games with anti-cheat", comment: "Card over the Steam UI: Steam tool names")
+        case "need-restart":
+            title = String(localized: "Restart Steam to finish setting up")
+            restart = true
+        case "failed": title = String(localized: "Game support could not be set up")
+        default: break
+        }
+        guard let title else {
+            setupView.actions = []
+            setupView.showsReportLink = false
+            return setupView.hide()
+        }
+        setupView.showsSpinner = setupStatus?.code == "preparing"
+        setupView.showsReportLink = setupStatus?.code == "failed"
+        setupView.actions = restart ? [(String(localized: "Restart Steam", comment: "Button: restart the Steam client in SteamOS"), { [weak self] in
+            self?.setupStatus = nil
+            self?.updateSetupCard()
+            self?.onRestartSteam?()
+        })] : []
+        setupView.update(title: title, detail: "")
+        setupView.show()
     }
 
     /// Full overlay → pill (the progress stays on screen; input goes through). `sticky`: the menu
@@ -681,6 +737,7 @@ final class WindowController: NSObject, NSWindowDelegate {
                 guard let self else { return done(drawable, nil) }
                 var composite = self.overlay.renderImage(scale: 2, under: drawable)
                 composite = self.stallView.renderImage(scale: 2, under: composite)
+                composite = self.setupView.renderImage(scale: 2, under: composite)
                 composite = self.pill.renderLayerImage(scale: 2, under: composite)
                 for v in [self.pauseView, self.sleepView, self.resumeChip] as [NSView] {
                     composite = v.renderLayerImage(scale: 2, under: composite)
@@ -918,6 +975,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         view.gameLayersVisible = focusedGame != nil
         stall?.gameFocused = focusedGame != nil
         updateNoPictureGate()
+        updateSetupCard()
         log("input: guest focus \(f)")
         refreshLowerResolution()
         guestCursor = nil

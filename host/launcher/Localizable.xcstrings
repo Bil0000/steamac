@@ -3236,6 +3236,22 @@
         }
       }
     },
+    "Game support could not be set up" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось настроить поддержку игр"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法设置游戏支持"
+          }
+        }
+      }
+    },
     "Games" : {
       "comment" : "Settings tab: game statistics",
       "localizations" : {
@@ -3654,6 +3670,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "包含启动器日志"
+          }
+        }
+      }
+    },
+    "Install %@ in Steam to play games with anti-cheat" : {
+      "comment" : "Card over the Steam UI: Steam tool names",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установите %@ в Steam, чтобы играть в игры с античитом"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Steam 中安装 %@ 以游玩带反作弊的游戏"
           }
         }
       }
@@ -5934,6 +5967,22 @@
         }
       }
     },
+    "Restart Steam to finish setting up" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перезапустите Steam, чтобы завершить настройку"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重启 Steam 以完成设置"
+          }
+        }
+      }
+    },
     "Restart VM" : {
       "localizations" : {
         "ru" : {
@@ -6403,6 +6452,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在设置 SteamOS（首次启动）…"
+          }
+        }
+      }
+    },
+    "Setting up game support…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Настройка поддержки игр…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在设置游戏支持…"
           }
         }
       }

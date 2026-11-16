@@ -122,6 +122,8 @@ final class BootProgress {
     /// window pixels.
     var onCursorPosition: ((_ x: Int, _ y: Int, _ windowWidth: Int, _ windowHeight: Int) -> Void)?
     var onProfilesOK: ((_ hash: String, _ pending: Bool) -> Void)?
+    /// `setup <code> [text]`: the game-runtime setup status (at agent start and when it changes).
+    var onSetup: ((_ code: String, _ text: String) -> Void)?
 
     private var sawConsole = false
     private var okLines = 0
@@ -302,6 +304,10 @@ final class BootProgress {
                 guard parts.count >= 3 else { return }
                 onGameEvent?(.proton(appid: id, version: parts[2]))
             }
+        case "setup":
+            let words = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true).map(String.init)
+            guard words.count >= 2 else { return }
+            onSetup?(words[1], words.count > 2 ? words[2] : "")
         default:
             break   // forward compatible
         }

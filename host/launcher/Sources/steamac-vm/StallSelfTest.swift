@@ -78,6 +78,24 @@ enum StallSelfTest {
         func heartbeat() {
             guest("alive \(Int(ProcessInfo.processInfo.systemUptime * 1000)) 1.25\n")
         }
+        wc.onRestartSteam = { _ = port.send("restart-steam") }
+        _ = fcntl(port.guestInputFd, F_SETFL, fcntl(port.guestInputFd, F_GETFL) | O_NONBLOCK)
+        /// Host -> guest lines sent since the last call.
+        func hostLines() -> [String] {
+            var buf = [UInt8](repeating: 0, count: 4096)
+            let n = Darwin.read(port.guestInputFd, &buf, buf.count)
+            return n > 0 ? String(decoding: buf[0..<n], as: UTF8.self).split(separator: "\n").map(String.init) : []
+        }
+        func click(_ r: CGRect) {
+            let p = wc.stallView.convert(NSPoint(x: r.midX, y: r.midY), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: wc.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                                              pressure: type == .leftMouseDown ? 1 : 0) {
+                    NSApp.sendEvent(e)
+                }
+            }
+        }
 
         wc.show()
         wc.overlay.show(animated: false)
@@ -113,6 +131,18 @@ enum StallSelfTest {
         let sampleCPU = "CPUVALUE"
         let sampleSeconds = 987   // < 1000: no digit grouping in the localized template
         let workingDetail = String(localized: "VM CPU \(sampleCPU) cores · guest alive")
+        let setup = wc.setupView
+        setup.onReport = { log("stall selftest: setup Report… link activated") }
+        func expectSetup(_ title: String?, spinner: Bool = false, actions: [String] = [], report: Bool = false) -> String? {
+            guard let title else { return setup.shown ? "setup card should be hidden, shows \"\(setup.currentTitle)\"" : nil }
+            guard setup.shown else { return "setup card should show \"\(title)\"" }
+            guard setup.currentTitle == title else { return "setup title \"\(setup.currentTitle)\", expected \"\(title)\"" }
+            guard setup.showsSpinner == spinner else { return "setup spinner \(setup.showsSpinner), expected \(spinner)" }
+            guard setup.currentActions == actions else { return "setup actions \(setup.currentActions), expected \(actions)" }
+            return report == !setup.reportLinkFrame.isEmpty ? nil : "setup Report… link \(report ? "missing" : "shown")"
+        }
+        let restartSteam = String(localized: "Restart Steam", comment: "Button: restart the Steam client in SteamOS")
+        nonisolated(unsafe) var sentAfterRestart: [String] = []
         func expectHidden(_ what: String) -> String? {
             !monitor.indicatorShown && !view.shown ? nil : "\(what): indicator should be hidden"
         }
@@ -135,6 +165,40 @@ enum StallSelfTest {
             },
             Step(name: "03-steam-ui-idle-3s", action: { mode.store(0, ordering: .relaxed) }, wait: 3.0) {
                 expectHidden("Steam UI focused, GPU idle 3 s")
+            },
+            Step(name: "03a-setup-preparing", action: { guest("setup preparing Building the game runtime\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Setting up game support…"), spinner: true) ?? expectHidden("setup card only")
+            },
+            Step(name: "03b-setup-need-tools", action: {
+                guest("setup need-tools Proton EasyAntiCheat Runtime;Proton BattlEye Runtime\n")
+            }, wait: 0.6) {
+                let tools = ListFormatter.localizedString(byJoining: ["Proton EasyAntiCheat Runtime", "Proton BattlEye Runtime"])
+                return expectSetup(String(localized: "Install \(tools) in Steam to play games with anti-cheat",
+                                          comment: "Card over the Steam UI: Steam tool names"))
+            },
+            Step(name: "03c-setup-need-restart", action: { _ = hostLines(); guest("setup need-restart\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Restart Steam to finish setting up"), actions: [restartSteam])
+            },
+            Step(name: "03d-setup-restart-clicked", action: {
+                if let r = setup.linkFrames.first { click(r) }
+            }, wait: 0.6) {
+                sentAfterRestart = hostLines()
+                return sentAfterRestart == ["restart-steam"] ? expectSetup(nil) : "host sent \(sentAfterRestart), expected restart-steam"
+            },
+            Step(name: "03e-setup-failed", action: { guest("setup failed FEX build exited with 1\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Game support could not be set up"), report: true)
+            },
+            Step(name: "03f-setup-unknown-ignored", action: { guest("setup something-new 1\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Game support could not be set up"), report: true)
+            },
+            Step(name: "03g-setup-installed", action: { guest("setup installed\n") }, wait: 0.6) {
+                expectSetup(nil)
+            },
+            Step(name: "03h-setup-not-over-game", action: { guest("setup preparing\n"); guest("focus game 4242\n") }, wait: 0.6) {
+                expectSetup(nil)
+            },
+            Step(name: "03i-setup-off", action: { guest("focus steam\n"); guest("setup off\n") }, wait: 0.6) {
+                expectSetup(nil)
             },
             Step(name: "04-game-focused-1.5s", action: { guest("focus game 4242\n") }, wait: 1.5) {
                 wc.guestFocus == .game(4242) ? expectHidden("game focused 1.5 s ago (stale idle must not count)")
@@ -274,7 +338,7 @@ enum StallSelfTest {
                 let path = "\(outDir)/stall-\(step.name).png"
                 do { try PNG.write(img, to: path) } catch { failures.append("\(step.name): \(error)") }
                 failures += DispatchQueue.main.sync {
-                    pixelChecks(step.name, img, drawable: wc.overlay.isHidden ? shot.0 : nil, view)
+                    pixelChecks(step.name, img, drawable: wc.overlay.isHidden ? shot.0 : nil, setup.shown ? setup : view)
                 }
                 log("stall selftest: \(step.name) indicator=\(view.shown ? "shown" : "hidden")"
                     + (view.shown ? " \"\(view.currentTitle)\" / \"\(view.currentDetail)\"" : "") + " -> \(path)")
@@ -312,15 +376,17 @@ enum StallSelfTest {
             if frameProbe.0 < 200 || frameProbe.1 > 60 { f.append("\(name): guest frame should stay visible around the card, got \(frameProbe)") }
             let c = px(pad)
             if c.0 > 75 || c.1 > 80 || c.2 > 90 { f.append("\(name): card padding should be dark, got \(c)") }
-            let s = view.spinnerFrame
-            var blue = 0
-            for yi in 0..<Int(s.height) {
-                for xi in 0..<Int(s.width) {
-                    let p = px(CGPoint(x: s.minX + CGFloat(xi), y: s.minY + CGFloat(yi)))
-                    if p.2 > 180 && p.0 < 160 { blue += 1 }
+            if view.showsSpinner {
+                let s = view.spinnerFrame
+                var blue = 0
+                for yi in 0..<Int(s.height) {
+                    for xi in 0..<Int(s.width) {
+                        let p = px(CGPoint(x: s.minX + CGFloat(xi), y: s.minY + CGFloat(yi)))
+                        if p.2 > 180 && p.0 < 160 { blue += 1 }
+                    }
                 }
+                if blue < 15 { f.append("\(name): spinner not drawn (\(blue) blue points)") }
             }
-            if blue < 15 { f.append("\(name): spinner not drawn (\(blue) blue points)") }
         } else if !view.isHidden {
             f.append("\(name): hidden indicator view should be isHidden")
         } else if let d = drawable, let dpx = OverlaySelfTest.pixels(d), d.width == img.width, d.height == img.height {
