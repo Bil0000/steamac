@@ -84,4 +84,13 @@ unshare --mount --propagation private /bin/bash -c '
     exec "$2/usr/lib/rauc/post-install.sh"
 ' steamac-post-install "$root_dev" "$stock" || rc=$?
 rmdir "$stock" || :
+# The stock script switches the primary slot through steamos-bootconf -> splctl;
+# make sure a later steamos-bootconf that no longer calls splctl still does.
+case $(splctl get-current) in A) new_slot=B ;; B) new_slot=A ;; *) new_slot= ;; esac
+if (( rc == 0 )) && [[ -n $new_slot ]]; then
+    if [[ $(splctl get-primary) != "$new_slot" ]]; then
+        echo "steamac: stock post-install left the primary slot unchanged: splctl set-primary $new_slot" >&2
+        splctl set-primary "$new_slot" || rc=$?
+    fi
+fi
 exit "$rc"
