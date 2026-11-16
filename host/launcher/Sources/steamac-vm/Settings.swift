@@ -422,7 +422,7 @@ final class LauncherSettings: ObservableObject {
     /// Frame latency mode of the next start (Vulkan path; kernel cmdline `steamac.frame_latency=1`).
     /// Off by default: the guest's DXVK config is left unchanged.
     @Published var frameLatency = false { didSet { save(.frameLatency, frameLatency) } }
-    @Published var experimentalGameSupport = false { didSet { save(.experimentalGameSupport, experimentalGameSupport) } }
+    @Published var experimentalGameSupport = true { didSet { save(.experimentalGameSupport, experimentalGameSupport) } }
 
     init() {
         let domain = LauncherSettings.domain

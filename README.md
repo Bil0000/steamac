@@ -83,7 +83,8 @@ EAC runs inside SteamOS under Valve's FEX emulator. Earlier tests with `eac-2610
 Mini Royale (EAC `301`; that game was not played past its account prompt). The current `eac-2610.5` pin runs Bodycam with EAC (earlier `eac-2610.3` crashed it after EAC `301`). Results differ from game to game: each title
 ships its own EAC build and checks, so an untested game may or may not work.
 
-This development version adds **Settings > Advanced > Experimental game support**, off by default.
+This development version adds **Settings > Advanced > Experimental game support**, on by default. It changes nothing
+until a game with EAC files is installed; Steam's own FEX stays in place until then.
 The app picks Proton or the EAC setup for each game by itself. The patched FEX runtime ships prebuilt in the guest layer
 and is installed on the next Steam start; it is installed again when Steam updates its FEX tool while it runs, unless
 Steam's FEX is a newer release than the patched one. The guest command `/usr/lib/steamac/steam-fex-eac status` shows

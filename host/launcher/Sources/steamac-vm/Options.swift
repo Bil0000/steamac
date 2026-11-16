@@ -125,7 +125,7 @@ struct Options {
     /// Settings > Advanced "Frame latency" (kernel cmdline `steamac.frame_latency=1`): the guest's
     /// DXVK config gets dxgi.maxFrameLatency = 1 for the Vulkan path. Default false: unset.
     var frameLatency = false
-    var experimentalGameSupport = false
+    var experimentalGameSupport = true
     /// --launch-app APPID: Steam starts this game once per boot (kernel cmdline steamac.launch_app=).
     var launchApp: Int?
     var selftestGraphicsPath = false
@@ -320,7 +320,7 @@ struct Options {
                            unchanged. --no-frame-latency turns it off for this run.
       --experimental-game-support  experimental game support on (kernel cmdline steamac.fex_eac=1|0,
                            added on every boot; default: Settings > Advanced "Experimental game
-                           support", off): downloads and builds a Linux game runtime on first use;
+                           support", on): sets up a Linux game runtime once an anti-cheat game is installed;
                            restart Steam when setup finishes. Game support varies.
                            --no-experimental-game-support turns it off for this run.
       --launch-app APPID   Steam starts this game once Steam is up, once per boot (kernel cmdline

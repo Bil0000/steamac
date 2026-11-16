@@ -322,9 +322,9 @@ def configure_eac_games():
                if games and not any((library / "steamapps/common" / name).is_dir() for library in found)]
     if missing:
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
-    request_tools(missing + ([TOOL.name] if not complete(TOOL) else []))
+    request_tools(missing + ([TOOL.name] if (games or (STATE / "installed.json").exists()) and not complete(TOOL) else []))
     if not games or not config.is_file():
-        return missing
+        return games, missing
     record = STATE / "mapped.json"
     mapped = set(json.loads(record.read_text())) if record.exists() else set()
     for appid in games:
@@ -362,7 +362,7 @@ def configure_eac_games():
                 results.append(f"skipped {account} ({error})")
         print(f"steam-fex-eac: App {appid}: compatibility tool {tool}; launch options "
               + (", ".join(dict.fromkeys(results)) or "no account") + ".")
-    return missing
+    return games, missing
 
 
 def put(stage):
@@ -398,8 +398,9 @@ def repair():
     except (OSError, ValueError):
         known = set()
     new = set(eac_games(libraries())) - known
-    installed = json.loads((STATE / "installed.json").read_text())["installed"]
-    stage = staged()
+    marker = STATE / "installed.json"
+    installed = json.loads(marker.read_text())["installed"] if marker.exists() else None
+    stage = installed and staged()
     flags = None
     for manifest in (STEAM / "steamapps").glob("appmanifest_*.acf"):
         try:
@@ -451,7 +452,7 @@ def main():
             report("need-restart", "Runtime built. Restart Steam to finish setup. Game support is not verified.")
             return
         if action == "repair":
-            if active and marker.exists():
+            if active:
                 repair()
             return
         if subprocess.run(["pgrep", "-x", "steam"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
@@ -472,7 +473,10 @@ def main():
             marker.unlink()
             report("off", "Experimental game support is off. The previous runtime is restored.")
             return
-        missing = configure_eac_games()
+        games, missing = configure_eac_games()
+        if not games and not marker.exists():
+            report("off", "No games with Easy Anti-Cheat are installed. Steam's runtime is unchanged.")
+            return
         stage = staged()
         if stage is None:
             report("preparing", "Preparing the Linux game runtime. Restart Steam when setup finishes.")
