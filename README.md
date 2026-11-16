@@ -80,7 +80,7 @@ be turned on and off while a game runs.
 ## Easy Anti-Cheat
 
 EAC runs inside SteamOS under Valve's FEX emulator. Earlier tests with `eac-2610.2` passed EAC's checks for one title, and for
-Mini Royale (EAC `301`; that game was not played past its account prompt). The current `eac-2610.3` pin has not passed a real game test. Results differ from game to game: each title
+Mini Royale (EAC `301`; that game was not played past its account prompt). The current `eac-2610.5` pin runs Bodycam with EAC (earlier `eac-2610.3` crashed it after EAC `301`). Results differ from game to game: each title
 ships its own EAC build and checks, so an untested game may or may not work.
 
 This development version adds **Settings > Advanced > Experimental game support**, off by default.

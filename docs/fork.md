@@ -1,14 +1,14 @@
 # Fork notes
 
 A fork of [steamac](https://github.com/fxgl/steamac) (base: 1.9; results on 1.9 are marked, older ones were measured on 1.8.1/1.8.2) that adds support for genuine-Easy-Anti-Cheat x86 games,
-verified in earlier VRChat sessions with `eac-2610.2` (Mini Royale's EAC also reached `301`; results differ game by game), plus launcher and stability fixes. The current `eac-2610.3` runtime and automatic setup have not passed a real game test. Nothing here is sent to libkrun, Mesa, FEX or Proton by this fork;
+verified in earlier VRChat sessions with `eac-2610.2` (Mini Royale's EAC also reached `301`; results differ game by game), plus launcher and stability fixes. The current `eac-2610.5` runtime runs Bodycam with EAC. Nothing here is sent to libkrun, Mesa, FEX or Proton by this fork;
 steamac changes are discussed with its maintainer directly. Bug reports are welcome here (see the README). Not affiliated with FX GAMES, Valve, Epic or VRChat.
 
 ## Changes
 
 | change | where | why | status |
 |---|---|---|---|
-| patched FEX-2610 ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610) tag `eac-2610.3`), `build-fex.sh`, `install-fex-tool.sh`, `guest-tune.sh` | [`fex-eac/`](../fex-eac/README.md) | Valve's FEX-2607 in Steam's compatibility tool fails EAC's ptrace injection and signal semantics ([eac-how-it-works.md](eac-how-it-works.md)) | `.2`: tested in 3 sessions; current `.3`: gameplay unverified |
+| patched FEX-2610 ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610) tag `eac-2610.5`), `build-fex.sh`, `install-fex-tool.sh`, `guest-tune.sh` | [`fex-eac/`](../fex-eac/README.md) | Valve's FEX-2607 in Steam's compatibility tool fails EAC's ptrace injection and signal semantics ([eac-how-it-works.md](eac-how-it-works.md)) | `.2`: tested in 3 sessions; current `.5`: Bodycam runs |
 | triple-buffered present | launcher (Swift) | replaces a `waitUntilCompleted()` per frame | experimental |
 | `--render-scale` (0.25–1.0) with MetalFX upscaling | launcher (Swift) | render below native and upscale, to move the frame-time cost off the GPU while keeping UI at real-world size | experimental (default stays 1.0 = unchanged) |
 | libkrun log level default `error` | launcher | less logging overhead | experimental |
