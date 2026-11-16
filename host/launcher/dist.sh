@@ -37,8 +37,9 @@
 #                          signing now, and every shipped Mach-O must pass sentry-cli debug-files check.
 #                          The dSYMs are kept as work/out/dist/FX-Steam-Launcher-<version>-dSYMs (later
 #                          builds replace work/out/dSYMs).
-#   SPARKLE_FEED_URL       the appcast (default https://fxgl.github.io/steamac/appcast.xml)
-#   SPARKLE_PUBLIC_KEY     its EdDSA public key (default: fxgl's release key below). A notarized build
+#   SPARKLE_FEED_URL       the appcast; with SPARKLE_PUBLIC_KEY it turns on in-app updates. Without
+#                          both, the app keeps the GitHub release check (UpdateCheck.swift).
+#   SPARKLE_PUBLIC_KEY     its EdDSA public key. A notarized build with a feed
 #                          requires its private half in the keychain (generate_keys -p prints the
 #                          keychain's public key), so appcast.sh can sign the release's updates. Sparkle's
 #                          generate_keys in host/launcher/.build/artifacts/sparkle/Sparkle/bin; restore the
@@ -120,11 +121,10 @@ fi
 
 # In-app updates (SparkleUpdates): releases always carry the feed and its public key.
 SPARKLE_BIN="$HERE/.build/artifacts/sparkle/Sparkle/bin"
-feed=${SPARKLE_FEED_URL:-https://fxgl.github.io/steamac/appcast.xml}
-# fxgl's release key (public half; the private half exists only in the maintainer's keychain and its
-# offline backup). Installed copies accept only updates it signed: never change it for fxgl releases.
-ed_key=${SPARKLE_PUBLIC_KEY:-ML1BKHcTTwKlVSLtTdMvyk7Fhwg35VN1nUp+o4fezt8=}
-if [[ $notarize == 1 ]]; then
+feed=${SPARKLE_FEED_URL:-}
+ed_key=${SPARKLE_PUBLIC_KEY:-}
+[[ -n $feed && -z $ed_key || -z $feed && -n $ed_key ]] && die "set both SPARKLE_FEED_URL and SPARKLE_PUBLIC_KEY, or neither"
+if [[ $notarize == 1 && -n $feed ]]; then
     keychain_key=$("$SPARKLE_BIN/generate_keys" -p 2>/dev/null || true)
     [[ $keychain_key == "$ed_key" ]] || die "the keychain's Sparkle key (${keychain_key:-none}) is not $ed_key: appcast.sh could
 not sign this release's updates; import the key backup with $SPARKLE_BIN/generate_keys -f <file>
@@ -150,11 +150,15 @@ ditto "$SRC" "$APP"
 if [[ $notarize == 1 ]]; then
     /usr/libexec/PlistBuddy -c "Add :SteamacDistTeamID string $team" "$APP/Contents/Info.plist"
 fi
-for entry in "SUFeedURL string $feed" "SUPublicEDKey string $ed_key" \
-             "SUVerifyUpdateBeforeExtraction bool true" "SURequireSignedFeed bool true"; do
-    /usr/libexec/PlistBuddy -c "Add :$entry" "$APP/Contents/Info.plist"
-done
-echo "in-app updates from $feed (EdDSA public key $ed_key)"
+if [[ -n $feed ]]; then
+    for entry in "SUFeedURL string $feed" "SUPublicEDKey string $ed_key" \
+                 "SUVerifyUpdateBeforeExtraction bool true" "SURequireSignedFeed bool true"; do
+        /usr/libexec/PlistBuddy -c "Add :$entry" "$APP/Contents/Info.plist"
+    done
+    echo "in-app updates from $feed (EdDSA public key $ed_key)"
+else
+    echo "no in-app updates (SPARKLE_FEED_URL unset): the app checks GitHub releases"
+fi
 
 if [[ $mode == adhoc ]]; then
     echo "=== signing ad hoc (no Developer ID, not notarized)"

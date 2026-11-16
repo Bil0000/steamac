@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Publish work/out/dist/FX-Steam-Launcher-<version>.dmg (dist.sh) to the in-app update feed
-# (SparkleUpdates): docs/appcast.xml, served as https://fxgl.github.io/steamac/appcast.xml once
+# (SparkleUpdates): docs/appcast.xml, served as https://bil0000.github.io/steamac/appcast.xml once
 # committed and pushed (GitHub Pages).
 #
 #   host/launcher/appcast.sh [--local URL] [generate_appcast options, e.g. --phased-rollout-interval 86400]
@@ -29,8 +29,8 @@ ROOT=$(cd "$HERE/../.." && pwd)
 OUT="$ROOT/work/out"
 DIST="$OUT/dist"
 SPARKLE_BIN="$HERE/.build/artifacts/sparkle/Sparkle/bin"
-REPO=fxgl/steamac
-SITE=https://fxgl.github.io/steamac/
+REPO=Bil0000/steamac
+SITE=https://bil0000.github.io/steamac/
 
 die() { echo "appcast.sh: $*" >&2; exit 1; }
 

@@ -42,7 +42,7 @@ final class SparkleUpdates: NSObject, SPUUserDriver, SPUUpdaterDelegate {
 
     /// Settings self-test: which copies may replace themselves.
     static func selfCheck() -> [String] {
-        let info = ["SUFeedURL": "https://fxgl.github.io/steamac/appcast.xml", "SUPublicEDKey": "key"]
+        let info = ["SUFeedURL": "https://e/appcast.xml", "SUPublicEDKey": "key"]
         let cases: [(String, [String: Any], String, Bool, Bool)] = [
             ("release", info, "/Applications/FX Steam Launcher.app", false, true),
             ("source build", [:], "/Applications/FX Steam Launcher.app", false, false),

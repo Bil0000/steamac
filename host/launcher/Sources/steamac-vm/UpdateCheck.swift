@@ -8,7 +8,7 @@ import SwiftUI
 /// app. Every other build (source builds, the dev launcher, copies Sparkle cannot replace) uses
 /// the flow below.
 ///
-/// The latest GitHub release of fxgl/steamac against this launcher's
+/// The latest GitHub release of `repo` against this launcher's
 /// CFBundleShortVersionString. Runs in the VM process of the first boot (once per app launch, not
 /// per VM reboot) a few seconds after the window is up, at most every 6 h (also across launches),
 /// never in development builds (work/out/steamac-vm), and only while Settings > General "Check for
@@ -26,8 +26,9 @@ import SwiftUI
 final class UpdateChecker {
     static let shared = UpdateChecker()
 
-    static let latestURL = URL(string: "https://api.github.com/repos/fxgl/steamac/releases/latest")!
-    static let releasesPage = URL(string: "https://github.com/fxgl/steamac/releases")!
+    static let repo = "Bil0000/steamac"
+    static let latestURL = URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!
+    static let releasesPage = URL(string: "https://github.com/\(repo)/releases")!
     static let urlEnv = "STEAMAC_UPDATE_URL", fakeVersionEnv = "STEAMAC_FAKE_VERSION"
     static let interval: TimeInterval = 6 * 3600
     static let timeout: TimeInterval = 10
@@ -148,7 +149,7 @@ final class UpdateChecker {
         for (a, b, want) in order where compare(parse(a)!, parse(b)!) != want { failures.append("update: \(a) vs \(b) not \(want.rawValue)") }
         let json = """
             [{"tag_name": "v9.0", "draft": true}, {"tag_name": "v8.0", "prerelease": true}, {"tag_name": "nightly"},
-             {"tag_name": "v1.3.10", "name": "1.3.10", "body": "x", "html_url": "https://github.com/fxgl/steamac/releases/tag/v1.3.10",
+             {"tag_name": "v1.3.10", "name": "1.3.10", "body": "x", "html_url": "https://github.com/Bil0000/steamac/releases/tag/v1.3.10",
               "assets": [{"name": "FX-Steam-Launcher-1.3.10-gpl-sources.tar", "browser_download_url": "https://e/x.tar"},
                          {"name": "FX-Steam-Launcher-1.3.10.dmg", "browser_download_url": "https://e/x.dmg"}]},
              {"tag_name": "v1.3.9"}]
