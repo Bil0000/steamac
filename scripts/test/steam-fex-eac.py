@@ -116,6 +116,7 @@ class GameSetupTests(unittest.TestCase):
         self.hook()
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve-new FEX")
         self.assertEqual((self.home / "state/steamac/fex-eac/status").read_text().split("\n")[0], "need-update")
+        self.assertIn("newer than FEX-2610", self.hook("status"))
 
     def test_staged_runtime_installs_and_repairs_steam_update(self):
         self.hook()
@@ -415,6 +416,11 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.home / "steam-calls").read_text(), "steam://install/11\nsteam://install/12\n")
         self.assertIn("ExecStartPost=-/usr/lib/steamac/steam-install-tools",
                       (ROOT / "guest/layer/usr/lib/systemd/user/steam.service.d/50-steamac.conf").read_text())
+
+    def test_appinfo_is_not_read_when_no_tool_is_missing(self):
+        (self.steam / "appcache").mkdir()
+        (self.steam / "appcache/appinfo.vdf").write_bytes(struct.pack("<II", 0x07564428, 1) + b"\x01")
+        self.assertNotIn("appinfo.vdf", self.hook())
 
     def test_scan_is_cached_per_manifest(self):
         root = self.library_game(self.steam, "705", "Protected", "EasyAntiCheat")

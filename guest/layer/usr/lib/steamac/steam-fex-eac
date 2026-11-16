@@ -298,7 +298,7 @@ def tool_appids(names):
 def request_tools(names):
     """Ask Steam to install these tools once its UI is up (steam-install-tools, ExecStartPost of steam.service)."""
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "steamac/steam-install-tools"
-    appids = tool_appids(names)
+    appids = tool_appids(names) if names else {}
     if appids:
         VDF["atomic_write"](runtime, "".join(f"steam://install/{appid}\n" for appid in appids.values()))
     else:
@@ -418,10 +418,11 @@ def main():
         raise ValueError("usage: steam-fex-eac [prepare|build|repair|status]")
     marker = STATE / "installed.json"
     if action == "status":
-        if marker.exists() and json.loads(marker.read_text()).get("installed") != fingerprint(TOOL):
+        status = (STATE / "status").read_text() if (STATE / "status").exists() else "\nExperimental game support has not been prepared."
+        if (not status.startswith("need-update\n") and marker.exists()
+                and json.loads(marker.read_text()).get("installed") != fingerprint(TOOL)):
             print("The installed runtime changed. Restart Steam to prepare it again.")
             return
-        status = (STATE / "status").read_text() if (STATE / "status").exists() else "\nExperimental game support has not been prepared."
         print(status.partition("\n")[2].strip() or status.strip())
         return
     active = enabled()
