@@ -44,7 +44,7 @@ grep -qx 'OnBootSec=150s' "$U/steamac-mem-trim.timer" || fail units "timer is no
 grep -q '^OnUnitActiveSec\|^OnCalendar' "$U/steamac-mem-trim.timer" && fail units "timer repeats (must run once per boot)"
 grep -qx 'Type=oneshot' "$U/steamac-mem-trim.service" && grep -qx 'ExecStart=/usr/lib/steamac/mem-trim' "$U/steamac-mem-trim.service" \
     || fail units "service does not run the script once"
-grep -qx 'RestartForceExitStatus=75' "$U/steamac-mem-trim.service" && grep -qx 'SuccessExitStatus=75' "$U/steamac-mem-trim.service" \
+grep -qx 'RestartForceExitStatus=75' "$U/steamac-mem-trim.service" && ! grep -q '^SuccessExitStatus=.*75' "$U/steamac-mem-trim.service" \
     && grep -q '^RestartSec=' "$U/steamac-mem-trim.service" || fail retry "service does not run again after exit 75"
 [ -x "$S" ] && bash -n "$S" || fail units "script not executable or invalid"
 
