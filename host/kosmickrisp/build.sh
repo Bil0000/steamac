@@ -474,11 +474,6 @@
 #              pools alive, so the chunks stayed taken for the life of the VMM; after a few launches of a vkd3d-proton
 #              game every timestamp of the process read 0. Test: tests/ts-heap-leak.c (40 devices destroyed with 4
 #              timestamp pools of 8192 written in one command buffer: the 5th round read 0 before).
-#   0103       steamac: a timestamp in a compute encoder records its trigger dispatch (the sentinel rewrite, about
-#              10 KiB of command allocator memory with its barriers) only when no resolve is pending, i.e. once per
-#              encoder; the reset before it already stored the sentinel (was 0053). 8192 timestamps in one command
-#              buffer grew the footprint by ~237-282 MiB with 0064 alone. Test: tests/ts-heap-leak.c (after a warm-up
-#              commit, footprint growth under 60 MiB).
 #   0104       steamac: Metal command allocators (the main and the pre_gfx one, 0044) are reset when their command
 #              buffer is reset or destroyed, and a pool keeps at most 4 of them (of at most 4 MiB each) for reuse
 #              (was 0051). An allocator went back to its pool at vkEndCommandBuffer and was reused without a reset, so
@@ -503,8 +498,16 @@
 #              Other index buffers keep the unroll. Test: tests/indirect-index-bound.c (Metal validation in assert
 #              mode; a draw past the range draws nothing, the last index of 8- and 12-byte ranges draws; 2000 indexed
 #              indirect draws 16.9 ms on 0001-0098, 1.8 ms after).
-#              0100-0106 are the fork's patches (host/kosmickrisp/patches/README.md maps the old numbers). Its opt-in
-#              asynchronous pipelines (0041/0043/0047/0050, MESA_KK_ASYNC_PIPELINES) are dropped for 0051-0057/0063.
+#   0107       steamac: sparse residency images with MTLTextureUsageShaderWrite (not depth/stencil) get a read-only
+#              placement sparse mirror texture on Apple10 and later, with the same tile mappings (tail mappings
+#              clipped to its smaller tail), and residency is read through it with 0035's residency views, now also
+#              for views with baseMipLevel 0. On an M5 Pro (macOS 26.6) Metal reported inverted residency for fetches
+#              and imageLoad, and wrong residency for gradient samples and gathers, of writable placement sparse
+#              textures; values and explicit-LOD samples were correct. Repro: host/moltenvk/repro sparse.c (183
+#              failures before, 0 after).
+#              0100-0107 are the fork's patches (host/kosmickrisp/patches/README.md maps the old numbers). Its opt-in
+#              asynchronous pipelines (0041/0043/0047/0050, MESA_KK_ASYNC_PIPELINES) are dropped for 0051-0057/0063,
+#              and its 0053 (one timestamp trigger dispatch per compute encoder, briefly 0103) with upstream 0064.
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver
@@ -791,10 +794,10 @@ mv -f "$lib.tmp.$$" "$lib"
 	echo "  0100 = steamac: robustness fixes (XFB counter bounds, sparse container_of, minmax update-after-bind scan, sparse view underflow)"
 	echo "  0101 = steamac: indirect-deref if-else trees bounded at 16 leaves, large function-temp arrays spilled to scratch"
 	echo "  0102 = steamac: a destroyed device returns the timestamp counter heap chunks its command buffers hold"
-	echo "  0103 = steamac: one timestamp trigger dispatch per compute encoder"
 	echo "  0104 = steamac: Metal command allocators reset at command buffer reset/destroy; pools keep at most 4 small ones"
 	echo "  0105 = steamac: uncommitted Metal command buffers released before their allocator reset (fillCommandBufferArgs crash)"
 	echo "  0106 = steamac: aligned indexed indirect draws with robustness stay in the render pass (no unroll)"
+	echo "  0107 = steamac: sparse residency read through read-only mirror textures on Apple10 (writable ones misreport it)"
 	echo
 	echo "Known gaps (host/moltenvk/repro/run.sh): transform feedback with strip geometry shaders and"
 	echo "the overflow counter (draft !44928)."
