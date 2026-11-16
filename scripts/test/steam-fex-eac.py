@@ -48,7 +48,7 @@ class GameSetupTests(unittest.TestCase):
         for name in BINS:
             (root / "usr/bin" / name).write_text(value + " " + name)
         for name in FILES:
-            (root / name).write_text("FEX describe\t" + value + "\n" if name == "VERSIONS.txt" else value)
+            (root / name).write_text("FEX describe\tFEX-2607-" + value + "\n" if name == "VERSIONS.txt" else value)
 
     def hook(self, *args, expected=0):
         result = subprocess.run(["python3", str(HOOK), *args], env=self.env, text=True, capture_output=True)
@@ -82,6 +82,15 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-prebuilt FEX")
         self.assertFalse((self.home / "service-calls").exists())
 
+    def test_newer_steam_fex_tool_is_kept(self):
+        self.hook()
+        for name in BINS:
+            (self.tool / "usr/bin" / name).write_text("FEX-valve-new " + name)
+        (self.tool / "VERSIONS.txt").write_text("FEX describe\tFEX-2611-3-gabcdef\n")
+        self.hook()
+        self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve-new FEX")
+        self.assertEqual((self.home / "state/steamac/fex-eac/status").read_text().split("\n")[0], "need-update")
+
     def test_staged_runtime_installs_and_repairs_steam_update(self):
         self.hook()
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
@@ -90,7 +99,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.tool / "usr/bin/FEX").stat().st_mtime_ns, before)
         for name in BINS:
             (self.tool / "usr/bin" / name).write_text("FEX-valve-update " + name)
-        (self.tool / "VERSIONS.txt").write_text("FEX describe\tFEX-valve-update\n")
+        (self.tool / "VERSIONS.txt").write_text("FEX describe\tFEX-2607-valve-update\n")
         self.hook()
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
 
@@ -121,7 +130,7 @@ class GameSetupTests(unittest.TestCase):
         self.hook()
         for name in BINS:
             (self.tool / "usr/bin" / name).write_text("FEX-valve-update " + name)
-        (self.tool / "VERSIONS.txt").write_text("FEX describe\tFEX-valve-update\n")
+        (self.tool / "VERSIONS.txt").write_text("FEX describe\tFEX-2607-valve-update\n")
         self.hook()
         self.cmdline.write_text("steamac.fex_eac=0")
         self.hook()
@@ -131,7 +140,7 @@ class GameSetupTests(unittest.TestCase):
         self.hook()
         for name in BINS:
             (self.stage / "usr/bin" / name).write_text("FEX-rebuilt " + name)
-        (self.stage / "VERSIONS.txt").write_text("FEX describe\tFEX-rebuilt\n")
+        (self.stage / "VERSIONS.txt").write_text("FEX describe\teac-rebuilt\n")
         self.hook()
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-rebuilt FEX")
         self.cmdline.write_text("steamac.fex_eac=0")

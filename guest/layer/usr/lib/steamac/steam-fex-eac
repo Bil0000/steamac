@@ -8,6 +8,8 @@ English text for people.
   installed                  the patched runtime is in Steam's FEX-Emu tool
   need-tools NAME;NAME...    these Steam tools (their steamapps/common names) are missing
   need-restart               restart Steam to finish setup
+  need-update                Steam's FEX-Emu tool is newer than the FEX release the patched runtime is built on; Steam's
+                             build is kept until steamac is updated
   failed                     setup failed; line 2 says why
   off                        experimental game support is off
 Usage: steam-fex-eac [prepare|build|status]
@@ -44,9 +46,18 @@ def enabled():
     return next((word.split("=", 1)[1] for word in reversed(words) if word.startswith("steamac.fex_eac=")), "0") == "1"
 
 
-def source():
+def pinned(name):
     return next(line.split("=", 1)[1] for line in (PAYLOAD / "build-fex.sh").read_text().splitlines()
-                if line.startswith("FEX_EAC_SHA="))
+                if line.startswith(name + "="))
+
+
+def source():
+    return pinned("FEX_EAC_SHA")
+
+
+def describe(root):
+    return next((line.split("\t", 1)[1].strip() for line in (root / "VERSIONS.txt").read_text().splitlines()
+                 if line.startswith("FEX describe\t")), "")
 
 
 def complete(root):
@@ -274,6 +285,13 @@ def main():
             report("installed", "Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
             return
         else:
+            # Files outside FILES stay Steam's: only replace a Steam build of the release our patches are based on or older.
+            base = re.search(r"-(\d+)", pinned("FEX_EAC_TAG"))[1]
+            release = re.match(r"(?:FEX|eac)-(\d+)", describe(TOOL))
+            if not release or int(release[1]) > int(base):
+                report("need-update", f"Steam's FEX-Emu tool is {describe(TOOL) or 'unknown'}, newer than FEX-{base} of the "
+                       "patched runtime. Keeping Steam's build until steamac is updated.")
+                return
             backup = str(STATE / "backups" / current)
         install("install", backup, stage)
         temporary = marker.with_suffix(".new")
