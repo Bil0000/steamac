@@ -5,8 +5,10 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import struct
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -16,6 +18,29 @@ HOOK = SCRIPTS / "steam-fex-eac"
 RUN = SCRIPTS / "eac-launch"
 FILES = ("FEXCompatTool", "VERSIONS.txt", "ConfigTemplate.json")
 BINS = ("FEX", "FEXBash", "FEXGetConfig", "FEXOfflineCompiler", "FEXServer", "FEXServerManager", "FEXpidof")
+
+
+def appinfo_v29(apps):
+    table = []
+
+    def key(name):
+        if name not in table:
+            table.append(name)
+        return struct.pack("<I", table.index(name))
+
+    def kv(node):
+        out = b""
+        for name, value in node.items():
+            out += (b"\x00" + key(name) + kv(value)) if isinstance(value, dict) else (b"\x01" + key(name) + value.encode() + b"\0")
+        return out + b"\x08"
+
+    body = b""
+    for appid, (kind, installdir) in apps.items():
+        entry = b"\0" * 60 + kv({"appinfo": {"common": {"type": kind}, "config": {"installdir": installdir}}})
+        body += struct.pack("<II", appid, len(entry)) + entry
+    body += struct.pack("<I", 0)
+    return struct.pack("<IIq", 0x07564429, 1, 16 + len(body)) + body + struct.pack("<I", len(table)) + b"".join(
+        name.encode() + b"\0" for name in table)
 
 
 class GameSetupTests(unittest.TestCase):
@@ -29,7 +54,8 @@ class GameSetupTests(unittest.TestCase):
         self.cmdline = self.home / "cmdline"
         self.cmdline.write_text("steamac.fex_eac=1")
         self.env = dict(os.environ, HOME=str(self.home), STEAMAC_CMDLINE=str(self.cmdline),
-                        STEAMAC_FEX_DIR=str(ROOT / "fex-eac"), XDG_STATE_HOME=str(self.home / "state"))
+                        STEAMAC_FEX_DIR=str(ROOT / "fex-eac"), XDG_STATE_HOME=str(self.home / "state"),
+                        XDG_RUNTIME_DIR=str(self.home / "run"))
         self.bin = self.home / "bin"
         self.bin.mkdir()
         (self.bin / "pgrep").write_text("#!/bin/sh\nexit 1\n")
@@ -361,6 +387,31 @@ class GameSetupTests(unittest.TestCase):
         self.assertIn('"706" { "LaunchOptions" "%command% -novid" }', account.read_text())
         self.assertNotIn("eac-launch", account.read_text())
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve FEX")
+
+    def test_missing_tools_are_requested_from_steam(self):
+        self.library_game(self.steam, "709", "Protected", "EasyAntiCheat")
+        self.game_settings("709")
+        (self.steam / "appcache").mkdir()
+        (self.steam / "appcache/appinfo.vdf").write_bytes(appinfo_v29(
+            {11: ("Tool", "Proton - Experimental"), 12: ("Tool", "Proton EasyAntiCheat Runtime"), 13: ("Game", "Protected")}))
+        self.hook()
+        self.assertEqual((self.home / "run/steamac/steam-install-tools").read_text(),
+                         "steam://install/11\nsteam://install/12\n")
+        self.assertEqual((self.home / "state/steamac/fex-eac/status").read_text().split("\n")[0],
+                         "need-tools Proton - Experimental;Proton EasyAntiCheat Runtime")
+        steam = self.bin / "steam"
+        steam.write_text('#!/bin/sh\necho "$@" >> "$HOME/steam-calls"\n')
+        steam.chmod(0o755)
+        (self.home / "ready").write_text("boot\n")
+        env = dict(self.env, STEAMAC_READY_MARKER=str(self.home / "ready"), STEAMAC_BOOT_ID="boot", STEAMAC_STEAM=str(steam))
+        subprocess.run(["bash", str(SCRIPTS / "steam-install-tools")], env=env, check=True)
+        for _ in range(50):
+            if not (self.home / "run/steamac/steam-install-tools").exists():
+                break
+            time.sleep(0.1)
+        self.assertEqual((self.home / "steam-calls").read_text(), "steam://install/11\nsteam://install/12\n")
+        self.assertIn("ExecStartPost=-/usr/lib/steamac/steam-install-tools",
+                      (ROOT / "guest/layer/usr/lib/systemd/user/steam.service.d/50-steamac.conf").read_text())
 
     def test_scan_is_cached_per_manifest(self):
         root = self.library_game(self.steam, "705", "Protected", "EasyAntiCheat")

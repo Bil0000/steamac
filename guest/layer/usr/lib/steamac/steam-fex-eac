@@ -6,7 +6,8 @@ $XDG_STATE_HOME/steamac/fex-eac/status (the host reads it through the guest agen
 English text for people.
   preparing                  the runtime is being built in the guest
   installed                  the patched runtime is in Steam's FEX-Emu tool
-  need-tools NAME;NAME...    these Steam tools (their steamapps/common names) are missing
+  need-tools NAME;NAME...    these Steam tools (their steamapps/common names) are missing; Steam is asked to install
+                             them once its UI is up (steam-install-tools)
   need-restart               restart Steam to finish setup
   need-update                Steam's FEX-Emu tool is newer than the FEX release the patched runtime is built on; Steam's
                              build is kept until steamac is updated
@@ -26,6 +27,7 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -226,6 +228,78 @@ def unmap():
     record.unlink()
 
 
+def tool_appids(names):
+    """Appids of the Steam tools whose config/installdir is one of names, from Steam's appinfo cache (v28/v29)."""
+    try:
+        data = (STEAM / "appcache/appinfo.vdf").read_bytes()
+        magic, = struct.unpack_from("<I", data, 0)
+    except (OSError, struct.error):
+        return {}
+    if magic not in (0x07564428, 0x07564429):
+        return {}
+    pos, strings = 8, None
+    if magic == 0x07564429:
+        table, = struct.unpack_from("<q", data, pos)
+        pos += 8
+        count, = struct.unpack_from("<I", data, table)
+        strings, at = [], table + 4
+        for _ in range(count):
+            end = data.index(b"\0", at)
+            strings.append(data[at:end].decode("utf-8", "replace"))
+            at = end + 1
+
+    def cstr(at):
+        end = data.index(b"\0", at)
+        return data[at:end].decode("utf-8", "replace"), end + 1
+
+    def kv(at):
+        out = {}
+        while True:
+            kind = data[at]
+            at += 1
+            if kind == 0x08:
+                return out, at
+            if strings is not None:
+                name, at = strings[struct.unpack_from("<I", data, at)[0]], at + 4
+            else:
+                name, at = cstr(at)
+            if kind == 0x00:
+                out[name.lower()], at = kv(at)
+            elif kind == 0x01:
+                out[name.lower()], at = cstr(at)
+            elif kind in (0x02, 0x03, 0x04, 0x06):
+                at += 4
+            elif kind in (0x07, 0x0a):
+                at += 8
+            else:
+                raise ValueError("unknown appinfo KeyValues type %#x" % kind)
+
+    found = {}
+    try:
+        while True:
+            appid, size = struct.unpack_from("<II", data, pos)
+            if appid == 0:
+                return found
+            info = kv(pos + 8 + 60)[0].get("appinfo", {})
+            installdir = info.get("config", {}).get("installdir")
+            if installdir in names and str(info.get("common", {}).get("type", "")).lower() == "tool":
+                found[installdir] = str(appid)
+            pos += 8 + size
+    except (IndexError, ValueError, struct.error) as error:
+        print(f"steam-fex-eac: appinfo.vdf: {error}")
+        return found
+
+
+def request_tools(names):
+    """Ask Steam to install these tools once its UI is up (steam-install-tools, ExecStartPost of steam.service)."""
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "steamac/steam-install-tools"
+    appids = tool_appids(names)
+    if appids:
+        VDF["atomic_write"](runtime, "".join(f"steam://install/{appid}\n" for appid in appids.values()))
+    else:
+        runtime.unlink(missing_ok=True)
+
+
 def configure_eac_games():
     found = libraries()
     games = eac_games(found)
@@ -235,6 +309,7 @@ def configure_eac_games():
                if games and not any((library / "steamapps/common" / name).is_dir() for library in found)]
     if missing:
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
+    request_tools(missing)
     if not games or not config.is_file():
         return missing
     record = STATE / "mapped.json"
