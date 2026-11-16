@@ -332,7 +332,7 @@ final class NoPictureGuard {
     var game: Int? {
         didSet {
             guard game != oldValue else { return }
-            focusFrame = game != nil
+            focusPresented = game != nil ? probe(.max).presented : nil
             hide(game != nil ? "game focused" : "game focus lost")
             gateChanged("game focus")
         }
@@ -358,8 +358,8 @@ final class NoPictureGuard {
     /// shortcut: kept until another game draws, so a relaunch of the same game gets no card; track the
     /// game's process if that matters.
     private var drewGame: Int?
-    /// The next sample is the frame shown when the game got focus (Steam's): it proves nothing.
-    private var focusFrame = false
+    /// `presented` when the game got focus: that frame is Steam's and proves nothing.
+    private var focusPresented: UInt64?
     private var gateOpen: Bool { ready && !gamePaused && !asleep && !vmPaused && (game == nil || game != drewGame) }
     /// Timer suspended while its gate is closed: no 4 Hz main-queue wakeups
     /// during gameplay, sleep or a paused VM.
@@ -405,9 +405,8 @@ final class NoPictureGuard {
         let p = probe(seen)
         if let d = p.dark {
             seen = p.presented
-            if !focusFrame || d >= NoPictureGuard.blackFraction { lastDark = d }
+            if p.presented != focusPresented || d >= NoPictureGuard.blackFraction { lastDark = d }
         }
-        if p.dark != nil || !p.hasPicture { focusFrame = false }
         let missing = !p.enabled || !p.hasPicture
         if missing {
             lastDark = nil

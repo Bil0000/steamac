@@ -249,6 +249,16 @@ enum PillSelfTest {
                 expectNoPill("new game black, GPU busy")
                     ?? (wc.stallView.shown ? nil : "the frame shown before focus must not count as the game's picture")
             },
+            Step(name: "17i-game-frame-before-first-poll", action: { wc.guestFocusChanged(.game(4244)); frames = .pattern }, wait: 0.04) {
+                expectNoPill("new game's first frame")
+            },
+            Step(name: "17j-no-new-frame", action: { frames = .none }, wait: 1.0) {
+                expectNoPill("no new frame")
+            },
+            Step(name: "17k-dark-after-early-frame-no-card", action: { frames = .black }, wait: 3.5) {
+                expectNoPill("dark scene after an early first frame")
+                    ?? (wc.stallView.shown ? "a game frame newer than the focus change must count as drawn" : nil)
+            },
             Step(name: "18-steam-black-5.5s", action: { gpuBusy = false; guest("focus steam") }, wait: 5.5) {
                 expectPill(waiting, detail: String(localized: "black picture \(sampleSeconds) s"), percent: false)
             },
