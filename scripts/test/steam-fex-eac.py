@@ -100,6 +100,12 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.home / "state/steamac/fex-eac/status").read_text().split("\n")[0], "need-restart")
         self.hook()
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
+        (self.steam / "steamapps/appmanifest_702.acf").unlink()
+        shutil.rmtree(self.tool)
+        (self.steam / "appcache").mkdir()
+        (self.steam / "appcache/appinfo.vdf").write_bytes(appinfo_v29({14: ("Tool", "FEX-Emu")}))
+        self.hook()
+        self.assertEqual((self.home / "run/steamac/steam-install-tools").read_text(), "steam://install/14\n")
 
     def test_disabled_does_not_change_steam_or_schedule_build(self):
         self.cmdline.write_text("steamac.fex_eac=0")

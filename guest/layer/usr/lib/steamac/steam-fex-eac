@@ -322,7 +322,7 @@ def configure_eac_games():
                if games and not any((library / "steamapps/common" / name).is_dir() for library in found)]
     if missing:
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
-    request_tools(missing + ([TOOL.name] if games and not complete(TOOL) else []))
+    request_tools(missing + ([TOOL.name] if (games or (STATE / "installed.json").exists()) and not complete(TOOL) else []))
     if not games or not config.is_file():
         return games, missing
     record = STATE / "mapped.json"
