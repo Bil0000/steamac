@@ -23,7 +23,8 @@
 //!                                 `focus desktop <w>x<h>` = the Desktop Mode session's Plasma
 //!                                 window of that size, bare `focus desktop` = the session
 //!                                 ended without a system shutdown
-//!   alive <uptime_ms> <loadavg1>  heartbeat, once a second from agent start
+//!   alive <uptime_ms> <loadavg1> [<game_cpu_s>]   heartbeat, once a second from
+//!                                 agent start; with the focused game's cgroup CPU seconds (alive.rs)
 //!   logs-begin / logs / logs-end / logs-failed   log bundle answering the
 //!                                 host's `collect-logs <id>` (collect.rs; the
 //!                                 launcher's Report a Problem)
@@ -52,6 +53,8 @@
 //! launcher is in the background); `profiles <base64-json>`, `launch <appid>`,
 //! `restart-steam` (profiles.rs: serialized background worker; also resends
 //! the setup status, setup.rs, after the user clicked "Restart Steam");
+//! `stop-game <appid>` (the user clicked "Restart game" on a stuck launch:
+//! freeze.rs stops the game's scopes and starts it again);
 //! `keyboard-layout <index> <layout[(variant)]>...` (keyboard.rs: latest-only worker);
 //! `cursor-track 1|0` enables/disables cursor X work (default off); enable also
 //! resynchronizes the full snapshot after the host/agent connection restarts.
@@ -364,6 +367,11 @@ fn serve_host(port: &mut Port, collector: &mut collect::Collector, freezer: &mut
                 Err(_) => eprintln!("fx-progress: freeze-game: bad app id {arg:?}"),
             },
             "thaw-game" => freezer.thaw("launcher active again"),
+            "stop-game" => match arg.parse::<u32>() {
+                Ok(id) if id > 0 && focus.game() == Some(id) => freeze::restart(id),
+                Ok(id) => eprintln!("fx-progress: stop-game {id}: not the focused game ({:?})", focus.game()),
+                Err(_) => eprintln!("fx-progress: stop-game: bad app id {arg:?}"),
+            },
             "still-background" => freezer.keepalive(),
             "keyboard-layout" => keyboard::request(arg),
             "" => {}
@@ -452,7 +460,7 @@ fn report_boot(
         cursor.pump(&mut rep.port);
         setup.pump(&mut rep.port);
         if let Some(hb) = heartbeat {
-            if hb.pump(&mut rep.port) {
+            if hb.pump(&mut rep.port, focus.game()) {
                 games.pump(Instant::now(), &mut rep.port, names);
             }
         }
@@ -556,7 +564,7 @@ fn main() {
                 let _ = std::fs::write(ready_marker(), boot_id());
             }
             if let Some(hb) = heartbeat.as_ref() {
-                if hb.pump(&mut rep.port) {
+                if hb.pump(&mut rep.port, focus.game()) {
                     games.pump(Instant::now(), &mut rep.port, &mut names);
                 }
             }

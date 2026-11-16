@@ -15,6 +15,8 @@ enum StallSelfTest {
     static let ring = Atomic<UInt64>(0)
     static let mode = Atomic<Int>(0)
     static let heartbeats = Atomic<Bool>(true)
+    /// The heartbeat's game CPU field: 0 = none (older agent), 1 = busy (one core), 2 = idle.
+    static let gameCPU = Atomic<Int>(0)
 
     struct Step {
         let name: String
@@ -104,6 +106,7 @@ enum StallSelfTest {
         // Activity (60 Hz) and heartbeat (1 Hz) generators.
         let activity = Thread {
             var nextHeartbeat = ProcessInfo.processInfo.systemUptime + 1
+            var cpu = 0.0
             while true {
                 switch mode.load(ordering: .relaxed) {
                 case 1: ctrl.add(1, ordering: .relaxed)
@@ -114,7 +117,10 @@ enum StallSelfTest {
                 if now >= nextHeartbeat && heartbeats.load(ordering: .relaxed) {
                     nextHeartbeat = now + 1
                     let ms = Int(now * 1000)
-                    _ = "alive \(ms) 1.25\n".withCString { Darwin.write(port.guestOutputFd, $0, strlen($0)) }
+                    let g = gameCPU.load(ordering: .relaxed)
+                    if g == 1 { cpu += 1 }
+                    let field = g == 0 ? "" : String(format: " %.3f", cpu)
+                    _ = "alive \(ms) 1.25\(field)\n".withCString { Darwin.write(port.guestOutputFd, $0, strlen($0)) }
                 }
                 Thread.sleep(forTimeInterval: 1.0 / 60)
             }
@@ -143,6 +149,20 @@ enum StallSelfTest {
         }
         let restartSteam = String(localized: "Restart Steam", comment: "Button: restart the Steam client in SteamOS")
         nonisolated(unsafe) var sentAfterRestart: [String] = []
+        monitor.onRestartGame = { _ = port.send("stop-game \($0)") }
+        let stuck = String(localized: "The game may be stuck")
+        let restartGame = String(localized: "Restart game", comment: "Button on the may-be-stuck card")
+        let keepWaiting = String(localized: "Keep waiting", comment: "Button on the may-be-stuck card")
+        func expectLoading(_ what: String) -> String? {
+            guard monitor.indicatorShown, view.shown else { return "\(what): loading card should be shown" }
+            return view.currentTitle == working && view.currentActions.isEmpty && view.showsSpinner
+                ? nil : "\(what): \"\(view.currentTitle)\" \(view.currentActions), expected \"\(working)\" without links"
+        }
+        func expectStuck() -> String? {
+            guard monitor.indicatorShown, view.shown else { return "may-be-stuck card should be shown" }
+            return view.currentTitle == stuck && view.currentActions == [restartGame, keepWaiting] && !view.showsSpinner
+                ? nil : "\"\(view.currentTitle)\" \(view.currentActions), expected \"\(stuck)\" with Restart game / Keep waiting"
+        }
         func expectHidden(_ what: String) -> String? {
             !monitor.indicatorShown && !view.shown ? nil : "\(what): indicator should be hidden"
         }
@@ -235,7 +255,7 @@ enum StallSelfTest {
             Step(name: "09a-host-main-queue-delayed", action: {
                 heartbeats.store(false, ordering: .relaxed)
                 stallDiagnostic = nil
-                monitor.gameFocused = true
+                monitor.game = 4242
                 Thread.sleep(forTimeInterval: 6)
             }, wait: 0.4) {
                 expectShown(title: working, detail: String(localized: "VM CPU \(sampleCPU) cores"))
@@ -245,7 +265,7 @@ enum StallSelfTest {
                 // The previous screenshot may take longer than the observation
                 // window; a real silence during that capture is not a false report.
                 stallDiagnostic = nil
-                monitor.gameFocused = false
+                monitor.game = nil
                 heartbeats.store(true, ordering: .relaxed)
                 heartbeat()
             }, wait: 1.8) {
@@ -300,6 +320,26 @@ enum StallSelfTest {
             },
             Step(name: "14-setting-on", action: { monitor.enabled = true }, wait: 2.6) {
                 expectShown(title: working, detail: workingDetail)
+            },
+            // A launch that has not drawn: busy game CPU never prompts, an idle one does after 60 s.
+            Step(name: "14a-dark-game-busy-cpu-120s", action: {
+                monitor.gameDark = true
+                gameCPU.store(1, ordering: .relaxed)
+            }, wait: 120) {
+                expectLoading("game CPU busy for 120 s, GPU idle")
+            },
+            Step(name: "14b-dark-game-idle-cpu-prompts", action: { gameCPU.store(2, ordering: .relaxed) }, wait: 63) {
+                expectStuck()
+            },
+            Step(name: "14c-restart-game", action: { _ = hostLines(); if let r = view.linkFrames.first { click(r) } }, wait: 0.6) {
+                let sent = hostLines()
+                return sent == ["stop-game 4242"] ? expectLoading("after Restart game") : "host sent \(sent), expected stop-game 4242"
+            },
+            Step(name: "14d-idle-again-prompts", action: {}, wait: 62) {
+                expectStuck()
+            },
+            Step(name: "14e-keep-waiting", action: { if view.linkFrames.count > 1 { click(view.linkFrames[1]) } }, wait: 5) {
+                expectLoading("after Keep waiting")
             },
             Step(name: "15-shutdown", action: { guest("shutdown poweroff\n") }, wait: 0.6) {
                 wc.overlay.shown && progress.state.phase == .shutdown(reboot: false)

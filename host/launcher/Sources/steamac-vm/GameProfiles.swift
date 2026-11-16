@@ -136,7 +136,7 @@ final class GameProfileController {
          window: @escaping () -> NSWindow?, restart: @escaping () -> Void) {
         self.settings = settings; self.port = port; self.options = options; self.window = window; self.restart = restart
         let alive = progress.onAlive
-        progress.onAlive = { [weak self] ms, load in alive?(ms, load); self?.connected() }
+        progress.onAlive = { [weak self] ms, load, cpu in alive?(ms, load, cpu); self?.connected() }
         let ready = progress.onReady
         progress.onReady = { [weak self] in
             ready?(); self?.connected()

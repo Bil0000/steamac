@@ -660,13 +660,14 @@ final class WindowController: NSObject, NSWindowDelegate {
     func attach(stall: StallMonitor) {
         self.stall = stall
         stall.enabled = settings.showStallIndicator
-        stall.gameFocused = focusedGame != nil
+        stall.game = focusedGame
+        stall.onAsk = { [weak self] in self?.releasePointer() }
         stall.gameName = { [weak self] in self?.focusedGame.flatMap { self?.settings.gameName($0) } }
         if let progress {
             let previous = progress.onChange
             progress.onChange = { [weak self] s in previous?(s); self?.updateStallGate() }
             let previousAlive = progress.onAlive
-            progress.onAlive = { [weak stall] ms, load in previousAlive?(ms, load); stall?.alive(uptimeMs: ms, load: load) }
+            progress.onAlive = { [weak stall] ms, load, cpu in previousAlive?(ms, load, cpu); stall?.alive(uptimeMs: ms, load: load, gameCPU: cpu) }
         }
         subscriptions.append(settings.$showStallIndicator.dropFirst().receive(on: DispatchQueue.main).sink { [weak stall] on in
             log("stall: indicator \(on ? "on" : "off")")
@@ -688,7 +689,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         self.noPicture = noPicture
         if let progress {
             let previousAlive = progress.onAlive
-            progress.onAlive = { [weak noPicture] ms, load in previousAlive?(ms, load); noPicture?.alive() }
+            progress.onAlive = { [weak noPicture] ms, load, cpu in previousAlive?(ms, load, cpu); noPicture?.alive() }
             noPicture.lastKnown = { [weak progress] in
                 progress.flatMap { $0.state.phase == .running ? $0.state.detail : nil }
             }
@@ -973,7 +974,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         // The agent sends the new game's `game-size` right after `focus game`; until then none is known.
         focusedGameSize = nil
         view.gameLayersVisible = focusedGame != nil
-        stall?.gameFocused = focusedGame != nil
+        stall?.game = focusedGame
         updateNoPictureGate()
         updateSetupCard()
         log("input: guest focus \(f)")

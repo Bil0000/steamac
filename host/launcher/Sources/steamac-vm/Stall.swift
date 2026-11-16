@@ -20,7 +20,14 @@ import QuartzCore
 /// the guest agent's heartbeat (`alive <uptime_ms> <loadavg1>` once a second over fx.progress)
 /// and this process's CPU time (vCPU threads included): alive → "Loading…" + CPU, no
 /// heartbeat for `heartbeatTimeout` → "SteamOS is not responding…". With perf stats on it also
-/// logs the counter rates and the longest idle stretch every 5 s. Main thread only.
+/// logs the counter rates and the longest idle stretch every 5 s.
+///
+/// A launch that seems stuck: the focused game has not drawn yet (`gameDark`), the GPU has been
+/// idle for `hungThreshold` and the game's cgroups used less than `hungCores` over that time
+/// (the heartbeat's game CPU field; older agents send none and never get the prompt). The card
+/// then says "<Game> may be stuck" with "Restart game" (`onRestartGame`) and "Keep waiting",
+/// which keeps the prompt away until that game draws. A busy CPU (shader compile, x86
+/// translation) never prompts. Main thread only.
 final class StallMonitor {
     typealias Counters = (ctrl: UInt64, ring: UInt64)
 
@@ -28,6 +35,8 @@ final class StallMonitor {
     static let heartbeatTimeout: TimeInterval = 5
     static let tick: TimeInterval = 0.25
     static let perfPeriod: TimeInterval = 5
+    static let hungThreshold: TimeInterval = 60
+    static let hungCores = 0.1
 
     struct Diagnostic {
         let idle: TimeInterval
@@ -80,6 +89,12 @@ final class StallMonitor {
     private var guestLoad = 0.0
     /// Per-second CPU readings while shown: (time, process CPU seconds).
     private var cpuSamples: [(CFTimeInterval, Double)] = []
+    /// The focused game's CPU seconds from the heartbeat: (time, seconds), about `hungThreshold` of them.
+    private var gameCPUSamples: [(CFTimeInterval, Double)] = []
+    /// "Keep waiting" was clicked for this game (its CPU seconds then): no prompt until it draws
+    /// or a new process of it starts (a smaller CPU total).
+    private var waited: (game: Int, cpu: Double)?
+    private var hungPrompt = false
     private var shownSince: (idleStart: CFTimeInterval, cpu: Double)?
     private var notRespondingReported = false
     private var longStallLogged = false
@@ -92,13 +107,26 @@ final class StallMonitor {
     var enabled = true { didSet { if enabled != oldValue { gateChanged() } } }
     /// Before `ready`, boot / shutdown overlay on screen, or the guest is shutting down.
     var suppressed = true { didSet { if suppressed != oldValue { gateChanged() } } }
-    /// A game has focus in the guest (`focus game <appid>`).
-    var gameFocused = false { didSet { if gameFocused != oldValue { gateChanged() } } }
+    /// The game that has focus in the guest (`focus game <appid>`).
+    var game: Int? {
+        didSet {
+            guard game != oldValue else { return }
+            gameCPUSamples.removeAll()
+            gateChanged()
+        }
+    }
+    private var gameFocused: Bool { game != nil }
     /// The focused game is frozen (GamePause): an idle GPU is expected.
     var paused = false { didSet { if paused != oldValue { gateChanged() } } }
     /// The focused game shows no picture or a black one (NoPictureGuard): the card covers it even
     /// while the GPU works (a loading game).
-    var gameDark = false { didSet { if gameDark != oldValue { gateChanged() } } }
+    var gameDark = false {
+        didSet {
+            guard gameDark != oldValue else { return }
+            if !gameDark, game != nil, game == waited?.game { waited = nil }
+            gateChanged()
+        }
+    }
     /// Display name of the focused game, if known.
     var gameName: () -> String? = { nil }
     /// The indicator is up (or about to fade in).
@@ -106,6 +134,10 @@ final class StallMonitor {
     /// Once per indicator stretch, when its wording turns to "SteamOS is not responding…".
     /// Recent counter/heartbeat samples accompany the report even when perf stats are off.
     var onNotResponding: ((Diagnostic) -> Void)?
+    /// "Restart game" on the may-be-stuck card (argument: app id).
+    var onRestartGame: ((Int) -> Void)?
+    /// The card asks the user (its links need the pointer).
+    var onAsk: (() -> Void)?
 
     init(view: StallIndicatorView, sample: @escaping () -> Counters?) {
         self.view = view
@@ -150,17 +182,33 @@ final class StallMonitor {
         cpuAtActivity = StallMonitor.cpuSeconds()
         gateOpenedAt = now
         if lastAlive > 0 { lastAlive = now }
+        gameCPUSamples.removeAll()
         counters = nil
         lastPoll = now
         heartbeatObservationStarted = now
         start()
     }
 
-    /// Guest heartbeat (`alive <uptime_ms> <loadavg1>`).
-    func alive(uptimeMs: Int, load: Double) {
+    /// Guest heartbeat (`alive <uptime_ms> <loadavg1> [<game_cpu_s>]`).
+    func alive(uptimeMs: Int, load: Double, gameCPU: Double? = nil) {
         lastAlive = CACurrentMediaTime()
         guestLoad = load
         guestUptimeMs = uptimeMs
+        guard let gameCPU, gameFocused else { return gameCPUSamples.removeAll() }
+        // A smaller total: a new game process.
+        if let last = gameCPUSamples.last, gameCPU < last.1 { gameCPUSamples.removeAll() }
+        if let w = waited, w.game == game, gameCPU < w.cpu { waited = nil }
+        gameCPUSamples.append((lastAlive, gameCPU))
+        while gameCPUSamples.count > 2, gameCPUSamples[1].0 <= lastAlive - StallMonitor.hungThreshold { gameCPUSamples.removeFirst() }
+    }
+
+    /// The focused game has not drawn, its GPU idled and its CPU stayed near zero for `hungThreshold`.
+    private func hung(_ now: CFTimeInterval) -> Bool {
+        guard coversDarkGame, game != waited?.game, !notResponding(at: now),
+              now - max(lastActivity, gateOpenedAt) >= StallMonitor.hungThreshold,
+              let first = gameCPUSamples.first, let last = gameCPUSamples.last,
+              first.0 <= now - StallMonitor.hungThreshold, last.0 > first.0 else { return false }
+        return (last.1 - first.1) / (last.0 - first.0) < StallMonitor.hungCores
     }
 
     /// The agent ended with the gamescope session (bare `focus desktop`: Switch to Desktop, Return
@@ -225,7 +273,20 @@ final class StallMonitor {
         noteCPU(now)
         let starting = shownSince == nil
         if starting { shownSince = (lastActivity, cpuAtActivity) }
-        let (title, detail) = text(now: now, idle: now - lastActivity)
+        let stuck = hung(now)
+        if stuck != hungPrompt {
+            hungPrompt = stuck
+            if stuck {
+                log("stall: game \(game ?? 0) may be stuck (gpu idle \(Int(now - lastActivity)) s, game CPU \(gameCPUText)), asking")
+                onAsk?()
+            }
+            view.showsSpinner = !stuck
+            view.actions = stuck ? [
+                (String(localized: "Restart game", comment: "Button on the may-be-stuck card"), { [weak self] in self?.restartGame() }),
+                (String(localized: "Keep waiting", comment: "Button on the may-be-stuck card"), { [weak self] in self?.keepWaiting() }),
+            ] : []
+        }
+        let (title, detail) = stuck ? stuckText() : text(now: now, idle: now - lastActivity)
         view.showsReportLink = dead
         view.update(title: title, detail: detail)
         if starting {
@@ -262,7 +323,25 @@ final class StallMonitor {
         log("stall: gpu idle \(String(format: "%.1f", duration)) s (\(status(now, cpu: cpu)))"
             + (reason.map { ", ended by \($0)" } ?? ""))
         cpuSamples.removeAll()
+        hungPrompt = false
+        view.actions = []
+        view.showsSpinner = true
         view.hide()
+    }
+
+    private func restartGame() {
+        guard let game else { return }
+        log("stall: restarting game \(game) (user choice)")
+        gameCPUSamples.removeAll()
+        gateOpenedAt = CACurrentMediaTime()
+        onRestartGame?(game)
+        evaluate(CACurrentMediaTime())
+    }
+
+    private func keepWaiting() {
+        log("stall: keep waiting for game \(game ?? 0) (user choice)")
+        if let game { waited = (game, gameCPUSamples.last?.1 ?? 0) }
+        evaluate(CACurrentMediaTime())
     }
 
     // MARK: wording
@@ -297,6 +376,16 @@ final class StallMonitor {
             ? String(localized: "VM CPU \(cores) cores · guest alive")
             : String(localized: "VM CPU \(cores) cores")
         return (title, detail)
+    }
+
+    private func stuckText() -> (String, String) {
+        (gameName().map { String(localized: "\($0) may be stuck", comment: "Card over a game that does not load: game name") }
+            ?? String(localized: "The game may be stuck"), "")
+    }
+
+    private var gameCPUText: String {
+        guard let a = gameCPUSamples.first, let b = gameCPUSamples.last, b.0 > a.0 else { return "unknown" }
+        return String(format: "%.2f cores", (b.1 - a.1) / (b.0 - a.0))
     }
 
     /// For the log: "guest alive, CPU 2.9 cores".

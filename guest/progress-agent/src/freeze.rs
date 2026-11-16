@@ -19,6 +19,10 @@
 //! <appid>` once a freeze took effect, `game-thawed <appid>` after any thaw
 //! (host request, keepalive timeout, focus change, agent exit), so the
 //! launcher's "Game paused" overlay shows the real state.
+//!
+//! The same scopes give the game's CPU time for the heartbeat (`cpu_seconds`)
+//! and are stopped when the user clicks "Restart game" on a stuck launch
+//! (`restart`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -114,20 +118,80 @@ impl Drop for Freezer {
     }
 }
 
-/// Freeze / thaw one scope: `systemctl --user freeze|thaw <unit>` (bounded to
-/// 2 s), else its cgroup.freeze directly. True if either took effect.
-fn set_frozen(scope: &Path, frozen: bool) -> bool {
-    let verb = if frozen { "freeze" } else { "thaw" };
-    let unit = scope.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let via_systemd = std::process::Command::new("systemctl")
-        .args(["--user", verb, &unit])
+/// The game's `app-steam-app<appid>-*.scope` cgroups (none if it does not run).
+fn scopes(appid: u32) -> Vec<PathBuf> {
+    user_manager_cgroup()
+        .and_then(|root| game_scopes(&root).ok())
+        .and_then(|mut games| games.remove(&appid))
+        .unwrap_or_default()
+}
+
+/// CPU seconds the game's scopes used so far (cpu.stat usage_usec, children
+/// included); None if it does not run.
+pub fn cpu_seconds(appid: u32) -> Option<f64> {
+    let scopes = scopes(appid);
+    if scopes.is_empty() {
+        return None;
+    }
+    let usec: u64 = scopes
+        .iter()
+        .filter_map(|s| usage_usec(&std::fs::read_to_string(s.join("cpu.stat")).ok()?))
+        .sum();
+    Some(usec as f64 / 1e6)
+}
+
+fn usage_usec(cpu_stat: &str) -> Option<u64> {
+    cpu_stat.lines().find_map(|l| l.strip_prefix("usage_usec ")?.trim().parse().ok())
+}
+
+/// "Restart game" on a stuck launch (host `stop-game <appid>`), in a thread:
+/// `systemctl --user stop` the game's scopes, `cgroup.kill` what is left
+/// after 5 s, then start it again with `steam steam://rungameid/<appid>`.
+pub fn restart(appid: u32) {
+    std::thread::spawn(move || {
+        let scopes = scopes(appid);
+        eprintln!("fx-progress: stop-game {appid}: stopping {} scope(s)", scopes.len());
+        for s in &scopes {
+            let unit = s.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            run_bounded(&["systemctl", "--user", "--no-block", "stop", &unit], Duration::from_secs(2));
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while scopes.iter().any(|s| s.exists()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        for s in scopes.iter().filter(|s| s.exists()) {
+            match std::fs::write(s.join("cgroup.kill"), "1") {
+                Ok(()) => eprintln!("fx-progress: stop-game {appid}: killed {}", s.display()),
+                Err(e) => eprintln!("fx-progress: stop-game {appid}: cgroup.kill {}: {e}", s.display()),
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while scopes.iter().any(|s| s.exists()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // Steam notices the exit through the scope's reaper; give it a moment.
+        std::thread::sleep(Duration::from_secs(1));
+        eprintln!("fx-progress: stop-game {appid}: starting steam://rungameid/{appid}");
+        let _ = std::process::Command::new("steam")
+            .arg(format!("steam://rungameid/{appid}"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+}
+
+/// Run `argv` for at most `limit`; true if it exited with success.
+fn run_bounded(argv: &[&str], limit: Duration) -> bool {
+    std::process::Command::new(argv[0])
+        .args(&argv[1..])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()
         .and_then(|mut child| {
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + limit;
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => return Some(status.success()),
@@ -140,7 +204,15 @@ fn set_frozen(scope: &Path, frozen: bool) -> bool {
                 }
             }
         })
-        == Some(true);
+        == Some(true)
+}
+
+/// Freeze / thaw one scope: `systemctl --user freeze|thaw <unit>` (bounded to
+/// 2 s), else its cgroup.freeze directly. True if either took effect.
+fn set_frozen(scope: &Path, frozen: bool) -> bool {
+    let verb = if frozen { "freeze" } else { "thaw" };
+    let unit = scope.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let via_systemd = run_bounded(&["systemctl", "--user", verb, &unit], Duration::from_secs(2));
     if via_systemd {
         eprintln!("fx-progress: {verb} {unit} (systemctl)");
         return true;
@@ -206,5 +278,16 @@ fn find_scopes(entries: std::fs::ReadDir, depth: usize, out: &mut BTreeMap<u32, 
                 find_scopes(children, depth + 1, out);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_from_cpu_stat() {
+        assert_eq!(usage_usec("usage_usec 1234567\nuser_usec 1000000\nsystem_usec 234567\n"), Some(1234567));
+        assert_eq!(usage_usec("user_usec 1\n"), None);
     }
 }

@@ -197,6 +197,23 @@
         }
       }
     },
+    "%@ may be stuck" : {
+      "comment" : "Card over a game that does not load: game name",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Возможно, %@ завис"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 可能卡住了"
+          }
+        }
+      }
+    },
     "%@ of %@" : {
       "localizations" : {
         "en" : {
@@ -3819,6 +3836,23 @@
         }
       }
     },
+    "Keep waiting" : {
+      "comment" : "Button on the may-be-stuck card",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подождать ещё"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续等待"
+          }
+        }
+      }
+    },
     "Keychain: %@" : {
       "localizations" : {
         "ru" : {
@@ -6015,6 +6049,23 @@
         }
       }
     },
+    "Restart game" : {
+      "comment" : "Button on the may-be-stuck card",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перезапустить игру"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新启动游戏"
+          }
+        }
+      }
+    },
     "Restart the VM with %@ for %@?" : {
       "localizations" : {
         "en" : {
@@ -8039,6 +8090,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "文件系统或其驱动程序无法创建与 SteamOS 磁盘一样大的文件。请选择 APFS、Mac OS 扩展或 exFAT 卷；推荐使用 APFS。"
+          }
+        }
+      }
+    },
+    "The game may be stuck" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Возможно, игра зависла"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏可能卡住了"
           }
         }
       }
