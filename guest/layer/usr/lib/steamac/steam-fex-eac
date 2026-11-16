@@ -207,9 +207,10 @@ def unwrap(keep):
                      if len(key) == 7 and key[:5] == tuple(part.lower() for part in APPS) and key[6] == "launchoptions"
                      and key[5] not in keep and WRAPPER in value[0]]
             for appid, value in stale:
-                value = re.sub(re.escape(WRAPPER) + r"( [0-9]+)? %command%", "%command%", value, count=1)
-                store(account, (*APPS, appid, "LaunchOptions"), "" if value.strip() == "%command%" else value)
-                print(f"steam-fex-eac: App {appid}: launch helper removed.")
+                changed = re.sub(re.escape(WRAPPER) + r"( [0-9]+)? %command%", "%command%", value, count=1)
+                if changed != value:
+                    store(account, (*APPS, appid, "LaunchOptions"), "" if changed.strip() == "%command%" else changed)
+                    print(f"steam-fex-eac: App {appid}: launch helper removed.")
         except ValueError as error:
             print(f"steam-fex-eac: Skipping {account}: {error}")
 
@@ -220,11 +221,15 @@ def unmap():
     if not record.exists():
         return
     config = STEAM / "config/config.vdf"
-    for appid in json.loads(record.read_text()):
-        key = (*MAPPING, appid)
-        if config.is_file() and current(config, (*key, "name")) == "proton_experimental":
-            remove(config, key)
-            print(f"steam-fex-eac: App {appid}: compatibility tool proton_experimental removed.")
+    try:
+        for appid in json.loads(record.read_text()):
+            key = (*MAPPING, appid)
+            if config.is_file() and current(config, (*key, "name")) == "proton_experimental":
+                remove(config, key)
+                print(f"steam-fex-eac: App {appid}: compatibility tool proton_experimental removed.")
+    except ValueError as error:
+        print(f"steam-fex-eac: Compatibility tools not changed ({config}: {error}); trying again at the next Steam start.")
+        return
     record.unlink()
 
 
@@ -387,10 +392,14 @@ def repair():
     new = set(eac_games(libraries())) - known
     installed = json.loads((STATE / "installed.json").read_text())["installed"]
     stage = staged()
-    tool = next((manifest for manifest in (STEAM / "steamapps").glob("appmanifest_*.acf")
-                 if current(manifest, ("AppState", "installdir")) == TOOL.name), None)
-    updated = (stage and complete(TOOL) and fingerprint(TOOL) != installed
-               and (tool is None or current(tool, ("AppState", "StateFlags")) == "4"))
+    flags = None
+    for manifest in (STEAM / "steamapps").glob("appmanifest_*.acf"):
+        try:
+            if current(manifest, ("AppState", "installdir")) == TOOL.name:
+                flags = current(manifest, ("AppState", "StateFlags"))
+        except ValueError:
+            continue
+    updated = stage and complete(TOOL) and fingerprint(TOOL) != installed and flags in (None, "4")
     if updated:
         if subprocess.run(["pgrep", "-x", "FEXServer"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
             report("need-restart", "Steam updated its FEX-Emu tool while a game ran. Restart Steam to install the runtime again.")
@@ -399,7 +408,7 @@ def repair():
             return
     if new:
         report("need-restart", "New Easy Anti-Cheat games are installed. Restart Steam to set them up.")
-    elif updated:
+    elif updated and not (STATE / "status").read_text().startswith("need-restart\n"):
         report("installed", "Runtime installed again after a Steam update of its FEX-Emu tool.")
 
 

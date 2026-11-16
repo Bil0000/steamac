@@ -143,7 +143,10 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((config.read_bytes(), account.read_bytes()), before)
         status = self.home / "state/steamac/fex-eac/status"
         self.assertEqual(status.read_text().split("\n")[0], "need-restart")
+        for name in BINS:
+            (self.tool / "usr/bin" / name).write_text("FEX-valve-update2 " + name)
         self.hook("repair")
+        self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
         self.assertEqual(status.read_text().split("\n")[0], "need-restart")
         (self.bin / "pgrep").write_text('#!/bin/sh\n[ "$2" = steam ] || [ "$2" = FEXServer ]\n')
         for name in BINS:
