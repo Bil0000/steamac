@@ -328,15 +328,16 @@ final class NoPictureGuard {
 
     /// Steam is ready (the boot overlay / pill is gone; the guest is not shutting down).
     var ready = false { didSet { if ready != oldValue { gateChanged("not ready") } } }
-    /// A game has focus: its report goes to the GPU-idle card.
-    var gameFocused = false {
+    /// The focused game's app id, if a game has focus: its report goes to the GPU-idle card.
+    var game: Int? {
         didSet {
-            guard gameFocused != oldValue else { return }
-            gameDrew = false
-            hide(gameFocused ? "game focused" : "game focus lost")
+            guard game != oldValue else { return }
+            focusFrame = game != nil
+            hide(game != nil ? "game focused" : "game focus lost")
             gateChanged("game focus")
         }
     }
+    private var gameFocused: Bool { game != nil }
     /// "Game paused" (GamePause confirmed a frozen game).
     var gamePaused = false { didSet { if gamePaused != oldValue { gateChanged("game paused") } } }
     /// SteamOS sleeps.
@@ -353,9 +354,13 @@ final class NoPictureGuard {
         self.probe = probe
     }
 
-    /// The focused game showed a non-black frame since it got focus: a dark scene later is not loading.
-    private var gameDrew = false
-    private var gateOpen: Bool { ready && !gamePaused && !asleep && !vmPaused && !(gameFocused && gameDrew) }
+    /// Game that showed a non-black frame: a dark scene later, also after a trip to Steam, is not loading.
+    /// shortcut: kept until another game draws, so a relaunch of the same game gets no card; track the
+    /// game's process if that matters.
+    private var drewGame: Int?
+    /// The next sample is the frame shown when the game got focus (Steam's): it proves nothing.
+    private var focusFrame = false
+    private var gateOpen: Bool { ready && !gamePaused && !asleep && !vmPaused && (game == nil || game != drewGame) }
     /// Timer suspended while its gate is closed: no 4 Hz main-queue wakeups
     /// during gameplay, sleep or a paused VM.
     private var running = false
@@ -400,8 +405,9 @@ final class NoPictureGuard {
         let p = probe(seen)
         if let d = p.dark {
             seen = p.presented
-            lastDark = d
+            if !focusFrame || d >= NoPictureGuard.blackFraction { lastDark = d }
         }
+        if p.dark != nil || !p.hasPicture { focusFrame = false }
         let missing = !p.enabled || !p.hasPicture
         if missing {
             lastDark = nil
@@ -417,8 +423,8 @@ final class NoPictureGuard {
                         darkSince = nil
                         hide("first non-black frame")
                     }
-                    if gameFocused {
-                        gameDrew = true
+                    if let game {
+                        drewGame = game
                         gateChanged("game drew")
                         return
                     }

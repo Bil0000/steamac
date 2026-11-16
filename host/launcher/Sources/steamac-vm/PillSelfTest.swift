@@ -235,6 +235,20 @@ enum PillSelfTest {
                 expectNoPill("dark scene after the game drew")
                     ?? (wc.stallView.shown ? "loading card should not cover a dark scene after the game drew" : nil)
             },
+            Step(name: "17e-same-game-after-steam-no-card", action: { guest("focus steam"); guest("focus game 4242") }, wait: 3.5) {
+                expectNoPill("dark scene after a trip to Steam")
+                    ?? (wc.stallView.shown ? "loading card should not return for a game that drew" : nil)
+            },
+            Step(name: "17f-steam-frame-before-game", action: { frames = .pattern; guest("focus steam") }, wait: 0.8) {
+                expectNoPill("Steam picture")
+            },
+            Step(name: "17g-new-game-over-old-frame", action: { frames = .none; guest("focus game 4243") }, wait: 1.0) {
+                expectNoPill("new game, old Steam frame")
+            },
+            Step(name: "17h-new-game-black-card", action: { frames = .black }, wait: 3.5) {
+                expectNoPill("new game black, GPU busy")
+                    ?? (wc.stallView.shown ? nil : "the frame shown before focus must not count as the game's picture")
+            },
             Step(name: "18-steam-black-5.5s", action: { gpuBusy = false; guest("focus steam") }, wait: 5.5) {
                 expectPill(waiting, detail: String(localized: "black picture \(sampleSeconds) s"), percent: false)
             },

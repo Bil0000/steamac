@@ -580,7 +580,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     private func updateNoPictureGate() {
         guard let noPicture else { return }
         noPicture.ready = progress.map { $0.state.phase == .running } ?? false
-        noPicture.gameFocused = focusedGame != nil
+        noPicture.game = focusedGame
         noPicture.gamePaused = pausedGame != nil
         noPicture.asleep = guestAsleep
     }
