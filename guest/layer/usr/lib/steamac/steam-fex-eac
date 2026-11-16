@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import shutil
 import subprocess
@@ -35,6 +36,7 @@ FILES += [Path(name) for name in ("FEXCompatTool", "VERSIONS.txt", "ConfigTempla
 WRAPPER = "/usr/lib/steamac/eac-launch"
 OPTIONS = WRAPPER + " %command%"
 EAC_NAMES = ("easyanticheat", "easyanticheat_x64.so", "start_protected_game.exe")
+VDF = runpy.run_path(str(Path(__file__).with_name("mac-clock-format")))
 
 
 def enabled():
@@ -85,57 +87,99 @@ def install(action, backup, stage=WORK / "stage"):
     subprocess.run(["sh", str(PAYLOAD / "install-fex-tool.sh"), action], env=env, check=True)
 
 
-def configure_eac_games():
-    vdf = runpy.run_path(str(Path(__file__).with_name("mac-clock-format")))
+def entries(path):
+    return VDF["vdf_entries"](path.read_bytes().decode("utf-8"))[0]
 
+
+def libraries():
+    found = [STEAM]
+    folders = STEAM / "steamapps/libraryfolders.vdf"
+    if folders.is_file():
+        try:
+            values = entries(folders)
+        except ValueError as error:
+            print(f"steam-fex-eac: Skipping {folders}: {error}")
+            values = {}
+        found += [Path(value[0]) for key, value in values.items()
+                  if len(key) == 3 and key[0] == "libraryfolders" and key[2] == "path"]
+    return list(dict.fromkeys(library.resolve() for library in found))
+
+
+def windows_eac(root):
+    paths = [path for pattern in ("*", "*/*", "*/*/*") for path in root.glob(pattern)]
+    if (root / "toolmanifest.vdf").exists() or not any(path.name.lower() in EAC_NAMES for path in paths):
+        return False
+    for path in paths:
+        if path.suffix.lower() == ".exe" and path.is_file():
+            with path.open("rb") as stream:
+                if stream.read(2) == b"MZ":
+                    return True
+    return False
+
+
+def eac_games(found):
+    """Appids whose install holds an EAC file and a Windows executable; cached per manifest mtime and installdir."""
+    cache = STATE / "scan.json"
+    try:
+        known = json.loads(cache.read_text())
+    except (OSError, ValueError):
+        known = {}
+    scanned, games = {}, []
+    for library in found:
+        for manifest in sorted((library / "steamapps").glob("appmanifest_*.acf")):
+            try:
+                stamp = manifest.stat().st_mtime_ns
+                installdir = entries(manifest).get(("appstate", "installdir"), ("",))[0]
+            except ValueError as error:
+                print(f"steam-fex-eac: Skipping {manifest}: {error}")
+                continue
+            entry = known.get(str(manifest))
+            if not entry or entry[:2] != [stamp, installdir]:
+                entry = [stamp, installdir, bool(installdir) and windows_eac(library / "steamapps/common" / installdir)]
+            scanned[str(manifest)] = entry
+            if entry[2]:
+                games.append(manifest.stem.split("_", 1)[1])
+    STATE.mkdir(parents=True, exist_ok=True)
+    VDF["atomic_write"](cache, json.dumps(scanned) + "\n")
+    return list(dict.fromkeys(games))
+
+
+def configure_eac_games():
     def current(path, key):
-        values, _ = vdf["vdf_entries"](path.read_bytes().decode("utf-8"))
-        return values.get(tuple(part.lower() for part in key), ("",))[0]
+        return entries(path).get(tuple(part.lower() for part in key), ("",))[0]
 
     def store(path, key, value):
         text = path.read_bytes().decode("utf-8")
-        changed = vdf["vdf_set"](text, key, value)
+        changed = VDF["vdf_set"](text, key, value)
         if changed != text:
             backup = Path(str(path) + ".steamac-fex-backup")
             if not backup.exists():
                 shutil.copy2(path, backup)
-            vdf["atomic_write"](path, changed)
+            VDF["atomic_write"](path, changed)
 
-    libraries = [STEAM]
-    folders = STEAM / "steamapps/libraryfolders.vdf"
-    if folders.is_file():
+    found = libraries()
+    games = eac_games(found)
+    accounts = sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
+    apps = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
+    for account in accounts:
         try:
-            values, _ = vdf["vdf_entries"](folders.read_bytes().decode("utf-8"))
+            stale = [(key[5], value[0]) for key, value in entries(account).items()
+                     if len(key) == 7 and key[:5] == tuple(part.lower() for part in apps) and key[6] == "launchoptions"
+                     and key[5] not in games and WRAPPER in value[0]]
+            for appid, value in stale:
+                value = re.sub(re.escape(WRAPPER) + r"( [0-9]+)? %command%", "%command%", value, count=1)
+                store(account, (*apps, appid, "LaunchOptions"), "" if value.strip() == "%command%" else value)
+                print(f"steam-fex-eac: App {appid}: no Easy Anti-Cheat game; launch helper removed.")
         except ValueError as error:
-            print(f"steam-fex-eac: Skipping {folders}: {error}")
-            values = {}
-        libraries += [Path(value[0]) for key, value in values.items()
-                      if len(key) == 3 and key[0] == "libraryfolders" and key[2] == "path"]
-    libraries = list(dict.fromkeys(library.resolve() for library in libraries))
-    games = []
-    for library in libraries:
-        for manifest in sorted((library / "steamapps").glob("appmanifest_*.acf")):
-            appid = manifest.stem.split("_", 1)[1]
-            try:
-                installdir = current(manifest, ("AppState", "installdir"))
-            except ValueError as error:
-                print(f"steam-fex-eac: Skipping {manifest}: {error}")
-                continue
-            root = library / "steamapps/common" / installdir
-            if appid == "1826330" or (root / "toolmanifest.vdf").exists():
-                continue
-            if appid == "438100" or installdir and any(
-                    path.name.lower() in EAC_NAMES for pattern in ("*", "*/*", "*/*/*") for path in root.glob(pattern)):
-                games.append(appid)
+            print(f"steam-fex-eac: Skipping {account}: {error}")
     config = STEAM / "config/config.vdf"
     missing = [name for name in ("Proton - Experimental", "Proton EasyAntiCheat Runtime")
-               if games and not any((library / "steamapps/common" / name).is_dir() for library in libraries)]
+               if games and not any((library / "steamapps/common" / name).is_dir() for library in found)]
     if missing:
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
     if not games or not config.is_file():
         return missing
-    accounts = sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
-    for appid in dict.fromkeys(games):
+    for appid in games:
         key = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping", appid)
         try:
             tool = current(config, (*key, "name"))
@@ -150,7 +194,7 @@ def configure_eac_games():
             tool = f"not changed ({config}: {error})"
         results = []
         for account in accounts:
-            option = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps", appid, "LaunchOptions")
+            option = (*apps, appid, "LaunchOptions")
             try:
                 value = current(account, option)
                 if not value:
@@ -159,10 +203,11 @@ def configure_eac_games():
                 elif WRAPPER in value:
                     results.append("present")
                 elif "%command%" in value:
-                    store(account, option, value.replace("%command%", WRAPPER + " %command%", 1))
+                    store(account, option, value.replace("%command%", OPTIONS, 1))
                     results.append("wrapped")
                 else:
-                    results.append("unchanged without %command%")
+                    store(account, option, OPTIONS + " " + value)
+                    results.append("wrapped")
             except ValueError as error:
                 results.append(f"skipped {account} ({error})")
         print(f"steam-fex-eac: App {appid}: compatibility tool {tool}; launch options "
