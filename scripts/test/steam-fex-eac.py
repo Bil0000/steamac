@@ -315,6 +315,23 @@ class GameSetupTests(unittest.TestCase):
         for script in (HOOK, RUN):
             self.assertIsNone(re.search(r"\b(438100|1826330)\b", script.read_text()), script)
 
+    def test_disable_removes_only_our_tool_and_helper(self):
+        self.library_game(self.steam, "706", "Protected", "EasyAntiCheat")
+        self.library_game(self.steam, "707", "Chosen", "EasyAntiCheat")
+        config, account = self.game_settings("706", "%command% -novid")
+        config.write_text('"InstallConfigStore" { "Software" { "Valve" { "Steam" { "CompatToolMapping" { "707" { "name" "proton_9" } } } } } }\n')
+        self.hook()
+        self.assertIn('"/usr/lib/steamac/eac-launch %command% -novid"', account.read_text())
+        self.assertIn('"706"', config.read_text())
+        self.cmdline.write_text("steamac.fex_eac=0")
+        self.hook()
+        values = runpy.run_path(str(SCRIPTS / "mac-clock-format"))["vdf_entries"](config.read_text())[0]
+        tools = {key[5]: value[0] for key, value in values.items() if key[-1] == "name"}
+        self.assertEqual(tools, {"707": "proton_9"})
+        self.assertIn('"706" { "LaunchOptions" "%command% -novid" }', account.read_text())
+        self.assertNotIn("eac-launch", account.read_text())
+        self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve FEX")
+
     def test_scan_is_cached_per_manifest(self):
         root = self.library_game(self.steam, "705", "Protected", "EasyAntiCheat")
         self.game_settings("705")

@@ -39,6 +39,8 @@ WRAPPER = "/usr/lib/steamac/eac-launch"
 OPTIONS = WRAPPER + " %command%"
 EAC_NAMES = ("easyanticheat", "easyanticheat_x64.so", "start_protected_game.exe")
 VDF = runpy.run_path(str(Path(__file__).with_name("mac-clock-format")))
+APPS = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
+MAPPING = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping")
 
 
 def enabled():
@@ -155,34 +157,75 @@ def eac_games(found):
     return list(dict.fromkeys(games))
 
 
-def configure_eac_games():
-    def current(path, key):
-        return entries(path).get(tuple(part.lower() for part in key), ("",))[0]
+def current(path, key):
+    return entries(path).get(tuple(part.lower() for part in key), ("",))[0]
 
-    def store(path, key, value):
-        text = path.read_bytes().decode("utf-8")
-        changed = VDF["vdf_set"](text, key, value)
-        if changed != text:
-            backup = Path(str(path) + ".steamac-fex-backup")
-            if not backup.exists():
-                shutil.copy2(path, backup)
-            VDF["atomic_write"](path, changed)
 
-    found = libraries()
-    games = eac_games(found)
-    accounts = sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
-    apps = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
-    for account in accounts:
+def edit(path, change):
+    text = path.read_bytes().decode("utf-8")
+    changed = change(text)
+    if changed != text:
+        backup = Path(str(path) + ".steamac-fex-backup")
+        if not backup.exists():
+            shutil.copy2(path, backup)
+        VDF["atomic_write"](path, changed)
+
+
+def store(path, key, value):
+    edit(path, lambda text: VDF["vdf_set"](text, key, value))
+
+
+def remove(path, key):
+    def change(text):
+        starts = {}
+        _, blocks = VDF["vdf_entries"](text, starts)
+        key_ = tuple(part.lower() for part in key)
+        if key_ not in starts:
+            return text
+        start, end = starts[key_], blocks[key_] + 1
+        while start and text[start - 1] in " \t":
+            start -= 1
+        return text[:start] + text[end + (text[end:end + 1] == "\n"):]
+    edit(path, change)
+
+
+def accounts():
+    return sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
+
+
+def unwrap(keep):
+    """Remove our helper from the launch options of every game not in keep; the user's other options stay."""
+    for account in accounts():
         try:
             stale = [(key[5], value[0]) for key, value in entries(account).items()
-                     if len(key) == 7 and key[:5] == tuple(part.lower() for part in apps) and key[6] == "launchoptions"
-                     and key[5] not in games and WRAPPER in value[0]]
+                     if len(key) == 7 and key[:5] == tuple(part.lower() for part in APPS) and key[6] == "launchoptions"
+                     and key[5] not in keep and WRAPPER in value[0]]
             for appid, value in stale:
                 value = re.sub(re.escape(WRAPPER) + r"( [0-9]+)? %command%", "%command%", value, count=1)
-                store(account, (*apps, appid, "LaunchOptions"), "" if value.strip() == "%command%" else value)
-                print(f"steam-fex-eac: App {appid}: no Easy Anti-Cheat game; launch helper removed.")
+                store(account, (*APPS, appid, "LaunchOptions"), "" if value.strip() == "%command%" else value)
+                print(f"steam-fex-eac: App {appid}: launch helper removed.")
         except ValueError as error:
             print(f"steam-fex-eac: Skipping {account}: {error}")
+
+
+def unmap():
+    """Remove the compatibility tool entries we wrote that still name our tool."""
+    record = STATE / "mapped.json"
+    if not record.exists():
+        return
+    config = STEAM / "config/config.vdf"
+    for appid in json.loads(record.read_text()):
+        key = (*MAPPING, appid)
+        if config.is_file() and current(config, (*key, "name")) == "proton_experimental":
+            remove(config, key)
+            print(f"steam-fex-eac: App {appid}: compatibility tool proton_experimental removed.")
+    record.unlink()
+
+
+def configure_eac_games():
+    found = libraries()
+    games = eac_games(found)
+    unwrap(games)
     config = STEAM / "config/config.vdf"
     missing = [name for name in ("Proton - Experimental", "Proton EasyAntiCheat Runtime")
                if games and not any((library / "steamapps/common" / name).is_dir() for library in found)]
@@ -190,13 +233,17 @@ def configure_eac_games():
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
     if not games or not config.is_file():
         return missing
+    record = STATE / "mapped.json"
+    mapped = set(json.loads(record.read_text())) if record.exists() else set()
     for appid in games:
-        key = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping", appid)
+        key = (*MAPPING, appid)
         try:
             tool = current(config, (*key, "name"))
             if tool:
                 tool = "kept user tool " + tool
             else:
+                mapped.add(appid)
+                VDF["atomic_write"](record, json.dumps(sorted(mapped)) + "\n")
                 store(config, (*key, "name"), "proton_experimental")
                 store(config, (*key, "config"), "")
                 store(config, (*key, "priority"), "250")
@@ -204,8 +251,8 @@ def configure_eac_games():
         except ValueError as error:
             tool = f"not changed ({config}: {error})"
         results = []
-        for account in accounts:
-            option = (*apps, appid, "LaunchOptions")
+        for account in accounts():
+            option = (*APPS, appid, "LaunchOptions")
             try:
                 value = current(account, option)
                 if not value:
@@ -239,7 +286,7 @@ def main():
         print(status.partition("\n")[2].strip() or status.strip())
         return
     active = enabled()
-    if not active and not marker.exists():
+    if not active and not marker.exists() and not (STATE / "mapped.json").exists() and not (STATE / "scan.json").exists():
         return
     STATE.mkdir(parents=True, exist_ok=True)
     with (STATE / "lock").open("w") as lock:
@@ -258,6 +305,12 @@ def main():
         if subprocess.run(["pgrep", "-x", "steam"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
             raise ValueError("Close Steam before preparing or restoring its runtime.")
         if not active:
+            unwrap(())
+            unmap()
+            (STATE / "scan.json").unlink(missing_ok=True)
+            if not marker.exists():
+                report("off", "Experimental game support is off. Our Steam game settings are removed.")
+                return
             installed = json.loads(marker.read_text())
             if installed.get("installed") != fingerprint(TOOL):
                 marker.unlink()
