@@ -535,14 +535,14 @@ enum SettingsSelfTest {
             UserDefaults.standard.removePersistentDomain(forName: domain)
         }
         let s = LauncherSettings()
-        check(!s.experimentalGameSupport, "default on")
+        check(s.experimentalGameSupport, "default off")
         check(LauncherSettings.Key.experimentalGameSupport.nextStart, "not a next-start key")
         s.noteBoot(overrides: [:], autoCapture: nil)
-        s.experimentalGameSupport = true
-        check(s.restartPending, "change does not ask for a restart")
-        check(LauncherSettings().experimentalGameSupport, "on not persisted")
         check(s.set("experimentalGameSupport", "off") && !s.experimentalGameSupport, "set off failed")
+        check(s.restartPending, "change does not ask for a restart")
         check(!LauncherSettings().experimentalGameSupport, "off not persisted")
+        s.experimentalGameSupport = true
+        check(LauncherSettings().experimentalGameSupport, "on not persisted")
         check(!s.set("experimentalGameSupport", "maybe"), "accepted a non-boolean value")
         s.experimentalGameSupport = true
         do {
@@ -558,8 +558,9 @@ enum SettingsSelfTest {
         }
         check(!s.rawMouse, "raw mouse default on")
         check(s.set("rawMouse", "on") && LauncherSettings().rawMouse, "raw mouse on not persisted")
+        s.experimentalGameSupport = false
         s.resetAll()
-        check(!s.experimentalGameSupport && !LauncherSettings().experimentalGameSupport, "reset does not turn it off")
+        check(s.experimentalGameSupport && LauncherSettings().experimentalGameSupport, "reset does not turn it back on")
         check(!s.rawMouse && !LauncherSettings().rawMouse, "reset does not turn raw mouse off")
         log("selftest-settings: experimental game support: \(failures.isEmpty ? "ok" : failures.joined(separator: ", "))")
         return failures

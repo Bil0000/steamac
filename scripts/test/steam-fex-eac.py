@@ -76,10 +76,30 @@ class GameSetupTests(unittest.TestCase):
         for name in FILES:
             (root / name).write_text("FEX describe\tFEX-2607-" + value + "\n" if name == "VERSIONS.txt" else value)
 
+    def eac_game(self):
+        self.library_game(self.steam, "990", "Protected990", "EasyAntiCheat")
+        for name in ("Proton - Experimental", "Proton EasyAntiCheat Runtime"):
+            (self.steam / "steamapps/common" / name).mkdir(parents=True, exist_ok=True)
+
     def hook(self, *args, expected=0):
         result = subprocess.run(["python3", str(HOOK), *args], env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         return result.stdout + result.stderr
+
+    def test_no_eac_game_leaves_steam_runtime_alone(self):
+        self.library_game(self.steam, "701", "Plain")
+        before = (self.tool / "usr/bin/FEX").read_bytes()
+        self.hook()
+        self.hook("repair")
+        self.assertEqual((self.tool / "usr/bin/FEX").read_bytes(), before)
+        self.assertFalse((self.home / "service-calls").exists())
+        self.assertFalse((self.home / "run/steamac/steam-install-tools").exists())
+        self.assertEqual((self.home / "state/steamac/fex-eac/status").read_text().split("\n")[0], "off")
+        self.library_game(self.steam, "702", "Protected", "EasyAntiCheat")
+        self.hook("repair")
+        self.assertEqual((self.home / "state/steamac/fex-eac/status").read_text().split("\n")[0], "need-restart")
+        self.hook()
+        self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
 
     def test_disabled_does_not_change_steam_or_schedule_build(self):
         self.cmdline.write_text("steamac.fex_eac=0")
@@ -89,6 +109,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertFalse((self.home / "service-calls").exists())
 
     def test_missing_or_unverified_stage_requests_background_build(self):
+        self.eac_game()
         (self.stage / ".steamac-fex-source").unlink()
         output = self.hook()
         self.assertIn("--user start --no-block steamac-fex-build.service", (self.home / "service-calls").read_text())
@@ -96,6 +117,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertIn("Preparing", output)
 
     def test_prebuilt_layer_stage_installs_without_the_build_service(self):
+        self.eac_game()
         payload = self.home / "payload"
         payload.mkdir()
         for name in ("build-fex.sh", "install-fex-tool.sh"):
@@ -109,6 +131,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertFalse((self.home / "service-calls").exists())
 
     def test_newer_steam_fex_tool_is_kept(self):
+        self.eac_game()
         self.hook()
         for name in BINS:
             (self.tool / "usr/bin" / name).write_text("FEX-valve-new " + name)
@@ -119,6 +142,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertIn("newer than FEX-2610", self.hook("status"))
 
     def test_staged_runtime_installs_and_repairs_steam_update(self):
+        self.eac_game()
         self.hook()
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
         before = (self.tool / "usr/bin/FEX").stat().st_mtime_ns
@@ -131,6 +155,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
 
     def test_repair_reinstalls_while_steam_runs_without_editing_settings(self):
+        self.eac_game()
         self.hook()
         (self.bin / "pgrep").write_text('#!/bin/sh\n[ "$2" = steam ]\n')
         for name in BINS:
@@ -164,6 +189,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertIn("ExecStart=/usr/lib/steamac/steam-fex-eac repair", (user / "steamac-fex-repair.service").read_text())
 
     def test_disabled_restores_only_our_installed_runtime(self):
+        self.eac_game()
         self.hook()
         self.cmdline.write_text("steamac.fex_eac=0")
         self.hook()
@@ -177,6 +203,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertFalse((self.home / "state/steamac/fex-eac/installed.json").exists())
 
     def test_disabled_keeps_a_new_steam_runtime_without_repeated_errors(self):
+        self.eac_game()
         self.hook()
         for name in BINS:
             (self.tool / "usr/bin" / name).write_text("FEX-valve-update " + name)
@@ -187,6 +214,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertFalse((self.home / "state/steamac/fex-eac/installed.json").exists())
 
     def test_restore_keeps_the_last_steam_update(self):
+        self.eac_game()
         self.hook()
         for name in BINS:
             (self.tool / "usr/bin" / name).write_text("FEX-valve-update " + name)
@@ -197,6 +225,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve-update FEX")
 
     def test_rebuilt_stage_does_not_replace_the_original_backup(self):
+        self.eac_game()
         self.hook()
         for name in BINS:
             (self.stage / "usr/bin" / name).write_text("FEX-rebuilt " + name)
@@ -208,6 +237,7 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve FEX")
 
     def test_status_detects_replaced_runtime(self):
+        self.eac_game()
         self.hook()
         (self.tool / "usr/bin/FEX").write_text("replaced")
         output = self.hook("status")
@@ -215,12 +245,14 @@ class GameSetupTests(unittest.TestCase):
         self.assertNotIn("Runtime installed", output)
 
     def test_status_file_starts_with_a_code_word(self):
+        self.eac_game()
         status = self.home / "state/steamac/fex-eac/status"
         self.hook()
         self.assertEqual(status.read_text().split("\n")[0], "installed")
         self.assertIn("Runtime installed", self.hook("status"))
         self.assertNotIn("installed\n", self.hook("status"))
-        self.library_game(self.steam, "10", "Game", "EasyAntiCheat")
+        shutil.rmtree(self.steam / "steamapps/common/Proton EasyAntiCheat Runtime")
+        shutil.rmtree(self.steam / "steamapps/common/Proton - Experimental")
         self.hook()
         self.assertEqual(status.read_text().split("\n")[0], "need-tools Proton - Experimental;Proton EasyAntiCheat Runtime")
         (self.bin / "pgrep").write_text('#!/bin/sh\n[ "$2" = steam ]\n')
