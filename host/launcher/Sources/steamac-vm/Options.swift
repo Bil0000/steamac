@@ -333,7 +333,7 @@ struct Options {
                            volume, else in PATH.cache), write a sparse GPT disk to PATH (never
                            overwritten) plus PATH's .provision.img payload, which the first boot uses to
                            format and fill the remaining partitions. One creation per cache at a time.
-      --home-gib N         size of the home partition (default 64; sparse)
+      --home-gib N         size of the home partition (default 128; sparse)
       --password PW        password of the guest user steamos (default: steamos for this dev launcher,
                            none in the release .app; "" = none)
       --keep-cache         keep the bundle and chunk cache after success
