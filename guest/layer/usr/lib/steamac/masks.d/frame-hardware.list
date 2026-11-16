@@ -49,7 +49,8 @@ system systemd-modules-load.service
 system steamos-log-submitter.service
 
 # --- SteamVR user session (Requires/PartOf chains of the stock VR session;
-# the steamac gamescope-session.{service,target} no longer reference them)
+# the stock gamescope-session/plasma-session targets only Want them, the
+# steamac gamescope-session.service no longer references them)
 user steamvr.service
 user steamvr-logs.service
 user steamvr-proxmicmute.service

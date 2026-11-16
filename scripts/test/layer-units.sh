@@ -5,6 +5,7 @@
 # runtime masks from masks.d as the initramfs writes them):
 #   repart   home.mount still starts when Valve masks systemd-repart.service
 #   prefix   a deckard-*/steamvr-* unit that masks.d does not list (system and user) does not run
+#   session  gamescope-session.target and plasma-session.target are Valve's own and still load
 # Runs privileged in the builder container (dev only, needs the cached stock rootfs):
 #   docker run --rm --privileged -v "$PWD":/src:ro \
 #     -v "$PWD/work/cache/rootfs/<BUILDID>/rootfs.img":/rootfs.img:ro \
@@ -37,6 +38,11 @@ for scope in system user; do
         out=$(sa $flag condition --unit=$unit) && fail prefix "$scope $unit would run: $out"
         rm "$M/root/usr/lib/systemd/$scope/$unit"
     done
+done
+
+for t in gamescope-session.target plasma-session.target; do
+    cmp -s "$M/lower/usr/lib/systemd/user/$t" "$M/root/usr/lib/systemd/user/$t" || fail session "$t is not the stock unit"
+    out=$(sa --user verify "$t") || fail session "$out"
 done
 
 [ "$fails" = 0 ] && echo "PASS layer units"

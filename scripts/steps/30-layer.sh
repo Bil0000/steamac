@@ -62,14 +62,13 @@ for target in gamescope-session.target plasma-session.target; do
     [[ -L $ST/usr/lib/systemd/user/$target.wants/fx-clipboard-agent.service ]] \
         || { echo "[layer] fx-clipboard-agent.service is not wanted by $target" >&2; exit 1; }
 done
-# Desktop Mode: our plasma-session.target replaces the Frame's VR desktop target
-# (SteamVR units are masked); gamescope-session runs the nested desktop, whose
-# Steam autostart keeps the selected client.
-[[ -f $ST/usr/lib/systemd/user/plasma-session.target && -f $ST/usr/lib/systemd/user/steamac-nested-desktop.service ]] \
-    && ! grep -q '^Wants=.*steamvr' "$ST/usr/lib/systemd/user/plasma-session.target" \
+# Desktop Mode: the stock plasma-session.target (its SteamVR units are masked);
+# gamescope-session runs the nested desktop, whose Steam autostart keeps the
+# selected client.
+[[ -f $ST/usr/lib/systemd/user/steamac-nested-desktop.service ]] \
     && grep -q 'steamac-nested-desktop.service' "$ST/usr/lib/steamos/gamescope-session" \
     && grep -q '^Exec=/usr/lib/steamac/steam-client --desktop' "$ST/usr/lib/steamac/desktop-xdg/autostart/steam.desktop" \
-    || { echo "[layer] Desktop Mode units (plasma-session.target, steamac-nested-desktop.service, Steam autostart) missing" >&2; exit 1; }
+    || { echo "[layer] Desktop Mode units (steamac-nested-desktop.service, Steam autostart) missing" >&2; exit 1; }
 # Same binary, root mode: started by udev for the launcher's fx.clock port.
 grep -q 'fx-progress-agent clock-sync' "$ST/usr/lib/systemd/system/fx-clock-sync.service" \
     && grep -q 'fx-clock-sync.service' "$ST/usr/lib/udev/rules.d/70-fx-progress.rules" \

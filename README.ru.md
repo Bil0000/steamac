@@ -651,8 +651,8 @@ PrepareForSleep(false), Steam просыпается; плашка «Выход 
 
 Steam → Power → **Switch to Desktop** запускает KDE Plasma; значок **Return to Gaming Mode** на рабочем
 столе возвращает обратно. В образе Steam Frame этот режим — VR-стол (`plasma-session.target` хочет
-SteamVR, который в ВМ замаскирован), поэтому слой его заменяет: `plasma-session.target` и
-`steamac-nested-desktop.service` запускают Plasma одним окном KWin внутри того же gamescope
+SteamVR, который в ВМ замаскирован), поэтому слой его заменяет:
+`steamac-nested-desktop.service` запускает Plasma одним окном KWin внутри того же gamescope
 (`/usr/lib/steamac/nested-desktop`, как `steamos-nested-desktop` Valve) размером с дисплей, так что
 gamescope показывает его 1:1. `gamescope-onready` ждёт этот сервис: когда Plasma завершается, сессия
 заканчивается и SDDM входит заново. У Plasma свой runtime-каталог и своя сессионная шина D-Bus;
