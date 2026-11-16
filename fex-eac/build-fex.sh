@@ -8,7 +8,7 @@ SRC=$WORK/FEX
 STAGE=$WORK/stage
 REPO=https://github.com/StonkGuy/FEX.git
 FEX_EAC_TAG=eac-2610.3
-FEX_EAC_SHA=938eedfcd79eb00e86561fbdf4933770766f0ba9
+FEX_EAC_SHA=39107ddbb1f1f9ad3778a5aba65f9947cd7e84ce
 
 # Clone the exact tag with shallow submodules unless the tree is already there.
 if [ ! -d "$SRC/.git" ]; then
@@ -38,7 +38,8 @@ fi
   { echo "$FEX_EAC_TAG is $(git rev-parse "$FEX_EAC_TAG^{commit}"), expected $FEX_EAC_SHA" >&2; exit 1; }
 git submodule update --init --recursive --depth 1
 
-# Release Steam-mode build: no tests, thunks or FEXConfig, native CPU tuning, module scanning off for clang 19.
+# Release Steam-mode build: no tests, thunks or FEXConfig, native CPU tuning (TUNE_CPU= overrides it), module scanning
+# off for clang 19.
 cmake -S . -B build-steam -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER=clang \
@@ -49,7 +50,7 @@ cmake -S . -B build-steam -G Ninja \
   -DBUILD_FEXCONFIG=OFF \
   -DENABLE_LTO=OFF \
   -DENABLE_ASSERTIONS=OFF \
-  -DTUNE_CPU=native \
+  -DTUNE_CPU="${TUNE_CPU:-native}" \
   -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
   -DCMAKE_INSTALL_PREFIX=/usr
 

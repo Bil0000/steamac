@@ -1,0 +1,11 @@
+# steamac: Steam rewrites steamapps/common/FEX-Emu/VERSIONS.txt when it updates its FEX-Emu tool (or finishes another
+# download into it); steam-fex-eac repair then installs the patched runtime again without a Steam restart. It does
+# nothing while experimental game support is off or not installed.
+# Pulled in by gamescope-session.target and plasma-session.target through .wants symlinks in the layer.
+[Unit]
+Description=FX Steam Launcher: repair the experimental game runtime after a Steam tool update
+PartOf=gamescope-session.target plasma-session.target
+
+[Path]
+PathChanged=%h/.local/share/Steam/steamapps/common/FEX-Emu/VERSIONS.txt
+PathChanged=%h/.local/share/Steam/steamapps

@@ -1,11 +1,33 @@
 #!/usr/bin/python3
+"""steamac: experimental game support (steamac.fex_eac=1): the patched FEX in Steam's FEX-Emu tool, and Steam settings
+for installed games that ship Easy Anti-Cheat.
+
+$XDG_STATE_HOME/steamac/fex-eac/status (the host reads it through the guest agent): line 1 is a stable code, line 2 is
+English text for people.
+  preparing                  the runtime is being built in the guest
+  installed                  the patched runtime is in Steam's FEX-Emu tool
+  need-tools NAME;NAME...    these Steam tools (their steamapps/common names) are missing; Steam is asked to install
+                             them once its UI is up (steam-install-tools)
+  need-restart               restart Steam to finish setup
+  need-update                Steam's FEX-Emu tool is newer than the FEX release the patched runtime is built on; Steam's
+                             build is kept until steamac is updated
+  failed                     setup failed; line 2 says why
+  off                        experimental game support is off
+Usage: steam-fex-eac [prepare|build|repair|status]
+  prepare  steam.service ExecStartPre: Steam settings for EAC games, then the runtime
+  build    steamac-fex-build.service: build the runtime in the guest when no prebuilt one fits
+  repair   steamac-fex-repair.path, while Steam runs: install the runtime again after Steam rewrote its FEX-Emu tool,
+           and report need-restart for a newly installed EAC game; never edits Steam's settings
+"""
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -13,7 +35,6 @@ import sys
 HOME = Path.home()
 STEAM = HOME / ".local/share/Steam"
 WORK = Path(os.environ.get("WORK", HOME / "fex-eac-work"))
-STAGE = WORK / "stage"
 TOOL = STEAM / "steamapps/common/FEX-Emu"
 PAYLOAD = Path(os.environ.get("STEAMAC_FEX_DIR", "/usr/lib/steamac/fex-eac"))
 STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "steamac/fex-eac"
@@ -23,6 +44,9 @@ FILES += [Path(name) for name in ("FEXCompatTool", "VERSIONS.txt", "ConfigTempla
 WRAPPER = "/usr/lib/steamac/eac-launch"
 OPTIONS = WRAPPER + " %command%"
 EAC_NAMES = ("easyanticheat", "easyanticheat_x64.so", "start_protected_game.exe")
+VDF = runpy.run_path(str(Path(__file__).with_name("mac-clock-format")))
+APPS = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps")
+MAPPING = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping")
 
 
 def enabled():
@@ -30,13 +54,30 @@ def enabled():
     return next((word.split("=", 1)[1] for word in reversed(words) if word.startswith("steamac.fex_eac=")), "0") == "1"
 
 
-def source():
+def pinned(name):
     return next(line.split("=", 1)[1] for line in (PAYLOAD / "build-fex.sh").read_text().splitlines()
-                if line.startswith("FEX_EAC_SHA="))
+                if line.startswith(name + "="))
+
+
+def source():
+    return pinned("FEX_EAC_SHA")
+
+
+def describe(root):
+    return next((line.split("\t", 1)[1].strip() for line in (root / "VERSIONS.txt").read_text().splitlines()
+                 if line.startswith("FEX describe\t")), "")
 
 
 def complete(root):
     return all((root / name).is_file() and (root / name).stat().st_size for name in FILES)
+
+
+def staged():
+    for root in (PAYLOAD / "stage", WORK / "stage"):
+        receipt = root / ".steamac-fex-source"
+        if complete(root) and receipt.is_file() and receipt.read_text().strip() == source():
+            return root
+    return None
 
 
 def fingerprint(root):
@@ -52,76 +93,249 @@ def fingerprint(root):
     return digest.hexdigest()
 
 
-def report(message):
+def report(code, message):
     STATE.mkdir(parents=True, exist_ok=True)
     temporary = STATE / "status.new"
-    temporary.write_text(message + "\n")
+    temporary.write_text(code + "\n" + message + "\n")
     temporary.replace(STATE / "status")
     print("steam-fex-eac: " + message)
 
 
-def install(action, backup):
-    env = dict(os.environ, STAGE=str(STAGE), BACKUP=str(backup))
+def install(action, backup, stage=WORK / "stage"):
+    env = dict(os.environ, STAGE=str(stage), BACKUP=str(backup))
     subprocess.run(["sh", str(PAYLOAD / "install-fex-tool.sh"), action], env=env, check=True)
 
 
-def configure_eac_games():
-    vdf = runpy.run_path(str(Path(__file__).with_name("mac-clock-format")))
+def entries(path):
+    return VDF["vdf_entries"](path.read_bytes().decode("utf-8"))[0]
 
-    def current(path, key):
-        values, _ = vdf["vdf_entries"](path.read_bytes().decode("utf-8"))
-        return values.get(tuple(part.lower() for part in key), ("",))[0]
 
-    def store(path, key, value):
-        text = path.read_bytes().decode("utf-8")
-        changed = vdf["vdf_set"](text, key, value)
-        if changed != text:
-            backup = Path(str(path) + ".steamac-fex-backup")
-            if not backup.exists():
-                shutil.copy2(path, backup)
-            vdf["atomic_write"](path, changed)
-
-    libraries = [STEAM]
+def libraries():
+    found = [STEAM]
     folders = STEAM / "steamapps/libraryfolders.vdf"
     if folders.is_file():
         try:
-            values, _ = vdf["vdf_entries"](folders.read_bytes().decode("utf-8"))
+            values = entries(folders)
         except ValueError as error:
             print(f"steam-fex-eac: Skipping {folders}: {error}")
             values = {}
-        libraries += [Path(value[0]) for key, value in values.items()
-                      if len(key) == 3 and key[0] == "libraryfolders" and key[2] == "path"]
-    libraries = list(dict.fromkeys(library.resolve() for library in libraries))
-    games = []
-    for library in libraries:
+        found += [Path(value[0]) for key, value in values.items()
+                  if len(key) == 3 and key[0] == "libraryfolders" and key[2] == "path"]
+    return list(dict.fromkeys(library.resolve() for library in found))
+
+
+def windows_eac(root):
+    paths = [path for pattern in ("*", "*/*", "*/*/*") for path in root.glob(pattern)]
+    if (root / "toolmanifest.vdf").exists() or not any(path.name.lower() in EAC_NAMES for path in paths):
+        return False
+    for path in paths:
+        if path.suffix.lower() == ".exe" and path.is_file():
+            with path.open("rb") as stream:
+                if stream.read(2) == b"MZ":
+                    return True
+    return False
+
+
+def eac_games(found):
+    """Appids whose install holds an EAC file and a Windows executable; cached per manifest mtime and installdir."""
+    cache = STATE / "scan.json"
+    try:
+        known = json.loads(cache.read_text())
+    except (OSError, ValueError):
+        known = {}
+    scanned, games = {}, []
+    for library in found:
         for manifest in sorted((library / "steamapps").glob("appmanifest_*.acf")):
-            appid = manifest.stem.split("_", 1)[1]
             try:
-                installdir = current(manifest, ("AppState", "installdir"))
+                stamp = manifest.stat().st_mtime_ns
+                installdir = entries(manifest).get(("appstate", "installdir"), ("",))[0]
             except ValueError as error:
                 print(f"steam-fex-eac: Skipping {manifest}: {error}")
                 continue
-            root = library / "steamapps/common" / installdir
-            if appid == "1826330" or (root / "toolmanifest.vdf").exists():
-                continue
-            if appid == "438100" or installdir and any(
-                    path.name.lower() in EAC_NAMES for pattern in ("*", "*/*", "*/*/*") for path in root.glob(pattern)):
-                games.append(appid)
-    config = STEAM / "config/config.vdf"
-    if not games or not config.is_file():
+            entry = known.get(str(manifest))
+            if not entry or entry[:2] != [stamp, installdir]:
+                entry = [stamp, installdir, bool(installdir) and windows_eac(library / "steamapps/common" / installdir)]
+            scanned[str(manifest)] = entry
+            if entry[2]:
+                games.append(manifest.stem.split("_", 1)[1])
+    STATE.mkdir(parents=True, exist_ok=True)
+    VDF["atomic_write"](cache, json.dumps(scanned) + "\n")
+    return list(dict.fromkeys(games))
+
+
+def current(path, key):
+    return entries(path).get(tuple(part.lower() for part in key), ("",))[0]
+
+
+def edit(path, change):
+    text = path.read_bytes().decode("utf-8")
+    changed = change(text)
+    if changed != text:
+        backup = Path(str(path) + ".steamac-fex-backup")
+        if not backup.exists():
+            shutil.copy2(path, backup)
+        VDF["atomic_write"](path, changed)
+
+
+def store(path, key, value):
+    edit(path, lambda text: VDF["vdf_set"](text, key, value))
+
+
+def remove(path, key):
+    def change(text):
+        starts = {}
+        _, blocks = VDF["vdf_entries"](text, starts)
+        key_ = tuple(part.lower() for part in key)
+        if key_ not in starts:
+            return text
+        start, end = starts[key_], blocks[key_] + 1
+        while start and text[start - 1] in " \t":
+            start -= 1
+        return text[:start] + text[end + (text[end:end + 1] == "\n"):]
+    edit(path, change)
+
+
+def accounts():
+    return sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
+
+
+def unwrap(keep):
+    """Remove our helper from the launch options of every game not in keep; the user's other options stay."""
+    for account in accounts():
+        try:
+            stale = [(key[5], value[0]) for key, value in entries(account).items()
+                     if len(key) == 7 and key[:5] == tuple(part.lower() for part in APPS) and key[6] == "launchoptions"
+                     and key[5] not in keep and WRAPPER in value[0]]
+            for appid, value in stale:
+                changed = re.sub(re.escape(WRAPPER) + r"( [0-9]+)? %command%", "%command%", value, count=1)
+                if changed != value:
+                    store(account, (*APPS, appid, "LaunchOptions"), "" if changed.strip() == "%command%" else changed)
+                    print(f"steam-fex-eac: App {appid}: launch helper removed.")
+        except ValueError as error:
+            print(f"steam-fex-eac: Skipping {account}: {error}")
+
+
+def unmap(keep=()):
+    """Remove the compatibility tool entries we wrote that still name our tool, except for games in keep."""
+    record = STATE / "mapped.json"
+    if not record.exists():
         return
+    config = STEAM / "config/config.vdf"
+    mapped = json.loads(record.read_text())
+    try:
+        for appid in mapped:
+            key = (*MAPPING, appid)
+            if appid in keep:
+                continue
+            if config.is_file() and current(config, (*key, "name")) == "proton_experimental":
+                remove(config, key)
+                print(f"steam-fex-eac: App {appid}: compatibility tool proton_experimental removed.")
+    except ValueError as error:
+        print(f"steam-fex-eac: Compatibility tools not changed ({config}: {error}); trying again at the next Steam start.")
+        return
+    kept = [appid for appid in mapped if appid in keep]
+    if kept:
+        VDF["atomic_write"](record, json.dumps(kept) + "\n")
+    else:
+        record.unlink()
+
+
+def tool_appids(names):
+    """Appids of the Steam tools whose config/installdir is one of names, from Steam's appinfo cache (v28/v29)."""
+    try:
+        data = (STEAM / "appcache/appinfo.vdf").read_bytes()
+        magic, = struct.unpack_from("<I", data, 0)
+    except (OSError, struct.error):
+        return {}
+    if magic not in (0x07564428, 0x07564429):
+        return {}
+    pos, strings = 8, None
+    if magic == 0x07564429:
+        table, = struct.unpack_from("<q", data, pos)
+        pos += 8
+        count, = struct.unpack_from("<I", data, table)
+        strings, at = [], table + 4
+        for _ in range(count):
+            end = data.index(b"\0", at)
+            strings.append(data[at:end].decode("utf-8", "replace"))
+            at = end + 1
+
+    def cstr(at):
+        end = data.index(b"\0", at)
+        return data[at:end].decode("utf-8", "replace"), end + 1
+
+    def kv(at):
+        out = {}
+        while True:
+            kind = data[at]
+            at += 1
+            if kind == 0x08:
+                return out, at
+            if strings is not None:
+                name, at = strings[struct.unpack_from("<I", data, at)[0]], at + 4
+            else:
+                name, at = cstr(at)
+            if kind == 0x00:
+                out[name.lower()], at = kv(at)
+            elif kind == 0x01:
+                out[name.lower()], at = cstr(at)
+            elif kind in (0x02, 0x03, 0x04, 0x06):
+                at += 4
+            elif kind in (0x07, 0x0a):
+                at += 8
+            else:
+                raise ValueError("unknown appinfo KeyValues type %#x" % kind)
+
+    found = {}
+    try:
+        while True:
+            appid, size = struct.unpack_from("<II", data, pos)
+            if appid == 0:
+                return found
+            info = kv(pos + 8 + 60)[0].get("appinfo", {})
+            installdir = info.get("config", {}).get("installdir")
+            if installdir in names and str(info.get("common", {}).get("type", "")).lower() == "tool":
+                found[installdir] = str(appid)
+            pos += 8 + size
+    except (IndexError, ValueError, struct.error) as error:
+        print(f"steam-fex-eac: appinfo.vdf: {error}")
+        return found
+
+
+def request_tools(names):
+    """Ask Steam to install these tools once its UI is up (steam-install-tools, ExecStartPost of steam.service)."""
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "steamac/steam-install-tools"
+    appids = tool_appids(names) if names else {}
+    if appids:
+        VDF["atomic_write"](runtime, "".join(f"steam://install/{appid}\n" for appid in appids.values()))
+    else:
+        runtime.unlink(missing_ok=True)
+
+
+def configure_eac_games():
+    found = libraries()
+    games = eac_games(found)
+    unwrap(games)
+    unmap(games)
+    config = STEAM / "config/config.vdf"
     missing = [name for name in ("Proton - Experimental", "Proton EasyAntiCheat Runtime")
-               if not any((library / "steamapps/common" / name).is_dir() for library in libraries)]
+               if games and not any((library / "steamapps/common" / name).is_dir() for library in found)]
     if missing:
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
-    accounts = sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
-    for appid in dict.fromkeys(games):
-        key = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping", appid)
+    request_tools(missing + ([TOOL.name] if not complete(TOOL) else []))
+    if not games or not config.is_file():
+        return missing
+    record = STATE / "mapped.json"
+    mapped = set(json.loads(record.read_text())) if record.exists() else set()
+    for appid in games:
+        key = (*MAPPING, appid)
         try:
             tool = current(config, (*key, "name"))
             if tool:
                 tool = "kept user tool " + tool
             else:
+                mapped.add(appid)
+                VDF["atomic_write"](record, json.dumps(sorted(mapped)) + "\n")
                 store(config, (*key, "name"), "proton_experimental")
                 store(config, (*key, "config"), "")
                 store(config, (*key, "priority"), "250")
@@ -129,8 +343,8 @@ def configure_eac_games():
         except ValueError as error:
             tool = f"not changed ({config}: {error})"
         results = []
-        for account in accounts:
-            option = ("UserLocalConfigStore", "Software", "Valve", "Steam", "apps", appid, "LaunchOptions")
+        for account in accounts():
+            option = (*APPS, appid, "LaunchOptions")
             try:
                 value = current(account, option)
                 if not value:
@@ -139,29 +353,88 @@ def configure_eac_games():
                 elif WRAPPER in value:
                     results.append("present")
                 elif "%command%" in value:
-                    store(account, option, value.replace("%command%", WRAPPER + " %command%", 1))
+                    store(account, option, value.replace("%command%", OPTIONS, 1))
                     results.append("wrapped")
                 else:
-                    results.append("unchanged without %command%")
+                    store(account, option, OPTIONS + " " + value)
+                    results.append("wrapped")
             except ValueError as error:
                 results.append(f"skipped {account} ({error})")
         print(f"steam-fex-eac: App {appid}: compatibility tool {tool}; launch options "
               + (", ".join(dict.fromkeys(results)) or "no account") + ".")
+    return missing
+
+
+def put(stage):
+    """Install stage into Steam's FEX-Emu tool; False when a status was reported instead."""
+    marker = STATE / "installed.json"
+    previous = json.loads(marker.read_text()) if marker.exists() else {}
+    current = fingerprint(TOOL)
+    if previous.get("installed") == current:
+        backup = previous["backup"]
+    elif current == fingerprint(stage):
+        report("installed", "Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
+        return False
+    else:
+        # Files outside FILES stay Steam's: only replace a Steam build of the release our patches are based on or older.
+        base = re.search(r"-(\d+)", pinned("FEX_EAC_TAG"))[1]
+        release = re.match(r"(?:FEX|eac)-(\d+)", describe(TOOL))
+        if not release or int(release[1]) > int(base):
+            report("need-update", f"Steam's FEX-Emu tool is {describe(TOOL) or 'unknown'}, newer than FEX-{base} of the "
+                   "patched runtime. Keeping Steam's build until steamac is updated.")
+            return False
+        backup = str(STATE / "backups" / current)
+    install("install", backup, stage)
+    temporary = marker.with_suffix(".new")
+    temporary.write_text(json.dumps({"source": source(), "backup": backup, "installed": fingerprint(TOOL)}) + "\n")
+    temporary.replace(marker)
+    return True
+
+
+def repair():
+    try:
+        known = {Path(name).stem.split("_", 1)[1] for name, entry in json.loads((STATE / "scan.json").read_text()).items()
+                 if entry[2]}
+    except (OSError, ValueError):
+        known = set()
+    new = set(eac_games(libraries())) - known
+    installed = json.loads((STATE / "installed.json").read_text())["installed"]
+    stage = staged()
+    flags = None
+    for manifest in (STEAM / "steamapps").glob("appmanifest_*.acf"):
+        try:
+            if current(manifest, ("AppState", "installdir")) == TOOL.name:
+                flags = current(manifest, ("AppState", "StateFlags"))
+        except ValueError:
+            continue
+    updated = stage and complete(TOOL) and fingerprint(TOOL) != installed and flags in (None, "4")
+    if updated:
+        if subprocess.run(["pgrep", "-x", "FEXServer"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
+            report("need-restart", "Steam updated its FEX-Emu tool while a game ran. Restart Steam to install the runtime again.")
+            return
+        if not put(stage):
+            return
+    if new:
+        report("need-restart", "New Easy Anti-Cheat games are installed. Restart Steam to set them up.")
+    elif updated and not (STATE / "status").read_text().startswith("need-restart\n"):
+        report("installed", "Runtime installed again after a Steam update of its FEX-Emu tool.")
 
 
 def main():
     action = sys.argv[1] if len(sys.argv) == 2 else "prepare" if len(sys.argv) == 1 else "invalid"
-    if action not in ("prepare", "build", "status"):
-        raise ValueError("usage: steam-fex-eac [prepare|build|status]")
+    if action not in ("prepare", "build", "repair", "status"):
+        raise ValueError("usage: steam-fex-eac [prepare|build|repair|status]")
     marker = STATE / "installed.json"
     if action == "status":
-        if marker.exists() and json.loads(marker.read_text()).get("installed") != fingerprint(TOOL):
+        status = (STATE / "status").read_text() if (STATE / "status").exists() else "\nExperimental game support has not been prepared."
+        if (not status.startswith("need-update\n") and marker.exists()
+                and json.loads(marker.read_text()).get("installed") != fingerprint(TOOL)):
             print("The installed runtime changed. Restart Steam to prepare it again.")
             return
-        print((STATE / "status").read_text().strip() if (STATE / "status").exists() else "Experimental game support has not been prepared.")
+        print(status.partition("\n")[2].strip() or status.strip())
         return
     active = enabled()
-    if not active and not marker.exists():
+    if not active and not marker.exists() and not (STATE / "mapped.json").exists() and not (STATE / "scan.json").exists():
         return
     STATE.mkdir(parents=True, exist_ok=True)
     with (STATE / "lock").open("w") as lock:
@@ -173,50 +446,53 @@ def main():
         if action == "build":
             if not active:
                 return
-            report("Preparing the Linux game runtime. See steamac-fex-build.service in the user journal for progress.")
+            report("preparing", "Preparing the Linux game runtime. See steamac-fex-build.service in the user journal for progress.")
             subprocess.run(["sh", str(PAYLOAD / "build-fex.sh")], env=dict(os.environ, WORK=str(WORK)), check=True)
-            report("Runtime built. Restart Steam to finish setup. Game support is not verified.")
+            report("need-restart", "Runtime built. Restart Steam to finish setup. Game support is not verified.")
+            return
+        if action == "repair":
+            if active and marker.exists():
+                repair()
             return
         if subprocess.run(["pgrep", "-x", "steam"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
             raise ValueError("Close Steam before preparing or restoring its runtime.")
         if not active:
+            unwrap(())
+            unmap()
+            (STATE / "scan.json").unlink(missing_ok=True)
+            if not marker.exists():
+                report("off", "Experimental game support is off. Our Steam game settings are removed.")
+                return
             installed = json.loads(marker.read_text())
             if installed.get("installed") != fingerprint(TOOL):
                 marker.unlink()
-                report("Experimental game support is off. The runtime changed; leaving it intact with nothing to restore.")
+                report("off", "Experimental game support is off. The runtime changed; leaving it intact with nothing to restore.")
                 return
             install("restore", installed["backup"])
             marker.unlink()
-            report("Experimental game support is off. The previous runtime is restored.")
+            report("off", "Experimental game support is off. The previous runtime is restored.")
             return
-        configure_eac_games()
-        receipt = STAGE / ".steamac-fex-source"
-        if not complete(STAGE) or not receipt.is_file() or receipt.read_text().strip() != source():
-            report("Preparing the Linux game runtime. Restart Steam when setup finishes.")
+        missing = configure_eac_games()
+        stage = staged()
+        if stage is None:
+            report("preparing", "Preparing the Linux game runtime. Restart Steam when setup finishes.")
             subprocess.run(["systemctl", "--user", "start", "--no-block", "steamac-fex-build.service"], check=True)
             return
         if not complete(TOOL):
-            report("Runtime built. Install Steam's FEX-Emu tool, then restart Steam. Game support is not verified.")
+            report("need-tools " + ";".join(missing + ["FEX-Emu"]),
+                   "Runtime built. Install " + " and ".join(missing + ["Steam's FEX-Emu tool"]) + ", then restart Steam. Game support is not verified.")
             return
-        previous = json.loads(marker.read_text()) if marker.exists() else {}
-        current = fingerprint(TOOL)
-        if previous.get("installed") == current:
-            backup = previous["backup"]
-        elif current == fingerprint(STAGE):
-            report("Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
+        if not put(stage):
             return
-        else:
-            backup = str(STATE / "backups" / current)
-        install("install", backup)
-        temporary = marker.with_suffix(".new")
-        temporary.write_text(json.dumps({"source": source(), "backup": backup, "installed": fingerprint(TOOL)}) + "\n")
-        temporary.replace(marker)
-        report("Runtime installed. EAC game setup was checked; online play and game support remain unverified.")
+        if missing:
+            report("need-tools " + ";".join(missing), "Runtime installed. Install " + " and ".join(missing) + " in Steam for EAC games.")
+            return
+        report("installed", "Runtime installed. EAC game setup was checked; online play and game support remain unverified.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (OSError, ValueError, StopIteration, subprocess.CalledProcessError) as error:
-        report("Setup failed: " + str(error))
+        report("failed", "Setup failed: " + str(error))
         sys.exit(1)
