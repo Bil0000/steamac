@@ -8,6 +8,24 @@ enum NetworkFailure {
         var name: String { self == .valve ? "Valve's servers" : "the update server (GitHub)" }
     }
 
+    /// Connectivity and system TLS failures are environmental; never weaken TLS to recover.
+    static func isExpected(_ error: Error) -> Bool {
+        if error is DiskCreator.MetadataResponseFailure { return true }
+        let e = error as NSError
+        guard e.domain == NSURLErrorDomain else { return false }
+        switch e.code {
+        case NSURLErrorTimedOut, NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost,
+             NSURLErrorNetworkConnectionLost, NSURLErrorDNSLookupFailed, NSURLErrorNotConnectedToInternet,
+             NSURLErrorInternationalRoamingOff, NSURLErrorCallIsActive, NSURLErrorDataNotAllowed,
+             NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate,
+             NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
+             NSURLErrorServerCertificateNotYetValid, NSURLErrorClientCertificateRejected,
+             NSURLErrorClientCertificateRequired, NSURLErrorAppTransportSecurityRequiresSecureConnection:
+            return true
+        default: return false
+        }
+    }
+
     static func message(_ error: Error, server: Server) -> String {
         message(error, server: server, localized: false)
     }

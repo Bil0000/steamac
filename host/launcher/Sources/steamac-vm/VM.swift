@@ -1,6 +1,7 @@
 import CKrun
 import Darwin
 import Foundation
+import Metal
 
 struct KrunError: Error, CustomStringConvertible {
     let call: String
@@ -14,8 +15,8 @@ func krun(_ name: String, _ r: Int32) throws -> Int32 {
     return r
 }
 
-/// Input devices handed to the window (nil in headless mode). The gamepad is not among them: the
-/// guest creates it over fx.pad (PadPort, GamepadBridge).
+/// Input devices handed to the window (nil in headless mode). The gamepads are not among them: the
+/// guest creates them over fx.pad, fx.pad2, … (PadPort, GamepadBridge).
 struct VMInputs {
     let keyboard: InputDevice
     let tablet: InputDevice
@@ -37,8 +38,51 @@ final class VM {
     /// Largest guest display side libkrun's EDID detailed timing can describe.
     static let maxDisplaySide = 4095
 
+    /// A macOS guest can expose a paravirtual Metal GPU but no usable nested Hypervisor API
+    /// (STEAMAC-15: IpaGetMaximum failed before the first guest instruction).
+    struct HostEnvironment {
+        var vmmPresent: Int?
+        var hypervisorSupported: Int?
+        var model: String?
+        var gpu: String?
+
+        static var current: HostEnvironment {
+            HostEnvironment(vmmPresent: integer("kern.hv_vmm_present"),
+                            hypervisorSupported: integer("kern.hv_support"),
+                            model: ReportBundle.sysctl("hw.model"),
+                            gpu: MTLCreateSystemDefaultDevice()?.name)
+        }
+
+        private static func integer(_ name: String) -> Int? {
+            var value: Int32 = 0
+            var size = MemoryLayout<Int32>.size
+            guard sysctlbyname(name, &value, &size, nil, 0) == 0 else { return nil }
+            return Int(value)
+        }
+
+        var isVirtualMachine: Bool {
+            vmmPresent == 1 || model?.lowercased().hasPrefix("virtualmac") == true
+                || gpu?.localizedCaseInsensitiveContains("paravirtual") == true
+        }
+
+        var rejection: String? {
+            if isVirtualMachine {
+                return String(localized: "FX Steam Launcher cannot start SteamOS inside a macOS virtual machine. Nested virtualization is not supported. Run the launcher directly on your Mac, not inside a virtual machine.")
+            }
+            if hypervisorSupported == 0 {
+                return String(localized: "Hardware virtualization is unavailable on this system. FX Steam Launcher needs the macOS Hypervisor framework to start SteamOS. Run the launcher directly on a supported Mac.")
+            }
+            // Older macOS versions may omit a sysctl; absence alone is not a refusal.
+            return nil
+        }
+
+        var diagnostic: String {
+            "kern.hv_vmm_present=\(vmmPresent.map(String.init) ?? "?"), kern.hv_support=\(hypervisorSupported.map(String.init) ?? "?"), hw.model=\(model ?? "?"), GPU=\(gpu ?? "?")"
+        }
+    }
+
     init(options o: Options, display: DisplayBackend, console: Console, progressPort: ProgressPort?,
-         clockPort: ClockPort?, sleepPort: SleepPort?, padPort: PadPort?, clipboardPort: ClipboardPort?,
+         clockPort: ClockPort?, sleepPort: SleepPort?, padPorts: [PadPort], clipboardPort: ClipboardPort?,
          inputs: VMInputs?, netSocket: String?) throws {
         VM.raiseFileLimit()
         try krun("krun_init_log", krun_init_log(KRUN_LOG_TARGET_DEFAULT, o.krunLogLevel, UInt32(KRUN_LOG_STYLE_AUTO), 0))
@@ -66,10 +110,11 @@ final class VM {
             try krun("krun_add_console_port_inout(\(SleepPort.name))",
                      krun_add_console_port_inout(ctx, UInt32(con), SleepPort.name, s.guestInputFd, s.guestOutputFd))
         }
-        // The Mac's controller -> the guest's uinput gamepad (fx-pad.service), its rumble back.
-        if let p = padPort {
-            try krun("krun_add_console_port_inout(\(PadPort.name))",
-                     krun_add_console_port_inout(ctx, UInt32(con), PadPort.name, p.guestInputFd, p.guestOutputFd))
+        // The Mac's controllers -> the guest's uinput gamepads (fx-pad.service, fx-pad@.service: one
+        // port per player), their rumble back.
+        for p in padPorts {
+            try krun("krun_add_console_port_inout(\(p.name))",
+                     krun_add_console_port_inout(ctx, UInt32(con), p.name, p.guestInputFd, p.guestOutputFd))
         }
         // The Mac's clipboard <-> SteamOS's (fx-clipboard-agent.service, ClipboardSync).
         if let c = clipboardPort {
@@ -84,6 +129,15 @@ final class VM {
             if !d.readOnly { try DiskLock.hold(d.path) }
             try krun("krun_add_disk2(\(d.path))", krun_add_disk2(ctx, id, d.path, STEAMAC_DISK_FORMAT_RAW, d.readOnly))
             log("disk \(id): \(d.path)\(d.readOnly ? " (ro)" : "")")
+        }
+
+        // Shared Mac folder → virtio-fs "macshare" (guest: mount -t virtiofs macshare DIR). Simplified
+        // semantics: the guest sees its own uid/gid on every file instead of the Mac's, so the
+        // steamos user reads and writes the folder without ownership mapping; no DAX window.
+        if let share = o.share {
+            try krun("krun_add_virtiofs4(\(share))",
+                     krun_add_virtiofs4(ctx, Options.shareTag, share, 0, false, UInt32(KRUN_SEMANTICS_LINUX_SIMPLIFIED)))
+            log("share: \(share) → virtio-fs tag \(Options.shareTag)")
         }
 
         // virtio-snd → CoreAudio default output (and default input while the guest records).
@@ -102,9 +156,10 @@ final class VM {
         setenv("VKR_VULKAN_DRIVER", "@rpath/" + o.vulkanDriver.library, 1)
         setenv("VKR_GPU_BUDGET_MIB", String(o.gpuBudgetMiB), 1)
         OverlayView.vulkanDriver = o.vulkanDriver
-        OverlayView.graphicsPath = o.graphicsPath
+        OverlayView.dxmt = o.wmtrLibrary != nil
         log("gpu: Venus → \(o.vulkanDriver.name), \(o.gpuBudgetMiB) MiB advertised memory budget")
         let flags = o.gpuFlags ?? (STEAMAC_VIRGL_VENUS | STEAMAC_VIRGL_NO_VIRGL)
+        log("gpu: virgl flags \(String(format: "0x%08x", flags)) (\(o.gpuFlags == nil ? "default" : "command-line override"))")
         try krun("krun_set_gpu_options2", krun_set_gpu_options2(ctx, flags, UInt64(o.shmMiB) << 20))
         let (gw, gh) = o.guestSize
         displayId = UInt32(try krun("krun_add_display", krun_add_display(ctx, UInt32(gw), UInt32(gh))))
@@ -137,18 +192,17 @@ final class VM {
         if shutdownFd < 0 { log("warning: krun_get_shutdown_eventfd: \(shutdownFd)"); shutdownFd = -1 }
     }
 
-    /// Graphics path (Settings > Advanced): DXMT asks libkrun (patch 0021) for the wmtr virtio-gpu context,
-    /// whose host side is libwmtr_host.dylib in the app's Frameworks; the game's CAMetalLayer goes on top
-    /// of the VM view (WMTR_PRESENT=overlay). Vulkan clears all of it, also when inherited from a shell.
+    /// Experimental wmtr context type (libkrun 0018): libkrun reads these when it builds the GPU.
+    /// The setting (or --wmtr-lib / --no-wmtr) decides, not an inherited environment; the game's
+    /// CAMetalLayer goes on top of the VM view (WMTR_PRESENT=overlay).
     static func applyGraphicsEnv(_ o: Options) {
-        if o.graphicsPath == .dxmt, let lib = LauncherSettings.GraphicsPath.hostLibraryPath {
+        if let lib = o.wmtrLibrary {
             setenv("STEAMAC_WMTR", "1", 1)
             setenv("STEAMAC_WMTR_LIB", lib, 1)
             setenv("WMTR_PRESENT", "overlay", 1)
-            log("gpu: graphics path DXMT (wmtr context, \(lib))")
+            log("gpu: wmtr context type offered (experimental), executor \(lib)")
         } else {
             for k in ["STEAMAC_WMTR", "STEAMAC_WMTR_LIB", "WMTR_PRESENT"] { unsetenv(k) }
-            log("gpu: graphics path Vulkan")
         }
     }
 
@@ -182,6 +236,7 @@ final class VM {
     /// Runs the VMM on a dedicated thread. libkrun exit()s the process when the guest stops.
     func start() {
         running = true
+        VMMemoryDiagnostics.shared.start()
         let t = Thread { [ctx] in
             let r = krun_start_enter(ctx)
             fatal("krun_start_enter failed: \(r) (\(String(cString: strerror(-r))))")

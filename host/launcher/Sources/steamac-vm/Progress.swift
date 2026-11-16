@@ -18,12 +18,30 @@ struct ProgressState: Equatable {
 enum GuestFocus: Equatable {
     case steam
     case game(Int)
-    /// Desktop Mode (`focus desktop <w>x<h>`): the Plasma desktop, one window of this size that
-    /// gamescope scales into the display.
-    case desktop(width: Int, height: Int)
+    /// Desktop Mode (`focus desktop <w>x<h>`): the Plasma desktop, one window that gamescope
+    /// scales into the display.
+    case desktop
     /// The gamescope session ended without a system shutdown (bare `focus desktop`: Switch to
     /// Desktop, Return to Gaming Mode, relogin); nothing reports until the next session's agent.
     case sessionEnded
+}
+
+/// A Steam game's lifecycle in the guest, from the agent's cgroup scan (games.rs): its
+/// `app-steam-app<appid>-*.scope` scopes appeared / are gone, its memory every 5 s, the Proton
+/// prefix version it runs with. Feeds GameStats.
+enum GuestGameEvent: Equatable {
+    case start(appid: Int)
+    /// Anonymous memory of the game's scopes and the guest's used memory (MemTotal - MemAvailable).
+    case memory(appid: Int, anonKiB: Int, guestUsedKiB: Int)
+    case proton(appid: Int, version: String)
+    case gfx(appid: Int, gfx: String)
+    case exit(appid: Int)
+
+    var appid: Int {
+        switch self {
+        case .start(let id), .exit(let id), .memory(let id, _, _), .proton(let id, _), .gfx(let id, _): return id
+        }
+    }
 }
 
 /// Boot / shutdown progress model (local://overlay-contract.md). Fed with hvc0 console lines
@@ -63,6 +81,8 @@ final class BootProgress {
     private(set) var state = ProgressState()
     /// State changed (overlay redraw / log line).
     var onChange: ((ProgressState) -> Void)?
+    /// Initramfs failed before the guest progress agent could start; shown once as a window sheet.
+    var onBootFailure: ((_ detail: String) -> Void)?
     /// Steam UI is up (`ready`).
     var onReady: (() -> Void)?
     /// Shutdown started (phase switched to .shutdown).
@@ -71,6 +91,10 @@ final class BootProgress {
     var onRebootIntent: (() -> Void)?
     /// Which guest app has focus (`focus steam` / `focus game <appid>` / `focus desktop [<w>x<h>]`).
     var onFocus: ((GuestFocus) -> Void)?
+    /// Right after every `onFocus`: the size of the surface gamescope moves the cursor on (the
+    /// trailing `<w>x<h>` of the focus line: Steam's window, the Xwayland mode for a game, the
+    /// Plasma window), nil when the line has none.
+    var onFocusSurface: (((Int, Int)?) -> Void)?
     /// `game <appid> <name>`: the display name of a game the guest focused.
     var onGameName: ((Int, String) -> Void)?
     /// `game-size <w>x<h>`: the focused game window's size in guest pixels (sent after `focus game`
@@ -85,6 +109,19 @@ final class BootProgress {
     var onConfig: ((_ ok: Bool, _ reason: String) -> Void)?
     /// Guest agent heartbeat, once a second: `alive <uptime_ms> <loadavg1>`.
     var onAlive: ((_ uptimeMs: Int, _ load: Double) -> Void)?
+    /// `game-start <appid>` / `game-mem <appid> <anon_kib> <guest_used_kib>` /
+    /// `game-proton <appid> <version>` / `game-exit <appid>`.
+    var onGameEvent: ((GuestGameEvent) -> Void)?
+    /// A freshly opened agent port needs the current tracking policy, even if focus did not change.
+    var onCursorReady: (() -> Void)?
+    /// `cursor 0|1`: the focused game's cursor is visible in the guest (DXMT path overlay).
+    var onCursorVisible: ((_ visible: Bool) -> Void)?
+    /// `cursor-image <w> <h> <xhot> <yhot> <base64 BGRA>`: the X cursor bitmap, on change.
+    var onCursorImage: ((_ width: Int, _ height: Int, _ xhot: Int, _ yhot: Int, _ bgra: Data) -> Void)?
+    /// `cursor-pos <x> <y> <win_w> <win_h>`: cursor position and size in the focused game's X
+    /// window pixels.
+    var onCursorPosition: ((_ x: Int, _ y: Int, _ windowWidth: Int, _ windowHeight: Int) -> Void)?
+    var onProfilesOK: ((_ hash: String, _ pending: Bool) -> Void)?
 
     private var sawConsole = false
     private var okLines = 0
@@ -123,6 +160,21 @@ final class BootProgress {
             return
         }
         guard state.phase == .boot else { return }
+        guard state.stageId != "boot-failed" else { return }
+        if let fatal = line.range(of: "steamac-init: FATAL: ") {
+            let reason = String(line[fatal.upperBound...])
+            var failed = state
+            failed.stageId = "boot-failed"
+            failed.title = String(localized: "SteamOS could not start")
+            failed.logTitle = "SteamOS could not start"
+            failed.detail = reason
+            if reason.hasPrefix("no partition labelled ") { failed.detail += "\n" + AppBundle.invalidDiskMessage }
+            failed.logDetail = reason
+            failed.indeterminate = false
+            publish(failed)
+            onBootFailure?(failed.detail)
+            return
+        }
         if let r = line.range(of: "steamac-provision: ") {
             provisionLine(String(line[r.upperBound...]))
         } else if let r = line.range(of: "steamac-config: ") {
@@ -149,6 +201,7 @@ final class BootProgress {
         let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true).map(String.init)
         guard let verb = parts.first else { return }
+        if state.stageId == "boot-failed", ["stage", "log", "ready", "provision"].contains(verb) { return }
         switch verb {
         case "stage":
             guard parts.count >= 3, BootProgress.guestStages.contains(parts[1]), let pct = Int(parts[2]),
@@ -186,18 +239,15 @@ final class BootProgress {
             beginShutdown(reboot: parts[1] == "reboot")
         case "focus":
             guard parts.count >= 2 else { return }
+            let size = parts.count >= 3 ? BootProgress.pixelSize(parts[parts.count - 1]) : nil
             switch parts[1] {
             case "steam": onFocus?(.steam)
-            case "desktop":
-                let size = parts.count >= 3 ? parts[2].split(separator: "x").compactMap { Int($0) } : []
-                if size.count == 2, size[0] > 0, size[1] > 0 {
-                    onFocus?(.desktop(width: size[0], height: size[1]))
-                } else {
-                    onFocus?(.sessionEnded)
-                }
+            // Bare `focus desktop`: the session ended.
+            case "desktop": onFocus?(size != nil ? .desktop : .sessionEnded)
             case "game": onFocus?(.game(parts.count >= 3 ? (Int(parts[2]) ?? 0) : 0))
-            default: break
+            default: return
             }
+            onFocusSurface?(size)
         case "game-frozen", "game-thawed":
             guard parts.count >= 2, let id = Int(parts[1]) else { return }
             onGameFrozen?(id, verb == "game-frozen")
@@ -213,6 +263,45 @@ final class BootProgress {
         case "alive":
             guard parts.count >= 3, let ms = Int(parts[1]), let load = Double(parts[2]) else { return }
             onAlive?(ms, load)
+        case "cursor-ready":
+            onCursorReady?()
+        case "cursor":
+            guard parts.count == 2, ["0", "1"].contains(parts[1]) else { return }
+            onCursorVisible?(parts[1] == "1")
+        case "cursor-image":
+            let f = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard f.count == 6, let w = Int(f[1]), let h = Int(f[2]), let xhot = Int(f[3]), let yhot = Int(f[4]),
+                  w > 0, h > 0, w <= 256, h <= 256 else { return }
+            let (area, areaOverflow) = w.multipliedReportingOverflow(by: h)
+            let (bytes, bytesOverflow) = area.multipliedReportingOverflow(by: 4)
+            guard !areaOverflow, !bytesOverflow, let data = Data(base64Encoded: String(f[5])),
+                  data.count == bytes else { return }
+            onCursorImage?(w, h, xhot, yhot, data)
+        case "cursor-pos":
+            let f = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard f.count == 5, let x = Int(f[1]), let y = Int(f[2]),
+                  let w = Int(f[3]), let h = Int(f[4]), w > 0, h > 0 else { return }
+            onCursorPosition?(x, y, w, h)
+        case "profiles-ok":
+            guard parts.count == 3, parts[1].count == 64,
+                  parts[1].allSatisfy({ $0.isHexDigit }), ["applied", "pending"].contains(parts[2]) else { return }
+            onProfilesOK?(parts[1], parts[2] == "pending")
+        case "game-gfx":
+            guard parts.count == 3, let id = Int(parts[1]), id > 0,
+                  ["dxmt", "vulkan"].contains(parts[2]) else { return }
+            onGameEvent?(.gfx(appid: id, gfx: parts[2]))
+        case "game-start", "game-exit", "game-mem", "game-proton":
+            guard parts.count >= 2, let id = Int(parts[1]), id > 0 else { return }
+            switch verb {
+            case "game-start": onGameEvent?(.start(appid: id))
+            case "game-exit": onGameEvent?(.exit(appid: id))
+            case "game-mem":
+                guard parts.count >= 4, let anon = Int(parts[2]), let used = Int(parts[3]) else { return }
+                onGameEvent?(.memory(appid: id, anonKiB: anon, guestUsedKiB: used))
+            default:
+                guard parts.count >= 3 else { return }
+                onGameEvent?(.proton(appid: id, version: parts[2]))
+            }
         default:
             break   // forward compatible
         }
@@ -367,6 +456,13 @@ final class BootProgress {
         onChange?(s)
     }
 
+    /// "1920x1200" -> (1920, 1200); nil unless both are positive integers.
+    static func pixelSize(_ s: String) -> (Int, Int)? {
+        let v = s.split(separator: "x", omittingEmptySubsequences: false)
+        guard v.count == 2, let w = Int(v[0]), let h = Int(v[1]), w > 0, h > 0 else { return nil }
+        return (w, h)
+    }
+
     /// "[  OK  ] Started Foo." -> "Started Foo"
     static func okText(_ line: String) -> String? {
         guard line.hasPrefix("[  OK  ] ") else { return nil }
@@ -415,7 +511,7 @@ struct LineSplitter {
             start = i + 1
         }
         pending.append(contentsOf: bytes[start...])
-        if pending.count > 16384 {   // a runaway line without newline: flush it
+        if pending.count > 524288 {   // a runaway line without newline: flush it
             emit(String(decoding: pending, as: UTF8.self))
             pending.removeAll(keepingCapacity: true)
         }
@@ -423,7 +519,8 @@ struct LineSplitter {
 }
 
 /// The `fx.progress` virtio-console port: guest writes lines, the launcher reads them; the
-/// launcher writes requests the other way (`collect-logs <id>`, GuestLogs).
+/// launcher writes requests the other way (`collect-logs <id>`, GuestLogs; `compact-disk <id>`,
+/// DiskCompact).
 final class ProgressPort {
     static let name = "fx.progress"
     /// Handed to libkrun: guest -> host data is written here.
@@ -432,6 +529,7 @@ final class ProgressPort {
     let guestInputFd: Int32
     private let readFd: Int32
     private let inputWriteFd: Int32
+    private let sendQueue = DispatchQueue(label: "steamac.progress.send")
 
     init() throws {
         var out: [Int32] = [0, 0], inp: [Int32] = [0, 0]
@@ -439,16 +537,23 @@ final class ProgressPort {
         readFd = out[0]; guestOutputFd = out[1]
         guestInputFd = inp[0]; inputWriteFd = inp[1]
         for fd in out + inp { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }
-        // Requests are tiny; never block the main thread if libkrun stops draining the pipe.
-        _ = fcntl(inputWriteFd, F_SETFL, fcntl(inputWriteFd, F_GETFL) | O_NONBLOCK)
     }
 
-    /// One host -> guest line; false if the pipe did not take it whole.
-    func send(_ line: String) -> Bool {
-        let bytes = Array((line + "\n").utf8)
-        var n: Int
-        repeat { n = Darwin.write(inputWriteFd, bytes, bytes.count) } while n < 0 && errno == EINTR
-        return n == bytes.count
+    /// Queue one complete line. Profiles can exceed PIPE_BUF: serialize full writes off the UI thread.
+    @discardableResult func send(_ line: String) -> Bool {
+        let bytes = Data((line + "\n").utf8)
+        sendQueue.async { [inputWriteFd] in
+            bytes.withUnsafeBytes { buffer in
+                var offset = 0
+                while offset < buffer.count {
+                    let n = Darwin.write(inputWriteFd, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
+                    if n < 0 && errno == EINTR { continue }
+                    guard n > 0 else { log("progress: host request write failed"); return }
+                    offset += n
+                }
+            }
+        }
+        return true
     }
 
     /// Reader thread: every complete line goes to `handler` on the main queue.

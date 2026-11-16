@@ -1,15 +1,15 @@
-/* Timestamp pools left alive by an application that exits (KosmicKrisp 0048).
+/* Timestamp pools and command buffers left alive by an application that exits (KosmicKrisp 0102).
  *
- * Under virglrenderer a guest game that exits has its VkDevice destroyed with its query pools still alive. Their
- * chunks of the process' 32 shared Metal counter heaps (0037) must return with the device: without that, vkd3d-proton's
- * timestamp pools of 8192 used every heap after a few game launches and vkCreateQueryPool failed ("too many heaps
- * already allocated"). 40 rounds of: a device, 4 timestamp pools of 8192 with one timestamp written each, the device
- * destroyed without destroying the pools. Then, on one device, 8192 timestamps written in one command buffer outside
- * a render pass, as vkd3d-proton does (0052): each one had its own Metal counter heap resolve of about 56 KiB of
- * command allocator memory, so a Bodycam match used all memory, and each one its own compute dispatch between two
- * barriers, about 10 KiB more (0053). The footprint must grow by less than 60 MiB (about 100 MiB before 0053, 588 MiB
- * before 0052) and all 8192 must become available. Then 20 timestamp pools of 8192, more than the heaps hold (0049): all
- * are created and a timestamp of the last becomes available. Prints "RESULT: PASS|FAIL ...". Run through tests/run.sh.
+ * Under virglrenderer a guest game that exits has its VkDevice destroyed with its query pools and command pools still
+ * alive. The chunks of the process' 32 shared Metal counter heaps its recorded command buffers hold (upstream 0045)
+ * must return with the device: without that, every heap entry was taken after a few game launches and timestamps read
+ * 0. 40 rounds of: a device, 4 timestamp pools of 8192 with every query written in one command buffer, the device
+ * destroyed without destroying the pools or the command pool; the last timestamp of every round must not read 0.
+ * Then, on one device, 8192 timestamps written in one command buffer outside a render pass, as vkd3d-proton does: one
+ * counter heap resolve for consecutive ones (upstream 0064) and one compute trigger dispatch per encoder (0103). The
+ * footprint must grow by less than 60 MiB (about 237 MiB with 0064 alone, 588 MiB with neither) and all 8192 must
+ * become available. Then 20 timestamp pools of 8192, more than the heaps hold: all are created and a timestamp of the
+ * last becomes available. Prints "RESULT: PASS|FAIL ...". Run through tests/run.sh.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,21 +49,25 @@ int main(void)
       VkCommandBuffer cb; CHECK(vkAllocateCommandBuffers(dev, &cba, &cb));
       VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       CHECK(vkBeginCommandBuffer(cb, &bi));
+      VkQueryPool last = VK_NULL_HANDLE;
       for (int i = 0; i < POOLS; i++) {
          VkQueryPoolCreateInfo qpi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 8192};
          VkQueryPool pool; CHECK(vkCreateQueryPool(dev, &qpi, NULL, &pool));
-         vkCmdResetQueryPool(cb, pool, 0, 1);
-         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 0);
+         vkCmdResetQueryPool(cb, pool, 0, 8192);
+         for (uint32_t j = 0; j < 8192; j++) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, j);
+         last = pool;
       }
       CHECK(vkEndCommandBuffer(cb));
       VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cb};
       CHECK(vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE));
       CHECK(vkQueueWaitIdle(q));
-      vkDestroyCommandPool(dev, cp, NULL);
+      uint64_t value[2];
+      CHECK(vkGetQueryPoolResults(dev, last, 8191, 1, sizeof(value), value, sizeof(value), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT));
+      if (!value[0]) { printf("RESULT: FAIL round %d: the last timestamp read 0 (counter heap entries of a destroyed device kept)\n", round); return 1; }
       vkDestroyDevice(dev, NULL);
    }
    /* More timestamp pools than the 32 shared counter heaps hold (16 of 8192): every pool is still created
-    * (0049), and a timestamp written to the last one becomes available. */
+    * (pools take no entries since upstream 0045), and a timestamp written to the last one becomes available. */
    round = ROUNDS;
    {
       float prio = 1;
@@ -121,7 +125,7 @@ int main(void)
       vkDestroyCommandPool(dev, cp, NULL);
       vkDestroyDevice(dev, NULL);
    }
-   printf("RESULT: PASS %d devices destroyed with %d live timestamp pools of 8192 each; 20 pools on one device; %d timestamps in one command buffer\n", ROUNDS, POOLS, BATCH);
+   printf("RESULT: PASS %d devices destroyed with %d live timestamp pools of 8192 each and their command buffers; 20 pools on one device; %d timestamps in one command buffer\n", ROUNDS, POOLS, BATCH);
    vkDestroyInstance(inst, NULL);
    return 0;
 }

@@ -17,6 +17,38 @@
 # vsock timesync is always built). SND on macOS uses the CoreAudio virtio-snd backend from
 # patch 0014 (no PipeWire); its debug knob STEAMAC_SND_DUMP=/path.wav records the playback
 # guest PCM before speaker mapping (patch 0017 detects and routes output speakers).
+# GPU also has the wmtr context type (patch 0018, capset 30) for a host executor library; it
+# exists only with STEAMAC_WMTR=1 and a loadable STEAMAC_WMTR_LIB, so by default nothing changes.
+# Patch 0019 logs the block id/path and concrete initialization error behind -EINVAL
+# (STEAMAC-15), so inaccessible, locked and malformed disks are distinguishable.
+# Patch 0020 adds a DisplayID timing when the legacy EDID clock cannot hold the
+# requested refresh (e.g. 3840x2160 at 240 Hz); legacy modes retain their base EDID.
+# Patch 0021 adds the required DisplayID 1.3 Display Parameters block while
+# preserving the high-refresh timing bytes and legacy EDID output.
+# Patch 0022 distinguishes local virtio-net socket bind failures from proxy connect
+# failures, retaining endpoint paths and errno (STEAMAC-82: eth0 Binding(ENOSPC)
+# was ambiguous). It does not retry or change activation failure behavior.
+# Patch 0023 exposes a non-realtime guest playback tap for Moonlight, before host
+# volume/mute and physical speaker mapping; unregister waits for pending delivery.
+# Patch 0024 isolates microphone/TCC work from playback and virtio's control queue.
+# Capture START has a 200 ms deadline and returns IO_ERR on device/permission failure;
+# late starts are canceled, STOP never waits for HAL, RELEASE returns queued buffers.
+# test/capture-guest.sh checks repeated capture failure/recovery and surviving playback
+# inside a fresh throwaway VM; unavailable input is an ordinary logged audio error.
+# Patch 0025 bumps imago to 0.2.6 (libkrun/libkrun#980, the open 1.19.8 cherry-picks).
+# imago 0.2.3 shrinks a raw image when a discard or write-zeroes reaches its last
+# byte (libkrun/libkrun#949). steamos.img keeps the backup GPT after home, so this
+# is hardening, not a fix for observed data loss on steamac's layout. It also
+# protects future guest-wide discard and the planned Reclaim Disk Space (#78).
+# Patch 0026 copies only the damage each display frame buffer owes, not the whole scanout.
+# Patch 0027 moves playback's AudioUnit calls off the pump and the stream lock, answers
+# PREPARE/START/RELEASE within 8 s, completes queued I/O after a failed request, and fails
+# a stream's queued I/O once the pump has not reached it for 3 s.
+# Patch 0028 runs the virtio-input worker at user-interactive QoS. Patch 0029 makes the
+# balloon release reported free pages from the VMM's footprint instead of MADV_FREE.
+# Patch 0030 adds the regression test for 0025 (a raw image keeps its size).
+# Patch 0031 adds krun_display_set_mode (krun_display_resize plus a refresh rate), used
+# when the launcher window moves to a screen with another refresh rate.
 #
 # Output (work/out/host):
 #   lib/libkrun.1.dylib      install_name @rpath/libkrun.1.dylib, ad-hoc signed
@@ -105,16 +137,22 @@ done
 	# Speaker detection/config consistency, PCM permutations, height routing and downmix.
 	RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
 		cargo test -q --features snd --test macos_audio
-	# CoreAudio backend: control requests and the pump stalling each other (patch 0022).
+	# Blocked capture setup must time out; late starts stop, and errors complete promptly.
+	RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
+		cargo test -q --features snd --test macos_capture
+	# CoreAudio backend: playback control requests and the pump stalling each other (patch 0027).
 	RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
 		cargo test -q --features gpu,snd --lib -- virtio::snd
-	# The wmtr context frees an arena blob the guest released (patch 0028).
-	(cd ../rutabaga_gfx &&
-		RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
-			cargo test -q --features gpu,virgl_renderer --lib -- wmtr)
-	# A discard/write-zeroes at the end of a raw image keeps the disk size (patch 0027).
+	# A missing proxy identifies connect (not bind), its endpoint path and errno.
+	RUSTFLAGS="-L native=$out/lib -C link-args=-Wl,-rpath,$out/lib" \
+		cargo test -q --features net --lib -- missing_proxy_reports_connect_operation_and_peer_path
+	# A discard/write-zeroes at the end of a raw image keeps the disk size (patch 0030).
 	cargo test -q --features blk --lib -- virtio::block
-	# Freed guest memory leaves the VMM's footprint (patch 0026). Runs a guest vCPU, so the
+	# wmtr context type against a stand-in executor (fence order per ring, the WAITs of each
+	# EXECBUFFER, blob limits and detach/reuse/footprint, host ABI version, executor start and
+	# teardown, command checks).
+	(cd ../rutabaga_gfx && cargo test -q --lib -- wmtr)
+	# Freed guest memory leaves the VMM's footprint (patch 0029). Runs a guest vCPU, so the
 	# test binary needs the hypervisor entitlement: built, signed, then run.
 	cd "$src"
 	bin=$(cargo test -q -p krun-hvf --lib --no-run --message-format=json |
@@ -125,7 +163,7 @@ done
 	if [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ]; then
 		"$bin" -q
 	else
-		echo "libkrun: kern.hv_support is not 1, krun-hvf tests (patch 0026) built but not run" >&2
+		echo "libkrun: kern.hv_support is not 1, krun-hvf tests (patch 0029) built but not run" >&2
 	fi
 )
 

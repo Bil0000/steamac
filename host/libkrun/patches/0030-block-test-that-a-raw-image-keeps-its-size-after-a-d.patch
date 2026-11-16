@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steamac <steamac@local>
+Date: Tue, 13 Oct 2026 19:19:23 +0300
+Subject: [PATCH] block: test that a raw image keeps its size after a discard
+ or write-zeroes at the disk's end
+
+imago's File storage (0.2.3) served a discard, unmap write-zeroes or plain
+write-zeroes whose range reaches the end of the file by truncating the file
+to the start of the range (File::try_discard_by_truncate). For a raw image
+the file length is the disk size, so the disk shrank: the guest kept the old
+capacity until it was restarted, then saw a smaller device than the
+filesystem on it. mke2fs zeroes the last 64 KiB of the device it formats
+(old MD RAID superblock wipe), so a whole-disk ext4 made in the guest lost
+exactly 64 KiB of image and failed to mount on the next boot ("filesystem
+larger than device"); fstrim/blkdiscard of a whole-disk filesystem whose
+last blocks are free does the same. A GPT disk such as steamos.img is not
+hit in practice: the backup GPT occupies the last sectors, so no partition
+discard reaches the end of the file.
+
+Upstream state: fixed in imago 0.2.5 (hreitz/imago d48b76e1 "file: keep
+image size after tail discard"); patch 0025 takes imago 0.2.6 (libkrun
+d166df9a). This adds the regression test only; no code change.
+
+Test: virtio::block::device::tests::
+raw_image_keeps_size_after_tail_discard_and_write_zeroes opens a raw image
+through Block::new, sends write-zeroes, unmap write-zeroes and discard for
+the last 64 KiB, and checks the file size and the capacity on reopen. Fails
+on imago 0.2.3 (4194304 -> 4128768 bytes), passes on 0.2.5 and 0.2.6.
+
+[steamac sync 1.9.14: fork patch 0027 bumped imago to 0.2.5 itself; upstream
+0025 (imago 0.2.6) replaces that bump, the test is kept.]
+---
+ src/devices/src/virtio/block/device.rs | 52 ++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/src/devices/src/virtio/block/device.rs b/src/devices/src/virtio/block/device.rs
+index 9e83a77..81aefb1 100644
+--- a/src/devices/src/virtio/block/device.rs
++++ b/src/devices/src/virtio/block/device.rs
+@@ -494,6 +494,58 @@ mod tests {
+         );
+     }
+ 
++    /// A raw image is the disk: a discard or write-zeroes request that reaches the end of the
++    /// device must not shorten the file, or the next boot sees a smaller disk than the
++    /// filesystem on it (mke2fs zeroes the last 64 KiB of the device; fstrim and blkdiscard
++    /// on a whole-disk filesystem end there too).
++    #[test]
++    fn raw_image_keeps_size_after_tail_discard_and_write_zeroes() {
++        const SIZE: u64 = 4 << 20;
++        const TAIL: u64 = 64 << 10;
++        let backing = TempFile::new().expect("create backing file");
++        let path = backing.as_path().to_str().unwrap().to_string();
++        let open = || {
++            Block::new(
++                "tail".to_string(),
++                None,
++                CacheType::Unsafe,
++                path.clone(),
++                ImageType::Raw,
++                false,
++                false,
++                SyncMode::Full,
++            )
++            .expect("open raw image")
++        };
++
++        for request in ["write-zeroes", "write-zeroes+unmap", "discard"] {
++            backing.as_file().set_len(SIZE).expect("size backing file");
++            let block = open();
++            assert_eq!({ block.config.capacity }, SIZE / SECTOR_SIZE);
++            {
++                let mut disk = block.disk_image.lock().unwrap();
++                match request {
++                    "write-zeroes" => disk.write_zeroes(SIZE - TAIL, TAIL),
++                    "write-zeroes+unmap" => disk.discard_to_zero(SIZE - TAIL, TAIL),
++                    _ => disk.discard_to_any(SIZE - TAIL, TAIL),
++                }
++                .expect(request);
++            }
++            drop(block);
++
++            assert_eq!(
++                backing.as_file().metadata().unwrap().len(),
++                SIZE,
++                "{request} at the end of the disk changed the image file size"
++            );
++            assert_eq!(
++                { open().config.capacity },
++                SIZE / SECTOR_SIZE,
++                "{request} at the end of the disk shrank the disk seen on the next open"
++            );
++        }
++    }
++
+     #[test]
+     fn disk_image_id_accepts_empty_block_id() {
+         let backing = TempFile::new().expect("create backing file");
+-- 
+2.43.0
+

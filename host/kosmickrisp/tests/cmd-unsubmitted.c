@@ -1,8 +1,8 @@
-/* A recorded command buffer that is never submitted (KosmicKrisp 0054).
+/* A recorded command buffer that is never submitted (KosmicKrisp 0105).
  *
  * vkd3d-proton records a Vulkan command buffer for every D3D12 command list as soon as the list is created or reset.
  * A list that is closed and never executed leaves a recorded command buffer that is never submitted, and
- * ID3D12CommandAllocator::Reset resets its pool (vkResetCommandPool without flags). Since 0051 KosmicKrisp resets
+ * ID3D12CommandAllocator::Reset resets its pool (vkResetCommandPool without flags). Since 0104 KosmicKrisp resets
  * the Metal command allocator then and gives it to the pool's next recording, but the Metal command buffer that was
  * never committed still owned the allocator memory of its recording: when it began again (or was released) Metal
  * freed that memory under the other recording, and the commit of that one crashed in

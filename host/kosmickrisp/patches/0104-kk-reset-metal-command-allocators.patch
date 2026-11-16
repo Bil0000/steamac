@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steamac <steamac@local>
+Date: Sun, 15 Nov 2026 14:59:46 +0300
+Subject: [PATCH] kk: reset Metal command allocators and keep few of them
+
+A Metal 4 command allocator holds the memory of every command recorded with
+it until it is reset. The allocators of a recording (the main one and the
+pre_gfx one) went back to the command pool at vkEndCommandBuffer and were
+reused without a reset, also by the queue's re-recordings of resubmitted
+command buffers while the previous one was still on the GPU, so they kept
+growing. Bodycam's process footprint grew to 43 GB in a match (23 GB of
+allocators); macOS ran out of application memory.
+
+A command buffer now keeps its allocators until it is reset or destroyed
+(then it is not pending, so the GPU is done with it), resets them then, and
+the pool keeps at most 4 allocators of at most 4 MiB each for reuse. The
+others are released.
+---
+ src/kosmickrisp/vulkan/kk_cmd_buffer.c | 23 +++++++++++++++++++----
+ src/kosmickrisp/vulkan/kk_cmd_pool.c   | 12 ++++++++++++
+ src/kosmickrisp/vulkan/kk_cmd_pool.h   |  5 +++++
+ 3 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+index e34d243..017f958 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -168,8 +168,8 @@ kk_cmd_note_storage(struct kk_cmd_buffer *cmd, const char *operation,
+              mtl_device_current_allocated_size(dev->mtl_handle));
+ }
+ 
+-/* Ends Metal command buffer recording and returns allocators to pool for
+- * reuse */
++/* Ends Metal command buffer recording. The allocators stay with the command
++ * buffer: their memory backs the recorded commands until the GPU ran them. */
+ static void
+ end_recording(struct kk_cmd_buffer *cmd)
+ {
+@@ -182,10 +182,23 @@ end_recording(struct kk_cmd_buffer *cmd)
+       util_dynarray_num_elements(&cmd->metal.cmd_bufs, mtl_command_buffer *),
+       UINT16_MAX);
+    mtl_end_command_buffer(cmd->metal.cmd_buf);
++}
++
++/* Reset or destroy: the command buffer is not pending (Vulkan), so the GPU is
++ * done with its commands. An allocator that is never reset keeps every command
++ * ever recorded with it, and grows without limit. */
++static void
++release_allocators(struct kk_cmd_buffer *cmd)
++{
+    struct kk_cmd_pool *pool = kk_cmd_buffer_pool(cmd);
+-   kk_cmd_pool_return_allocator(pool, cmd->metal.allocator);
+-   cmd->metal.allocator = NULL;
++
++   if (cmd->metal.allocator) {
++      mtl_command_allocator_reset(cmd->metal.allocator);
++      kk_cmd_pool_return_allocator(pool, cmd->metal.allocator);
++      cmd->metal.allocator = NULL;
++   }
+    if (cmd->metal.pre_gfx.allocator) {
++      mtl_command_allocator_reset(cmd->metal.pre_gfx.allocator);
+       kk_cmd_pool_return_allocator(pool, cmd->metal.pre_gfx.allocator);
+       cmd->metal.pre_gfx.allocator = NULL;
+    }
+@@ -203,6 +216,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
+ 
+    /* Ensure closed command buffer for safe returns to pool */
+    end_recording(cmd);
++   release_allocators(cmd);
+    kk_cmd_release_cmd_bufs(cmd);
+    if (cmd->metal.cmd_buf)
+       kk_cmd_pool_return_cmd_buf(pool, cmd->metal.cmd_buf);
+@@ -290,6 +304,7 @@ kk_reset_cmd_buffer_internal(struct kk_cmd_buffer *cmd)
+ 
+    /* Ensure closed command buffer so we can start it again */
+    end_recording(cmd);
++   release_allocators(cmd);
+    kk_cmd_release_resources(dev, cmd);
+ 
+    cmd->uploader.bo = NULL;
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.c b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+index e2c2fc8..f31ad16 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.c
+@@ -101,6 +101,18 @@ void
+ kk_cmd_pool_return_allocator(struct kk_cmd_pool *pool,
+                              mtl_command_allocator *allocator)
+ {
++   /* A Metal allocator keeps the memory of the largest recording it held, even
++    * after a reset, and vkd3d-proton has a command pool for each D3D12 command
++    * allocator: keep a few small allocators per pool for reuse and release the
++    * others, so that their memory goes back to the system. */
++   if (util_dynarray_num_elements(&pool->metal.free_allocators,
++                                  mtl_command_allocator *) >=
++          KK_CMD_POOL_ALLOCATOR_MAX ||
++       mtl_command_allocator_allocated_size(allocator) >
++          KK_CMD_POOL_ALLOCATOR_MAX_B) {
++      mtl_release(allocator);
++      return;
++   }
+    util_dynarray_append(&pool->metal.free_allocators, allocator);
+ }
+ 
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_pool.h b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+index 479e70e..66c50ba 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_pool.h
++++ b/src/kosmickrisp/vulkan/kk_cmd_pool.h
+@@ -16,6 +16,11 @@
+ 
+ #define KK_CMD_BO_SIZE     (1024 * 128)
+ #define KK_CMD_POOL_BO_MAX 32
++/* Reset Metal command allocators a pool keeps for reuse, and the largest one it
++ * keeps (kk_cmd_pool_return_allocator): at most 16 MiB per pool. A new
++ * allocator costs about 0.1 ms per recording. */
++#define KK_CMD_POOL_ALLOCATOR_MAX   4
++#define KK_CMD_POOL_ALLOCATOR_MAX_B (4ull << 20)
+ 
+ /* Recyclable command buffer BO, used for both push buffers and upload */
+ struct kk_cmd_bo {
+-- 
+2.43.0
+

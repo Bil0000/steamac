@@ -5,7 +5,10 @@ import Foundation
 /// reboot), so each boot runs in a child process (`STEAMAC_VM_CHILD=1`, same argv) while this
 /// supervisor stays in the foreground: it owns gvproxy (restarted per boot), restores the
 /// terminal, forwards signals, cleans up, and relaunches the VM when the child left a reboot
-/// marker (guest-initiated restart).
+/// marker (guest-initiated restart). Info.plist's LSUIElement keeps the supervisor out of the
+/// Dock: it never runs NSApplication, so its Finder launch would bounce forever beside the VM
+/// process's icon. Whoever shows UI (VM window, first run, crash offer, launch alerts) switches
+/// itself to `.regular`.
 enum Supervisor {
     static let childEnv = "STEAMAC_VM_CHILD"
     static let runDirEnv = "STEAMAC_RUN_DIR"
@@ -19,6 +22,29 @@ enum Supervisor {
     static var bootNumber: Int { Int(ProcessInfo.processInfo.environment[bootEnv] ?? "1") ?? 1 }
     static var windowFrame: String? { ProcessInfo.processInfo.environment[frameEnv] }
     static func rebootMarker(_ dir: String) -> String { dir + "/reboot" }
+    /// Sparkle prepared an update (SparkleUpdates): it installs once this launcher exits, so no
+    /// VM process boots from the bundle again.
+    static func updateMarker(_ dir: String) -> String { dir + "/update" }
+    private static let profileDriverEnv = "STEAMAC_PROFILE_DRIVER"
+    private static let profileLaunchEnv = "STEAMAC_PROFILE_LAUNCH"
+    static var profileDriver: LauncherSettings.VulkanDriver? {
+        ProcessInfo.processInfo.environment[profileDriverEnv].flatMap(LauncherSettings.VulkanDriver.init(rawValue:))
+    }
+    static var profileLaunchAppID: Int? {
+        ProcessInfo.processInfo.environment[profileLaunchEnv].flatMap(Int.init)
+    }
+    private struct ProfileBoot: Codable { let driver: String; let appid: Int }
+    static func queueProfileBoot(driver: LauncherSettings.VulkanDriver, appid: Int) -> Bool {
+        guard let dir = runDir else { return false }
+        do {
+            try JSONEncoder().encode(ProfileBoot(driver: driver.rawValue, appid: appid))
+                .write(to: URL(fileURLWithPath: dir + "/profile-boot.json"), options: .atomic)
+            return true
+        } catch {
+            log("profiles: cannot queue driver restart: \(error)")
+            return false
+        }
+    }
 
     nonisolated(unsafe) private static var childPid: pid_t = 0
     /// The running VM process (0 between boots).
@@ -94,7 +120,7 @@ enum Supervisor {
         var boot = 1
         var frame: String?
         while true {
-            let o: Options
+            var o: Options
             VMSizing.Host.refresh()
             do {
                 o = try resolve()
@@ -102,6 +128,14 @@ enum Supervisor {
                 log("error: \(error)")
                 cleanup()
                 exit(2)
+            }
+            // Consume once: the following reboot returns to the saved global driver.
+            let profilePath = dir + "/profile-boot.json"
+            let profileBoot = (try? Data(contentsOf: URL(fileURLWithPath: profilePath)))
+                .flatMap { try? JSONDecoder().decode(ProfileBoot.self, from: $0) }
+            try? FileManager.default.removeItem(atPath: profilePath)
+            if let raw = profileBoot?.driver, let driver = LauncherSettings.VulkanDriver(rawValue: raw) {
+                o.vulkanDriver = driver
             }
             // Another launcher's VM writing this disk: refuse before anything starts (the VM process
             // holds the lock; see DiskLock).
@@ -154,6 +188,8 @@ enum Supervisor {
             env[netSockEnv] = gvproxy?.vfkitSocket
             env[frameEnv] = frame
             env[VMSizing.availEnv] = VMSizing.Host.current.availMiB.map(String.init)
+            env[profileDriverEnv] = profileBoot?.driver
+            env[profileLaunchEnv] = profileBoot.map { String($0.appid) }
             CrashReporting.supervisorBoot(o, boot: boot, runDir: dir, env: &env)
             let vmExit = spawnAndWait(exe, CommandLine.arguments, env)
             let status = vmExit.status
@@ -177,6 +213,10 @@ enum Supervisor {
             CrashReporting.vmExited(vmExit)
 
             let marker = rebootMarker(dir)
+            if FileManager.default.fileExists(atPath: updateMarker(dir)), FileManager.default.fileExists(atPath: marker) {
+                try? FileManager.default.removeItem(atPath: marker)
+                log("update: not booting again: the prepared update installs now that the launcher exits")
+            }
             if let contents = try? String(contentsOfFile: marker, encoding: .utf8) {
                 try? FileManager.default.removeItem(atPath: marker)
                 let text = contents.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -229,7 +269,7 @@ enum Supervisor {
             return VMExit(status: 1)
         }
         childPid = pid
-        var exit = VMExit(status: 1)
+        var exit = VMExit(status: 1, pid: pid)
         // NOTE_EXIT fires when the process becomes a zombie; its data carries NOTE_EXIT_DETAIL
         // bits (NOTE_EXIT_MEMORY = jetsam, the kernel's jetsam cause in the high bits). Not
         // registered if it already exited (ESRCH).

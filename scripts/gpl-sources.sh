@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Package corresponding source for a release: the GPL kernel and static initramfs tools, and the LGPL
-# DXMT source (pinned tarball, host/dxmt/patches, wmtr/) behind libwmtr_host.dylib.
+# Package corresponding GPL/LGPL source for the kernel, static initramfs tools and
+# DXMT graphics path (host executor and the guest layer's PE DLLs and winemetal.so).
 # Usage: scripts/gpl-sources.sh [GIT_REF] (HEAD uses the current working tree).
 # The tagged files are read with git archive, never checked out over the working tree.
 set -euo pipefail
@@ -23,8 +23,11 @@ if [[ $REF == HEAD ]]; then
     done
     cp -R "$ROOT/guest/kernel" "$ST/repo/guest/"
     if [[ -f $ROOT/host/dxmt/pin.env ]]; then
-        # Tracked files only: build output under wmtr/ stays out.
-        git -C "$ROOT" ls-files -z -- host/dxmt wmtr | tar -C "$ROOT" --null -T - -cf - | tar -xf - -C "$ST/repo"
+        # Include new source files in local builds, but not ignored wmtr/build output.
+        git -C "$ROOT" ls-files -z --cached --others --exclude-standard -- \
+            host/dxmt wmtr host/vrhost/include/vrlink.h guest/vr/include/steamac_vr_guest.h \
+            scripts/steps/30-layer.sh \
+            LICENSE NOTICE LICENSES | tar -C "$ROOT" --null -T - -cf - | tar -xf - -C "$ST/repo"
     fi
 else
     git -C "$ROOT" rev-parse --verify "$REF^{commit}" >/dev/null
@@ -34,7 +37,10 @@ else
     cp "$ST/repo/host/launcher/Info.plist" "$ST/Info.plist"
     rm -rf "$ST/repo/host"
     if git -C "$ROOT" cat-file -e "$REF:host/dxmt/pin.env" 2>/dev/null; then
-        git -C "$ROOT" archive "$REF" host/dxmt wmtr | tar -xf - -C "$ST/repo"
+        git -C "$ROOT" archive "$REF" host/dxmt wmtr \
+            host/vrhost/include/vrlink.h guest/vr/include/steamac_vr_guest.h \
+            scripts/steps/30-layer.sh \
+            LICENSE NOTICE LICENSES | tar -xf - -C "$ST/repo"
     fi
 fi
 version=$(plutil -extract CFBundleShortVersionString raw -o - "$ST/Info.plist")
@@ -75,7 +81,8 @@ copy_source "$ROOT/work/cache/e2fsprogs/$E2FSPROGS_VERSION/e2fsprogs-$E2FSPROGS_
 copy_source "$ROOT/work/cache/btrfs-progs/$BTRFSPROGS_VERSION/btrfs-progs-v$BTRFSPROGS_VERSION.tar.xz" \
     "$BTRFSPROGS_URL" "$BTRFSPROGS_SHA256" "btrfs-progs-v$BTRFSPROGS_VERSION.tar.xz"
 
-# DXMT (LGPL-2.1-or-later), present from the release that ships the DXMT graphics path.
+# Include DXMT even in a layer-only build: the Windows DLLs and unixlib ship there
+# independently of whether this machine has built libwmtr_host.dylib.
 dxmt_notes=
 if [[ -f $ST/repo/host/dxmt/pin.env ]]; then
     . "$ST/repo/host/dxmt/pin.env"
@@ -83,20 +90,57 @@ if [[ -f $ST/repo/host/dxmt/pin.env ]]; then
         echo 'invalid host/dxmt/pin.env' >&2; exit 1;
     }
     copy_source "$ROOT/work/cache/dxmt/dxmt-$DXMT_COMMIT.tar.gz" "$DXMT_URL" "$DXMT_SHA256" "dxmt-$DXMT_COMMIT.tar.gz"
+    # The pinned DirectX headers are a source dependency of the shipped PE DLLs.
+    headers_record=$(awk -F= '/^DXHEADERS_(COMMIT|SHA256)=/ { print $1, $2 }' "$ST/repo/host/dxmt/build.sh")
+    headers_commit=$(printf '%s\n' "$headers_record" | awk '$1 == "DXHEADERS_COMMIT" { print $2 }')
+    headers_sha=$(printf '%s\n' "$headers_record" | awk '$1 == "DXHEADERS_SHA256" { print $2 }')
+    [[ $headers_commit =~ ^[[:xdigit:]]{40}$ && $headers_sha =~ ^[[:xdigit:]]{64}$ ]] || {
+        echo 'missing pinned DXMT DirectX headers' >&2; exit 1;
+    }
+    copy_source "$ROOT/work/cache/dxmt/mingw-directx-headers-$headers_commit.tar.gz" \
+        "https://github.com/misyltoad/mingw-directx-headers/archive/$headers_commit.tar.gz" \
+        "$headers_sha" "mingw-directx-headers-$headers_commit.tar.gz"
+    # The ARM64X winemetal.dll links Wine 11.2's winecrt0. Like the other optional DXMT
+    # sources above, include it regardless of local artifacts (also for historical refs).
+    wine_record=$(awk -F= '/^WINE_ARM64EC_SOURCE_(URL|SHA256)=/ { print $1, $2 }' "$ST/repo/host/dxmt/build.sh")
+    wine_url=$(printf '%s\n' "$wine_record" | awk '$1 == "WINE_ARM64EC_SOURCE_URL" { print $2 }')
+    wine_sha=$(printf '%s\n' "$wine_record" | awk '$1 == "WINE_ARM64EC_SOURCE_SHA256" { print $2 }')
+    wine_notes=
+    if [[ $wine_url == https://* && $wine_sha =~ ^[[:xdigit:]]{64}$ ]]; then
+        copy_source "$ROOT/work/cache/dxmt/wine-11.2.tar.xz" "$wine_url" "$wine_sha" "wine-11.2.tar.xz"
+        wine_notes="
+The optional ARM64EC payload adds aarch64-windows/{d3d11,dxgi,d3d10core,winemetal}.dll
+and aarch64-unix/winemetal.so from the same DXMT source (build steps pe-arm64ec,
+client-arm64, payload-arm64ec). Its winemetal.dll links Wine 11.2's winecrt0
+(LGPL-2.1-or-later): sources/wine-11.2.tar.xz (SHA-256 $wine_sha)."
+    fi
     dxmt_notes="
-libwmtr_host.dylib (the DXMT graphics path, loaded by libkrun at run time and
-replaceable by a rebuilt library of the same name): DXMT, LGPL-2.1-or-later,
+DXMT graphics path (LGPL-2.1-or-later): libwmtr_host.dylib and the guest layer's
+/usr/lib/steamac/dxmt/x86_64-windows/{d3d11,dxgi,d3d10core,winemetal}.dll and
+x86_64-unix/winemetal.so.$wine_notes Complete DXMT source:
 sources/dxmt-$DXMT_COMMIT.tar.gz ($DXMT_REPO at that commit, SHA-256
 $DXMT_SHA256). Apply repo/host/dxmt/patches/*.patch in filename order with
-git apply (patch -p1 also works). repo/wmtr/ links DXMT's
-src/winemetal/unix/winemetal_unix.c and its src/airconv (with DXBCParser)
-into the library: build per the header of repo/wmtr/Makefile (make host).
-DXMT's own git submodules (NVIDIA nvapi and misyltoad's mingw-directx-headers,
-revisions recorded in the DXMT commit) are used only for the Windows-side DLLs
-and are not part of the library. The shader compiler links LLVM $LLVM_VERSION
-statically (Apache-2.0 with LLVM exception; its licence text is in the app's
-licenses folder), built from the llvmorg-$LLVM_VERSION tag of
-github.com/llvm/llvm-project."
+git apply. Extract sources/mingw-directx-headers-$headers_commit.tar.gz into
+DXMT's include/native/directx with --strip-components=1.
+
+repo/wmtr/ contains the BSD-3-Clause remoting implementation. Its host executor
+links DXMT's src/winemetal/unix/winemetal_unix.c and src/airconv (with DXBCParser);
+its guest winemetal.so uses DXMT's LGPL headers. The VR interface headers used by
+the executor are in repo/host/vrhost/include/ and repo/guest/vr/include/.
+Build with repo/host/dxmt/build.sh: fetch llvm native host pe client payload.
+The fetch step performs the extraction and patching described above; pe builds
+the four Windows DLLs, client builds winemetal.so in Docker, and payload stages
+both in work/out/dxmt for scripts/steps/30-layer.sh. The script pins the Wine
+and llvm-mingw build tools and every downloaded source with SHA-256.
+
+libkrun loads libwmtr_host.dylib at run time; a rebuilt library of the same
+name can replace it. To replace the guest DLLs/unixlib, rebuild the payload,
+then rebuild the layer with scripts/build-image.sh layer. These layer build
+scripts and the rest of steamac are available at https://github.com/Bil0000/steamac
+at $REF. The shader compiler statically links LLVM $LLVM_VERSION (Apache-2.0
+WITH LLVM-exception), built from github.com/llvm/llvm-project's
+llvmorg-$LLVM_VERSION release; its license is in repo/LICENSES/ and the app's
+licenses folder."
 fi
 
 # Resolve busybox-static's *source* version from the same snapshot/architecture
@@ -153,7 +197,7 @@ done <<< "$source_checksums"
 [[ $count -ge 2 ]] || { echo "incomplete source in $dsc_name" >&2; exit 1; }
 
 cat > "$ST/README.txt" <<EOF
-FX Steam Launcher $version — corresponding GPL source ($REF)
+FX Steam Launcher $version — corresponding GPL/LGPL source ($REF)
 
 The DMG contains the following binaries. The tarballs in sources/ are the
 complete upstream sources; repo/ contains this release's exact configuration,
@@ -186,6 +230,7 @@ repo/guest/initramfs/init. Its static binaries are:
     statically in step 20. See that script for all configure/make flags.
 
 $dxmt_notes
+
 Debian snapshot archive: $snapshot
 EOF
 

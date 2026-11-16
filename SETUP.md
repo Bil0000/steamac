@@ -71,29 +71,30 @@ Switching between Steam client builds downloads up to about 1 GB; progress shows
 
 ## Choosing the graphics path
 
-Settings > Advanced > **Graphics path**: **DXMT (lean)** or **Vulkan (classic)**. Restart the launcher to switch.
+Since the merge with steamac 1.9.14 the path is chosen per game: Settings > Advanced > **Allow DXMT (D3D11 on the
+Mac's Metal)** (applies from the next VM start), then Settings > Games > the game's profile: **DXMT** or **Vulkan**
+(the default).
 
 | path | what it is | when to use it |
 |---|---|---|
 | **DXMT (lean)** | Direct3D 11 (and 10) goes through DXMT, which produces Metal calls. They run natively on the Mac over a dedicated virtio-gpu channel and are shown in a Metal layer inside the window. DXVK, Venus, virglrenderer and the Vulkan-to-Metal layer are not involved | Direct3D 11 games, including VRChat, when the lean path works for you; simple Direct3D 12 games (experimental) |
 | **Vulkan (classic)** | Direct3D goes through DXVK to Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK to Metal on the Mac. This is upstream steamac's path | fallback if a game misbehaves on DXMT or EAC fails; Direct3D 12 games that need more than DXMT offers |
 
-How it works: at every boot the guest reads the launcher setting. With DXMT, every installed Proton's DXVK files (d3d11,
-dxgi, d3d10core) and its vkd3d-proton d3d12.dll are replaced by DXMT's before Steam starts, and again when Steam updates a Proton during the session.
-With Vulkan, Proton's own files are restored byte for byte. ARM64 Protons are left alone. There is no per-game
-compatibility tool and no extra step:
-the setting applies to every game, and the game just launches. If the DXMT library is missing from the app, the launcher
-falls back to Vulkan.
+How it works: at every boot the guest reads the launcher setting. With DXMT allowed, Proton gets DXMT's d3d11,
+dxgi, d3d10core (and d3d12) before Steam starts, and only games whose profile asks for DXMT are mapped to a DXMT
+compatibility tool (the native ARM64EC tool when its payload is there, else Proton 10.0); every other game stays on
+Vulkan. With DXMT not allowed, Proton's own files are restored byte for byte. If the DXMT library is missing from the
+app, the launcher falls back to Vulkan.
 
 - Direct3D 12 under the DXMT setting is experimental: DXMT's Direct3D 12 offers feature level 11_1, shader model 5.1
   (DXBC, no DXIL), no ray tracing, no tiled resources, and ExecuteIndirect stalls the GPU. A Direct3D 12 game that
-  needs more fails to start or renders wrongly; use **Vulkan** for it (vkd3d-proton). There is no automatic per-game
-  fallback: with DXMT's dxgi in place, vkd3d-proton's d3d12 cannot present, so the switch is the setting.
+  needs more fails to start or renders wrongly; use **Vulkan** for it (vkd3d-proton). Set that game's profile to
+  **Vulkan**.
 - **Repairing Proton.** The originals are kept in the guest until they are back in place. If one is missing (for
   example after switching between two builds of the app on one disk), DXMT's file stays, the boot log shows a
   `WARNING: no original of ... kept` line, and Direct3D 11 games fail on Vulkan. Repair it in Steam: the Proton tool
   (for example Proton Experimental) > Properties > Installed Files > **Verify integrity of tool files**.
-- EAC on DXMT is verified with VRChat. If EAC fails on DXMT in another game, switch to Vulkan.
+- EAC on DXMT is verified with VRChat. If EAC fails on DXMT in another game, set its profile to Vulkan.
 - The default is **Vulkan (classic)**. DXMT measured faster on the one verified Mac (see Known limits), but the
   default has not been changed.
 - DXMT covers Direct3D 11 and 10, and Direct3D 12 within the limits above.
@@ -150,7 +151,7 @@ on an external APFS, Mac OS Extended or exFAT volume (FAT32 is rejected). exFAT 
 - **A successful start:** the EAC launcher log (`anticheatlauncher.log`) ends with
   `Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'` (about 5 s), and VRChat's log shows
   `AntiCheat Session Begin: Success` and `Finished entering world`, with no `null client`.
-- **EAC with DXMT** is verified with VRChat; switch the Graphics path to Vulkan if EAC fails in another game.
+- **EAC with DXMT** is verified with VRChat; set the game's profile to Vulkan if EAC fails in another game.
 - **Not expected to work:** anti-cheat that blocks virtual machines, and titles whose anti-cheat adds its own anti-debug
   checks beyond EAC's Linux module (a second title was tried and stalls inside those checks).
 - Never attach a debugger, `strace` or `perf` to the running game; EAC reports it.

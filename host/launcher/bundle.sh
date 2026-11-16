@@ -2,9 +2,12 @@
 # Assemble work/out/FX Steam Launcher.app (called by build.sh with the freshly built binary):
 #   Contents/MacOS/steamac-vm           launcher, rpath @executable_path/../Frameworks only
 #   Contents/Frameworks/*.dylib         libkrun, libvirglrenderer, libMoltenVK, libvulkan_kosmickrisp
-#                                       (when built: host/kosmickrisp, macOS 26+), libwmtr_host (when
-#                                       built: wmtr/, the DXMT graphics path) + their non-system
-#                                       dependencies (libepoxy), install names @rpath/<name>
+#                                       (when built: host/kosmickrisp, macOS 26+), libwmtr_host
+#                                       (when built: host/dxmt) + their non-system dependencies
+#                                       (libepoxy), install names @rpath/<name>
+#   Contents/Frameworks/Sparkle.framework  in-app updates (SparkleUpdates), build.sh's copy of
+#                                       SwiftPM's; without the XPC services (sandboxed apps only)
+#                                       and headers
 #   Contents/Resources/                 gvproxy, Image, initramfs.cpio.gz, steamac-layer.img,
 #                                       desync + steamdeck-images.pem (Valve RAUC CA) for
 #                                       "Create New Disk…", generated licenses/ notices,
@@ -27,7 +30,7 @@ TMP="$STAGE/$NAME.app"
 
 # Fail before notices/staging (and before touching an existing app).
 python3 "$ROOT/scripts/guest-artifacts.py" check-release
-for f in Image initramfs.cpio.gz steamac-layer.img host/bin/gvproxy host/bin/desync; do
+for f in Image initramfs.cpio.gz steamac-layer.img host/bin/gvproxy host/bin/desync Frameworks/Sparkle.framework/Sparkle; do
     [[ -f "$OUT/$f" ]] || { echo "bundle.sh: missing $OUT/$f" >&2; exit 1; }
 done
 "$HERE/licenses.sh"  # fail before modifying the existing app if a notice is unavailable
@@ -89,11 +92,14 @@ copy_lib() {
 # MoltenVK always, KosmicKrisp when it was built (macOS 26+ build hosts).
 libs=(libkrun.1.dylib libvirglrenderer.1.dylib libMoltenVK.dylib)
 [[ -f "$KRUN_PREFIX/lib/libvulkan_kosmickrisp.dylib" ]] && libs+=(libvulkan_kosmickrisp.dylib)
-# libkrun dlopens the wmtr host (Settings > Advanced "Graphics path: DXMT", STEAMAC_WMTR_LIB) when built.
+# libkrun dlopens the wmtr host (Settings > Advanced "Allow DXMT", STEAMAC_WMTR_LIB) when built.
 [[ -f "$KRUN_PREFIX/lib/libwmtr_host.dylib" ]] && libs+=(libwmtr_host.dylib)
 for lib in "${libs[@]}"; do
     copy_lib "$KRUN_PREFIX/lib/$lib"
 done
+ditto "$OUT/Frameworks/Sparkle.framework" "$FW/Sparkle.framework"
+rm -rf "$FW/Sparkle.framework/Versions/B/"{XPCServices,Headers,PrivateHeaders,Modules} \
+       "$FW/Sparkle.framework/"{XPCServices,Headers,PrivateHeaders,Modules}
 
 # The executable: only the bundle's Frameworks on its rpath.
 while read -r rp; do
@@ -103,7 +109,7 @@ install_name_tool -add_rpath @executable_path/../Frameworks "$exe" 2>/dev/null
 while read -r dep; do
     is_system "$dep" && continue
     [[ "$dep" == @rpath/* ]] || { echo "bundle.sh: steamac-vm links $dep" >&2; exit 1; }
-    [[ -f "$FW/$(basename "$dep")" ]] || { echo "bundle.sh: $dep not bundled" >&2; exit 1; }
+    [[ -e "$FW/${dep#@rpath/}" ]] || { echo "bundle.sh: $dep not bundled" >&2; exit 1; }
 done < <(otool -L "$exe" | awk 'NR > 1 {print $1}')
 
 # Resources (APFS clones where possible; the layer and kernel are rebuilt by the guest scripts).
@@ -180,8 +186,10 @@ PY
 # guest rebuild during assembly must not publish mismatched resources.
 python3 "$ROOT/scripts/guest-artifacts.py" check-bundle "$TMP/Contents/Resources"
 
-# Sign inside-out: libraries, helper executables, then the bundle (executable + sealed resources).
-for f in "$FW"/*.dylib "$TMP/Contents/Resources/gvproxy" "$TMP/Contents/Resources/desync"; do
+# Sign inside-out: libraries, helper executables, Sparkle's helpers and framework, then the bundle
+# (executable + sealed resources).
+for f in "$FW"/*.dylib "$TMP/Contents/Resources/gvproxy" "$TMP/Contents/Resources/desync" \
+         "$FW/Sparkle.framework/Versions/B/Autoupdate" "$FW/Sparkle.framework/Versions/B/Updater.app" "$FW/Sparkle.framework"; do
     codesign --force --sign - --timestamp=none "$f"
 done
 codesign --force --sign - --timestamp=none --entitlements "$HERE/steamac-vm.entitlements" "$TMP"

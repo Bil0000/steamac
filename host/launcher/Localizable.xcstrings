@@ -1,7 +1,9 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "" : {},
+    "" : {
+
+    },
     "%@ %lld%%" : {
       "localizations" : {
         "en" : {
@@ -147,6 +149,22 @@
         }
       }
     },
+    "%@ game memory" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ памяти игры"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏内存 %@"
+          }
+        }
+      }
+    },
     "%@ is on a FAT32/MS-DOS volume, which cannot store files of 4 GiB or larger. The SteamOS disk and its 10 GiB rootfs exceed this limit: choose an APFS, Mac OS Extended, or exFAT volume" : {
       "localizations" : {
         "ru" : {
@@ -179,6 +197,28 @@
         }
       }
     },
+    "%@ of %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ из %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ / %@"
+          }
+        }
+      }
+    },
     "%@ of memory in use" : {
       "localizations" : {
         "ru" : {
@@ -191,6 +231,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已使用 %@ 内存"
+          }
+        }
+      }
+    },
+    "%@ uses the unsupported filesystem %@. Choose an APFS, Mac OS Extended, or exFAT volume for the SteamOS disk; APFS is recommended." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ uses the unsupported filesystem %2$@. Choose an APFS, Mac OS Extended, or exFAT volume for the SteamOS disk; APFS is recommended."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ использует неподдерживаемую файловую систему %2$@. Выберите том APFS, Mac OS Extended или exFAT для диска SteamOS; рекомендуется APFS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 使用不受支持的文件系统 %2$@。请选择 APFS、Mac OS 扩展或 exFAT 卷来存储 SteamOS 磁盘；推荐使用 APFS。"
           }
         }
       }
@@ -308,6 +370,28 @@
         }
       }
     },
+    "%@: %@; SteamOS gets no wmtr channel." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@: %2$@; SteamOS gets no wmtr channel."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@; SteamOS не получит канал wmtr."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：%2$@；SteamOS 不会获得 wmtr 通道。"
+          }
+        }
+      }
+    },
     "%@: not a SteamOS disk with home as its last partition" : {
       "localizations" : {
         "ru" : {
@@ -320,6 +404,60 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@：不是以 home 为最后一个分区的 SteamOS 磁盘"
+          }
+        }
+      }
+    },
+    "%@: reconstructed SteamOS file is unavailable. Check that the drive is connected and no other program is moving or deleting its files, then try again" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: восстановленный файл SteamOS недоступен. Проверьте, что накопитель подключён и другая программа не перемещает и не удаляет его файлы, затем повторите попытку"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@：重建的 SteamOS 文件不可用。请检查驱动器是否已连接，并确认没有其他程序正在移动或删除其文件，然后重试"
+          }
+        }
+      }
+    },
+    "%@: the partition table read back differs from what was written. Check the drive with Disk Utility First Aid or choose another drive" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: прочитанная таблица разделов отличается от записанной. Проверьте накопитель функцией «Первая помощь» в Дисковой утилите или выберите другой накопитель"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@：读回的分区表与写入的内容不一致。请使用“磁盘工具”的“急救”检查驱动器，或选择其他驱动器"
+          }
+        }
+      }
+    },
+    "%lld FPS (1%% low %lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld FPS (1%% low %2$lld)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld FPS (1%% low %lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld FPS（1%% low %lld）"
           }
         }
       }
@@ -394,18 +532,56 @@
         }
       }
     },
-    "A few errors: guest GPU context lost, shader pipeline compile failures (with an excerpt of the failing Metal shader source), libkrun panics, failed disk creation or first-start setup, VM stopped unexpectedly or killed (with the Mac's memory use), SteamOS not responding." : {
+    "A Mac folder SteamOS reads and writes in place (virtio-fs, no copy), mounted at the path below on every boot. Games stored there load at the Mac disk's speed. Security: virtio-fs does not confine SteamOS to this folder; with a share set, root in SteamOS can potentially read anything your Mac user can. Share only with a SteamOS you trust." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Некоторые ошибки: потеря контекста GPU гостевой системы, ошибки компиляции графического конвейера (с фрагментом исходного кода проблемного шейдера Metal), паники libkrun, ошибки создания диска или настройки при первом запуске, неожиданная остановка или принудительное завершение ВМ (с данными об использовании памяти Mac), отсутствие ответа от SteamOS."
+            "value" : "Папка Mac, которую SteamOS читает и пишет на месте (virtio-fs, без копирования); монтируется по указанному ниже пути при каждой загрузке. Игры в ней загружаются со скоростью диска Mac. Безопасность: virtio-fs не ограничивает SteamOS этой папкой; с включённой общей папкой root в SteamOS потенциально может прочитать всё, что доступно вашему пользователю Mac. Открывайте папку только той SteamOS, которой доверяете."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "部分错误：客户机 GPU 上下文丢失、着色器管线编译失败（附出错的 Metal 着色器源代码片段）、libkrun 严重错误、磁盘创建或首次启动设置失败、虚拟机意外停止或被终止（附 Mac 内存使用情况）、SteamOS 无响应。"
+            "value" : "SteamOS 可直接读写的 Mac 文件夹（virtio-fs，无需复制），每次启动时挂载到下方路径。存放于此的游戏以 Mac 磁盘的速度加载。安全：virtio-fs 不会把 SteamOS 限制在此文件夹内；设置共享后，SteamOS 中的 root 可能读取你的 Mac 用户能读取的任何内容。仅与你信任的 SteamOS 共享。"
+          }
+        }
+      }
+    },
+    "A disk-creation file or folder is no longer available. Reconnect the drive and check that the destination and download cache have not been moved or deleted, then try again." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл или папка для создания диска больше недоступны. Подключите диск заново и убедитесь, что папка назначения и кэш загрузки не перемещены и не удалены, затем повторите попытку."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建磁盘所需的文件或文件夹已不可用。请重新连接磁盘，确认目标文件夹和下载缓存未被移动或删除，然后重试。"
+          }
+        }
+      }
+    },
+    "A few errors: guest GPU context lost, shader pipeline compile failures (with failing Metal shader source: up to two scrubbed attachments of 256 KiB per process), libkrun panics, failed disk creation or first-start setup, VM stopped unexpectedly or killed (with the Mac's memory use), SteamOS not responding." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A few errors: guest GPU context lost, shader pipeline compile failures (with failing Metal shader source: up to two scrubbed attachments of 256 KiB per process), libkrun panics, failed disk creation or first-start setup, VM stopped unexpectedly or killed (with the Mac's memory use), SteamOS not responding."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отдельные ошибки: потеря контекста GPU в SteamOS, ошибки компиляции шейдерных конвейеров (исходный код сбойных Metal-шейдеров: не более двух вложений до 256 КиБ на процесс, с удалёнными личными данными), паники libkrun, ошибки создания диска или первоначальной настройки, неожиданная остановка или принудительное завершение ВМ (с данными об использовании памяти Mac), зависание SteamOS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "少量错误：来宾 GPU 上下文丢失、着色器管线编译失败（附失败的 Metal 着色器源码：每进程最多两个已脱敏的附件，每个不超过 256 KiB）、libkrun panic、磁盘创建或首次启动设置失败、VM 意外停止或被终止（含 Mac 内存使用情况）、SteamOS 无响应。"
           }
         }
       }
@@ -442,6 +618,38 @@
         }
       }
     },
+    "A new subdirectory of /home/steamos/ (letters, digits, / _ . -). Saved when you press Return or leave the field." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новый подкаталог в /home/steamos/ (буквы, цифры, / _ . -). Сохраняется по Return или при выходе из поля."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/home/steamos/ 下的新子目录（字母、数字、/ _ . -）。按 Return 或离开该字段时保存。"
+          }
+        }
+      }
+    },
+    "A random install ID (not linked to you or to crash reports) to count Macs." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Случайный ID установки (не связан ни с вами, ни с отчётами о сбоях) для подсчёта Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个随机的安装 ID（与你本人和崩溃报告均无关联），用于统计 Mac 数量。"
+          }
+        }
+      }
+    },
     "A random install ID (not linked to you) to count affected Macs." : {
       "localizations" : {
         "ru" : {
@@ -454,6 +662,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "随机生成的安装 ID（不关联你的身份），用于统计受影响的 Mac 数量。"
+          }
+        }
+      }
+    },
+    "Additional controllers" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Дополнительные контроллеры"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更多控制器"
           }
         }
       }
@@ -474,6 +698,124 @@
         }
       }
     },
+    "Allocated size went from %@ to %@ (about %@ less). APFS clones and snapshots may retain this space on the Mac." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Allocated size went from %1$@ to %2$@ (about %3$@ less). APFS clones and snapshots may retain this space on the Mac."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выделенный размер уменьшился с %@ до %@ (примерно на %@). Клоны и снимки APFS могут удерживать это место на Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已分配大小从 %@ 降到 %@（约减少 %@）。APFS 克隆和快照可能仍在 Mac 上占用这部分空间。"
+          }
+        }
+      }
+    },
+    "Allow DXMT" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешить DXMT"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 DXMT"
+          }
+        }
+      }
+    },
+    "Allow DXMT (D3D11 on the Mac's Metal)" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешить DXMT (D3D11 через Metal на Mac)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 DXMT（通过 Mac 的 Metal 运行 D3D11）"
+          }
+        }
+      }
+    },
+    "Allow DXMT applies on the next VM start." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешение DXMT действует со следующего запуска ВМ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“允许 DXMT”将在下次启动虚拟机时生效。"
+          }
+        }
+      }
+    },
+    "Allow DXMT?" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешить DXMT?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 DXMT？"
+          }
+        }
+      }
+    },
+    "Allow DXMT…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешить DXMT…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 DXMT…"
+          }
+        }
+      }
+    },
+    "Allow Local Network access when macOS asks. Streaming stops while SteamOS is suspended or asleep and can be started again after it resumes." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Разрешите доступ к локальной сети по запросу macOS. При приостановке или сне SteamOS трансляция прекращается; после возобновления её можно запустить снова."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 macOS 提示时允许本地网络访问。SteamOS 挂起或睡眠时串流会停止，恢复后可重新开始串流。"
+          }
+        }
+      }
+    },
     "Always included: app, macOS and library versions, Mac model, GPU, disk sizes and the launcher settings (never passwords or Keychain items)." : {
       "localizations" : {
         "ru" : {
@@ -486,6 +828,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "始终包含：应用、macOS 和库版本、Mac 机型、GPU、磁盘大小和启动器设置（绝不含密码或钥匙串内容）。"
+          }
+        }
+      }
+    },
+    "App %@" : {
+      "comment" : "Game without a known name; Steam app ID",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Приложение %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "应用 %@"
           }
         }
       }
@@ -522,6 +881,22 @@
         }
       }
     },
+    "Apple's Metal HUD can crash the VM with KosmicKrisp (Metal 4), even when the overlay is hidden. As an alternative, use Settings > General > Log frame-pacing statistics (guest display timing, not game FPS). Restart the VM after turning the HUD off to unload Apple's HUD library." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HUD Metal от Apple может вызвать сбой ВМ с KosmicKrisp (Metal 4), даже когда панель скрыта. В качестве альтернативы включите «Настройки > Основные > Записывать статистику равномерности кадров в журнал» (тайминги экрана гостевой системы, а не FPS игры). После выключения HUD перезапустите ВМ, чтобы выгрузить библиотеку HUD от Apple."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 KosmicKrisp（Metal 4）时，即使叠加层已隐藏，Apple 的 Metal HUD 也可能导致虚拟机崩溃。可改用“设置 > 通用 > 记录帧节奏统计”（客户机显示时序，并非游戏 FPS）。关闭 HUD 后请重启虚拟机，以卸载 Apple 的 HUD 库。"
+          }
+        }
+      }
+    },
     "Apple's MetalFX upscaler sharpens the guest picture when the window has more pixels than the guest (2× on Retina screens, scaled or fullscreen windows) instead of plain scaling." : {
       "localizations" : {
         "ru" : {
@@ -554,18 +929,18 @@
         }
       }
     },
-    "Applies from the next start." : {
+    "Apply" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Применяется при следующем запуске."
+            "value" : "Применить"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下次启动时生效。"
+            "value" : "应用"
           }
         }
       }
@@ -582,6 +957,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在获取 SteamOS 日志（最多等待 %lld 秒）…"
+          }
+        }
+      }
+    },
+    "Asks %@ for the newest version, at most every 6 hours; only the app version is sent. Updates download and install in the app." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверяет наличие новой версии на %@ не чаще одного раза в 6 часов; отправляется только версия приложения. Обновления загружаются и устанавливаются в приложении."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多每 6 小时向 %@ 查询一次最新版本；仅发送应用版本号。更新在应用内下载并安装。"
           }
         }
       }
@@ -778,18 +1169,50 @@
         }
       }
     },
-    "Button glyphs and layout in Steam. Automatic: the same kind as the controller that drives it (DualSense, DualShock 4, else Xbox 360). Buttons, sticks, triggers and rumble (no touchpad, gyro or lightbar unless a DualSense is passed through)." : {
+    "Bundled: %@" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Обозначения и раскладка кнопок в Steam. Автоматически: тот же тип, что у управляющего контроллера (DualSense, DualShock 4, в остальных случаях Xbox 360). Поддерживаются кнопки, стики, триггеры и вибрация (без сенсорной панели, гироскопа и световой панели, если DualSense не передаётся напрямую)."
+            "value" : "Встроенная: %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Steam 中的按键图标和布局。自动：与控制它的控制器类型一致（DualSense、DualShock 4，其他类型为 Xbox 360）。支持按键、摇杆、扳机和振动（除非直通 DualSense，否则不支持触摸板、陀螺仪或光条）。"
+            "value" : "内置：%@"
+          }
+        }
+      }
+    },
+    "Button glyphs and layout in Steam. Automatic: the same kind as the controller that drives it (DualSense, DualShock 4, else Xbox 360); a Steam Controller goes to SteamOS as itself. Steam Controller: only a Steam Controller (Bluetooth or its Puck) is passed through as itself, with trackpads, gyro and back buttons; other controllers appear as Xbox 360. Buttons, sticks, triggers and rumble (no touchpad, gyro or lightbar unless a DualSense is passed through). Automatic also passes generic HID joysticks and gamepads unsupported by macOS through as themselves, on a free HID-capable player. They yield to GameController controllers; multi-axis devices are not matched. Turn off Virtual controller to disable this; configure their layout and calibration in SteamOS." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обозначения и раскладка кнопок в Steam. Автоматически: тот же тип, что у управляющего контроллера (DualSense, DualShock 4, в остальных случаях Xbox 360); Steam Controller передаётся в SteamOS как есть. Steam Controller: напрямую передаётся только Steam Controller (по Bluetooth или через Puck) — с трекпадами, гироскопом и задними кнопками; остальные контроллеры отображаются как Xbox 360. Поддерживаются кнопки, стики, триггеры и вибрация (без сенсорной панели, гироскопа и световой панели, если DualSense не передаётся напрямую). Режим «Автоматически» также передаёт обычные HID-джойстики и геймпады, не поддерживаемые macOS, как есть свободному игроку с поддержкой HID. Они уступают место контроллерам GameController; многоосевые устройства не сопоставляются. Чтобы отключить это, выключите «Виртуальный контроллер»; раскладка и калибровка настраиваются в SteamOS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steam 中的按键图标和布局。自动：与控制它的控制器类型一致（DualSense、DualShock 4，其他类型为 Xbox 360）；Steam Controller 以其本身直通到 SteamOS。Steam Controller：仅直通 Steam Controller（蓝牙或其 Puck 接收器），支持触控板、陀螺仪和背键；其他控制器显示为 Xbox 360。支持按键、摇杆、扳机和振动（除非直通 DualSense，否则不支持触摸板、陀螺仪或光条）。自动模式还会将 macOS 不支持的通用 HID 操纵杆和手柄按其本身直通给支持 HID 的空闲玩家。它们会让位给 GameController 控制器；不匹配多轴设备。关闭“虚拟控制器”可停用此功能；请在 SteamOS 中设置布局和校准。"
+          }
+        }
+      }
+    },
+    "Can't download SteamOS information from Valve's servers. The response was empty, incomplete, or invalid. Check your internet connection, sign in to the network if required, or try without a VPN, proxy, or network filter, then try again. Technical details are in the launcher log." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось загрузить сведения о SteamOS с серверов Valve: получен пустой, неполный или некорректный ответ. Проверьте подключение к интернету, при необходимости войдите в сеть через страницу авторизации или отключите VPN, прокси либо сетевой фильтр и повторите попытку. Технические подробности — в журнале лаунчера."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法从 Valve 服务器下载 SteamOS 信息：响应为空、不完整或无效。请检查网络连接，按需登录网络认证页面，或关闭 VPN、代理或网络过滤器后重试。技术详情见启动器日志。"
           }
         }
       }
@@ -886,6 +1309,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法创建报告文件夹：%@"
+          }
+        }
+      }
+    },
+    "Cannot open or lock the SteamOS disk %@: permission denied. In Finder > Get Info, check that you have Read & Write access to the file and its volume. In System Settings > Privacy & Security, allow FX Steam Launcher access to removable volumes (or Full Disk Access if needed), then try again. You can also move the disk to a writable local folder and select it again in Settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cannot open or lock the SteamOS disk %@: permission denied. In Finder > Get Info, check that you have Read & Write access to the file and its volume. In System Settings > Privacy & Security, allow FX Steam Launcher access to removable volumes (or Full Disk Access if needed), then try again. You can also move the disk to a writable local folder and select it again in Settings."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось открыть или заблокировать диск SteamOS %@: нет доступа. В Finder > «Свойства» проверьте право на чтение и запись файла и его тома. В «Системные настройки» > «Конфиденциальность и безопасность» разрешите FX Steam Launcher доступ к съёмным томам (при необходимости — полный доступ к диску) и повторите попытку. Также можно переместить образ в локальную папку с правом записи и заново выбрать его в настройках."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开或锁定 SteamOS 磁盘 %@：权限不足。请在 Finder >“显示简介”中确认您对文件及其所在宗卷具有读写权限。在“系统设置”>“隐私与安全性”中允许 FX Steam Launcher 访问可移动宗卷（必要时授予完全磁盘访问权限），然后重试。您也可以将磁盘移到可写的本地文件夹，再在设置中重新选择。"
           }
         }
       }
@@ -1018,6 +1463,38 @@
         }
       }
     },
+    "Choose Folder…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать папку…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择文件夹…"
+          }
+        }
+      }
+    },
+    "Choose Library…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать библиотеку…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择库…"
+          }
+        }
+      }
+    },
     "Choose a SteamOS disk image" : {
       "localizations" : {
         "ru" : {
@@ -1030,6 +1507,60 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "选择 SteamOS 磁盘映像"
+          }
+        }
+      }
+    },
+    "Choose a folder to share with SteamOS" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите папку для общего доступа из SteamOS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择要与 SteamOS 共享的文件夹"
+          }
+        }
+      }
+    },
+    "Choose a raw SteamOS GPT disk with the SteamOS partitions (including esp, rootfs-A and home), not a recovery archive or Steam's macOS installer. Use Create SteamOS Disk to download and create the correct disk." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a raw SteamOS GPT disk with the SteamOS partitions (including esp, rootfs-A and home), not a recovery archive or Steam's macOS installer. Use Create SteamOS Disk to download and create the correct disk."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите необработанный GPT-образ диска SteamOS с разделами SteamOS (включая esp, rootfs-A и home), а не архив восстановления или установщик Steam для macOS. Используйте «Создать диск SteamOS», чтобы скачать и создать подходящий диск."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请选择包含 SteamOS 分区（包括 esp、rootfs-A 和 home）的原始 GPT 磁盘，而不是恢复镜像压缩包或 macOS 版 Steam 安装程序。请使用“创建 SteamOS 磁盘”下载并创建正确的磁盘。"
+          }
+        }
+      }
+    },
+    "Choose a wmtr executor library" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите библиотеку-исполнитель wmtr"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择 wmtr 执行器库"
           }
         }
       }
@@ -1228,6 +1759,22 @@
         }
       }
     },
+    "Could not reclaim disk space" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось освободить место на диске"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法回收磁盘空间"
+          }
+        }
+      }
+    },
     "Couldn't check for updates" : {
       "localizations" : {
         "ru" : {
@@ -1240,6 +1787,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法检查更新"
+          }
+        }
+      }
+    },
+    "Couldn't install the update" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось установить обновление"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法安装更新"
           }
         }
       }
@@ -1352,6 +1915,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "创建新磁盘：从 Valve 下载并验证官方 SteamOS 映像（约 4.5 GB；磁盘起初在 Mac 上占用约 10 GB）。也可选择已有映像，直接在原位置使用，不会拷贝。"
+          }
+        }
+      }
+    },
+    "Creates SteamLibrary in the shared folder on the next start and adds it to Steam once per path, so you can remove it later in Steam. Proton requires symbolic link support: APFS is recommended; exFAT is unsupported. Shares without symbolic link support are not registered automatically." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "При следующем запуске создаёт SteamLibrary в общей папке и добавляет её в Steam один раз для каждого пути, чтобы позже вы могли удалить её из Steam. Для Proton нужна поддержка символических ссылок: рекомендуется APFS; exFAT не поддерживается. Общие папки без поддержки символических ссылок не добавляются автоматически."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下次启动时在共享文件夹中创建 SteamLibrary 并将其添加到 Steam，每个路径仅添加一次，因此你之后可以在 Steam 中将其移除。Proton 需要符号链接支持：推荐使用 APFS；不支持 exFAT。缺少符号链接支持的共享文件夹不会被自动添加。"
           }
         }
       }
@@ -1484,18 +2063,34 @@
         }
       }
     },
-    "DXMT (lean)" : {
+    "DXMT is not in effect while Allow DXMT is off." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "DXMT (облегчённый)"
+            "value" : "DXMT не действует, пока выключено «Разрешить DXMT»."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "DXMT（精简）"
+            "value" : "关闭“允许 DXMT”时，DXMT 不会生效。"
+          }
+        }
+      }
+    },
+    "Default" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По умолчанию"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认"
           }
         }
       }
@@ -1628,34 +2223,18 @@
         }
       }
     },
-    "Direct3D 11 games through DXMT, drawn by Metal on the Mac (games need the Proton-lean compatibility tool, chosen once per game in Steam)." : {
+    "Desktop Mode follows the Mac's keyboard layouts (Fn/Globe, Control-Space) until you change the layouts in SteamOS. The first sync replaces existing layouts; later user edits win." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Игры Direct3D 11 работают через DXMT, а рисует их Metal на Mac (играм нужен инструмент совместимости Proton-lean, который выбирается один раз для каждой игры в Steam)."
+            "value" : "Режим рабочего стола следует за раскладками Mac (Fn/глобус, Control-пробел), пока вы не измените их в SteamOS. Первая синхронизация заменяет прежние раскладки; последующие правки пользователя имеют приоритет."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Direct3D 11 游戏通过 DXMT 运行，由 Mac 上的 Metal 绘制（游戏需要 Proton-lean 兼容工具，在 Steam 中为每个游戏选择一次）。"
-          }
-        }
-      }
-    },
-    "Direct3D through DXVK on Vulkan (Venus) and the Vulkan driver below." : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Direct3D через DXVK поверх Vulkan (Venus) и драйвера Vulkan ниже."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Direct3D 通过 DXVK 运行在 Vulkan（Venus）和下方的 Vulkan 驱动之上。"
+            "value" : "桌面模式跟随 Mac 的键盘布局（Fn/地球仪键、Control-空格），直到你在 SteamOS 中更改布局。首次同步会替换现有布局；之后用户的更改优先。"
           }
         }
       }
@@ -1676,6 +2255,22 @@
         }
       }
     },
+    "Disk space reclaimed" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Место на диске освобождено"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已回收磁盘空间"
+          }
+        }
+      }
+    },
     "Display" : {
       "localizations" : {
         "ru" : {
@@ -1688,6 +2283,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "显示"
+          }
+        }
+      }
+    },
+    "Does not start" : {
+      "comment" : "Game rating",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не запускается"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法启动"
+          }
+        }
+      }
+    },
+    "Don't Share" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не делиться"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不共享"
           }
         }
       }
@@ -1736,6 +2364,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已下载的数据会保留；再次创建磁盘时会从上次停止的位置继续。"
+          }
+        }
+      }
+    },
+    "Downloading FX Steam Launcher %@…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка FX Steam Launcher %@…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在下载 FX Steam Launcher %@…"
           }
         }
       }
@@ -1852,6 +2496,22 @@
         }
       }
     },
+    "Each game session: the game's Steam app ID and name, how long it ran and was played, whether its window appeared, frame rate, memory use, Proton version, resolution, graphics path and sanitized graphics launch settings." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Каждый игровой сеанс: Steam app ID и название игры, длительность работы и игры, появилось ли окно, частота кадров, использование памяти, версия Proton, разрешение, графический путь и отфильтрованные графические параметры запуска."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次游戏会话：游戏的 Steam 应用 ID 和名称、运行及游玩时长、窗口是否出现、帧率、内存使用、Proton 版本、分辨率、图形路径以及经过筛选的图形启动设置。"
+          }
+        }
+      }
+    },
     "Edit" : {
       "comment" : "Standard text editing menu",
       "localizations" : {
@@ -1901,6 +2561,38 @@
         }
       }
     },
+    "Enable Apple's Metal HUD?" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включить HUD Metal от Apple?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 Apple 的 Metal HUD？"
+          }
+        }
+      }
+    },
+    "Enable Moonlight streaming" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включить трансляцию Moonlight"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 Moonlight 串流"
+          }
+        }
+      }
+    },
     "Enable SSH" : {
       "localizations" : {
         "ru" : {
@@ -1913,6 +2605,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "启用 SSH"
+          }
+        }
+      }
+    },
+    "Enabling requires a VM restart. Turning it off hides the overlay now; restart to unload Apple's HUD library." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для включения нужно перезапустить ВМ. Выключение сразу скрывает панель; перезапустите ВМ, чтобы выгрузить библиотеку HUD от Apple."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用后需重启虚拟机。关闭会立即隐藏叠加层；重启后才会卸载 Apple 的 HUD 库。"
+          }
+        }
+      }
+    },
+    "End stream" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Завершить трансляцию"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束串流"
           }
         }
       }
@@ -1933,6 +2657,22 @@
         }
       }
     },
+    "Enter the four-digit PIN shown by Moonlight on %@." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите четырёхзначный PIN, показанный Moonlight на %@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入 %@ 上的 Moonlight 显示的四位 PIN。"
+          }
+        }
+      }
+    },
     "Every 5 s: guest flush and on-screen frame intervals, latency, dropped frames." : {
       "localizations" : {
         "ru" : {
@@ -1945,6 +2685,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "每 5 秒记录：客户机刷新和屏幕显示的帧间隔、延迟、丢帧。"
+          }
+        }
+      }
+    },
+    "Executor library" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Библиотека-исполнитель"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行器库"
+          }
+        }
+      }
+    },
+    "Experimental" : {
+      "comment" : "Badge next to a setting whose feature is not finished",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Экспериментально"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实验性"
           }
         }
       }
@@ -2003,6 +2776,22 @@
         }
       }
     },
+    "FX Steam Launcher %@ is ready to install" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FX Steam Launcher %@ готов к установке"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FX Steam Launcher %@ 已可安装"
+          }
+        }
+      }
+    },
     "FX Steam Launcher %@ is the newest version available." : {
       "localizations" : {
         "ru" : {
@@ -2047,6 +2836,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "FX Steam Launcher 无法启动"
+          }
+        }
+      }
+    },
+    "FX Steam Launcher cannot start SteamOS inside a macOS virtual machine. Nested virtualization is not supported. Run the launcher directly on your Mac, not inside a virtual machine." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FX Steam Launcher не может запустить SteamOS внутри виртуальной машины macOS: вложенная виртуализация не поддерживается. Запустите лаунчер непосредственно на Mac, а не в виртуальной машине."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FX Steam Launcher 无法在 macOS 虚拟机内启动 SteamOS：不支持嵌套虚拟化。请直接在 Mac 上运行启动器，而不是在虚拟机中运行。"
           }
         }
       }
@@ -2115,6 +2920,38 @@
         }
       }
     },
+    "Failed: %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ошибка: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败：%@"
+          }
+        }
+      }
+    },
+    "Find…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Найти…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查找…"
+          }
+        }
+      }
+    },
     "Finishing…" : {
       "localizations" : {
         "ru" : {
@@ -2165,22 +3002,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "适应屏幕（%@ × %@）"
-          }
-        }
-      }
-    },
-    "Find…" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Найти…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "查找…"
           }
         }
       }
@@ -2249,22 +3070,6 @@
         }
       }
     },
-    "Frame latency" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Задержка кадра"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "帧延迟"
-          }
-        }
-      }
-    },
     "Forget this game" : {
       "localizations" : {
         "ru" : {
@@ -2277,6 +3082,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "忘记此游戏"
+          }
+        }
+      }
+    },
+    "Frame latency" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Задержка кадра"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帧延迟"
           }
         }
       }
@@ -2329,6 +3150,22 @@
         }
       }
     },
+    "Further connected controllers are players 2 to 4 in SteamOS, each with a gamepad of its own, for local co-op. A player keeps their controller until it disconnects. Off: only one controller is used." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Остальные подключённые контроллеры становятся игроками 2–4 в SteamOS, у каждого свой геймпад — для совместной игры на одном экране. Контроллер остаётся за игроком, пока не отключится. Выключено: используется только один контроллер."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其余已连接的控制器在 SteamOS 中成为玩家 2 到 4，各有自己的手柄，用于本地合作。玩家的控制器在断开前保持不变。关闭：只使用一个控制器。"
+          }
+        }
+      }
+    },
     "GPU budget: %lld MiB. macOS and driver reserve: %lld MiB." : {
       "localizations" : {
         "en" : {
@@ -2351,6 +3188,22 @@
         }
       }
     },
+    "Game Statistics" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Статистика игр"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏统计"
+          }
+        }
+      }
+    },
     "Game paused" : {
       "localizations" : {
         "ru" : {
@@ -2363,6 +3216,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "游戏已暂停"
+          }
+        }
+      }
+    },
+    "Game profiles" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профили игр"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏配置"
+          }
+        }
+      }
+    },
+    "Games" : {
+      "comment" : "Settings tab: game statistics",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Игры"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏"
           }
         }
       }
@@ -2395,6 +3281,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "当前游戏分区的容量为 %@ GiB。请输入更大的 home 分区容量，单位为 GiB（最大 4096）。此操作不会缩小或删除磁盘。APFS / Mac OS Extended 仅在 SteamOS 写入数据时占用空间；exFAT 会立即占用全部新增空间，因此需要相应的可用空间。"
+          }
+        }
+      }
+    },
+    "Games use DXMT only when their profile selects it. Their D3D11 and D3D10 draw through DXMT directly with the Mac's Metal using native ARM64EC Proton when installed, or Proton 10.0 (x86-64) otherwise; games with Default graphics stay on Vulkan. DXMT has compatibility gaps, including no D3D11 stream output. Allowing DXMT takes effect on the next VM start. Security risk: while on, programs in SteamOS can run code on the Mac with your user's rights. The executor runs inside the VM process and trusts the guest; a fault can stop the VM." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Игры используют DXMT, только если он выбран в их профиле. D3D11 и D3D10 выводятся через DXMT напрямую в Metal на Mac с нативным ARM64EC Proton, если он установлен, иначе с Proton 10.0 (x86-64); игры с графикой по умолчанию остаются на Vulkan. У DXMT есть ограничения совместимости, в том числе отсутствие D3D11 stream output. Разрешение DXMT действует со следующего запуска ВМ. Риск безопасности: пока он включён, программы в SteamOS могут выполнять код на Mac с правами вашего пользователя. Исполнитель работает внутри процесса ВМ и доверяет гостю; ошибка может остановить ВМ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "游戏仅在其配置选择 DXMT 时才会使用它。D3D11 和 D3D10 通过 DXMT 直接使用 Mac 的 Metal 绘制，已安装原生 ARM64EC Proton 时使用它，否则使用 Proton 10.0（x86-64）；图形设为“默认”的游戏仍使用 Vulkan。DXMT 存在兼容性限制，包括不支持 D3D11 流输出。允许 DXMT 将在下次启动虚拟机时生效。安全风险：启用后，SteamOS 中的程序可以使用您的用户权限在 Mac 上执行代码。执行器运行于虚拟机进程内并信任客户机；故障可能导致虚拟机停止。"
           }
         }
       }
@@ -2463,18 +3365,18 @@
         }
       }
     },
-    "Graphics path" : {
+    "Graphics" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Графический путь"
+            "value" : "Графика"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "图形路径"
+            "value" : "图形"
           }
         }
       }
@@ -2591,7 +3493,25 @@
         }
       }
     },
-    "H" : {},
+    "H" : {
+
+    },
+    "Hardware virtualization is unavailable on this system. FX Steam Launcher needs the macOS Hypervisor framework to start SteamOS. Run the launcher directly on a supported Mac." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В этой системе недоступна аппаратная виртуализация. Для запуска SteamOS FX Steam Launcher требуется фреймворк macOS Hypervisor. Запустите лаунчер непосредственно на поддерживаемом Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此系统无法使用硬件虚拟化。FX Steam Launcher 需要 macOS Hypervisor 框架才能启动 SteamOS。请直接在受支持的 Mac 上运行启动器。"
+          }
+        }
+      }
+    },
     "Help" : {
       "comment" : "Application help menu",
       "localizations" : {
@@ -2638,6 +3558,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "home 分区（游戏，稀疏文件）"
+          }
+        }
+      }
+    },
+    "How your games run in SteamOS goes to the public game statistics, so every Mac player can see which games start and how fast they run on which Mac." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Данные о том, как ваши игры работают в SteamOS, попадают в открытую статистику игр: любой игрок на Mac увидит, какие игры запускаются и насколько быстро работают на каком Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的游戏在 SteamOS 中的运行情况会进入公开的游戏统计，让每位 Mac 玩家都能看到哪些游戏能启动、在哪款 Mac 上运行多快。"
           }
         }
       }
@@ -2722,6 +3658,86 @@
         }
       }
     },
+    "Install Update" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установить"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安装更新"
+          }
+        }
+      }
+    },
+    "Install and Relaunch" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установить и перезапустить"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安装并重新启动"
+          }
+        }
+      }
+    },
+    "Install and Relaunch shuts SteamOS down cleanly (as Shut Down SteamOS does), installs the update and opens FX Steam Launcher again. Install on Quit installs it when you quit FX Steam Launcher or SteamOS restarts." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Установить и перезапустить» штатно выключает SteamOS (как «Выключить SteamOS»), устанавливает обновление и снова открывает FX Steam Launcher. «Установить при выходе» установит его, когда вы завершите FX Steam Launcher или SteamOS перезагрузится."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“安装并重新启动”会正常关闭 SteamOS（与“关闭 SteamOS”相同），安装更新并重新打开 FX Steam Launcher。“退出时安装”会在你退出 FX Steam Launcher 或 SteamOS 重启时安装。"
+          }
+        }
+      }
+    },
+    "Install on Quit" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установить при выходе"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退出时安装"
+          }
+        }
+      }
+    },
+    "Installing FX Steam Launcher %@…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установка FX Steam Launcher %@…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在安装 FX Steam Launcher %@…"
+          }
+        }
+      }
+    },
     "Installing Steam update" : {
       "localizations" : {
         "ru" : {
@@ -2802,6 +3818,70 @@
         }
       }
     },
+    "Last session: %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Последняя сессия: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次会话：%@"
+          }
+        }
+      }
+    },
+    "Last session: no window appeared" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Последняя сессия: окно не появилось"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次会话：窗口未出现"
+          }
+        }
+      }
+    },
+    "Later" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Позже"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "稍后"
+          }
+        }
+      }
+    },
+    "Launch options" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Параметры запуска"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动选项"
+          }
+        }
+      }
+    },
     "Let Steam Link discover this VM on the same subnet. Opens UDP 27031–27036 and TCP 27036–27037 on the Mac. Allow Local Network access; quit Mac Steam if it uses these ports." : {
       "localizations" : {
         "ru" : {
@@ -2814,6 +3894,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "允许 Steam Link 在同一子网发现此虚拟机。在 Mac 上开放 UDP 27031–27036 和 TCP 27036–27037 端口。请允许本地网络访问；若 Mac 版 Steam 占用了这些端口，请先退出。"
+          }
+        }
+      }
+    },
+    "Listening as %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ожидание подключений: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在以 %@ 的名称监听"
           }
         }
       }
@@ -2834,22 +3930,6 @@
         }
       }
     },
-    "Loading Steam UI" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Загрузка интерфейса Steam"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在加载 Steam 界面"
-          }
-        }
-      }
-    },
     "Loading %@…" : {
       "comment" : "Card over a loading game: game name",
       "localizations" : {
@@ -2863,6 +3943,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在加载 %@…"
+          }
+        }
+      }
+    },
+    "Loading Steam UI" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка интерфейса Steam"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载 Steam 界面"
           }
         }
       }
@@ -3027,6 +4123,22 @@
         }
       }
     },
+    "Mac Input Monitoring Settings…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac: Мониторинг ввода…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 输入监控设置…"
+          }
+        }
+      }
+    },
     "Memory" : {
       "localizations" : {
         "ru" : {
@@ -3171,6 +4283,22 @@
         }
       }
     },
+    "Moonlight streaming is available while SteamOS is running in a window. It is unavailable in headless mode or without a running VM." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Трансляция Moonlight доступна, когда SteamOS работает в окне. Она недоступна в режиме без окна или без запущенной ВМ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moonlight 串流仅在 SteamOS 以窗口模式运行时可用。无窗口模式或未运行虚拟机时不可用。"
+          }
+        }
+      }
+    },
     "More than this Mac's %lld performance cores. The extra vCPUs run on efficiency cores, which slows the guest down and leaves fewer cores for the Mac's GPU work." : {
       "localizations" : {
         "ru" : {
@@ -3207,6 +4335,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "超过此 Mac 的 %lld 个性能核心。额外的 vCPU 会在能效核心上运行，拖慢客户机，并减少可用于 Mac GPU 相关工作的核心。"
+          }
+        }
+      }
+    },
+    "Mount point in SteamOS" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Точка монтирования в SteamOS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 中的挂载点"
           }
         }
       }
@@ -3288,6 +4432,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "网络"
+          }
+        }
+      }
+    },
+    "Never: your name, user or computer name, IP address, Steam account, files or other text you type." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Никогда: ваше имя, имя пользователя или компьютера, IP-адрес, учётная запись Steam, файлы или другой вводимый вами текст."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "绝不发送：您的姓名、用户名或电脑名称、IP 地址、Steam 账号、文件或您输入的其他文本。"
           }
         }
       }
@@ -3405,6 +4565,22 @@
         }
       }
     },
+    "No paired clients" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет сопряжённых клиентов"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚无已配对客户端"
+          }
+        }
+      }
+    },
     "No release notes." : {
       "localizations" : {
         "ru" : {
@@ -3417,6 +4593,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无更新说明。"
+          }
+        }
+      }
+    },
+    "None" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无"
           }
         }
       }
@@ -3437,6 +4629,44 @@
         }
       }
     },
+    "Not a usable SteamOS disk" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not a usable SteamOS disk"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот диск не подходит для SteamOS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是可用的 SteamOS 磁盘"
+          }
+        }
+      }
+    },
+    "Not a valid mount point; not saved" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Недопустимая точка монтирования; не сохранено"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "挂载点无效；未保存"
+          }
+        }
+      }
+    },
     "Not available here: %@; MoltenVK is used." : {
       "localizations" : {
         "ru" : {
@@ -3453,18 +4683,34 @@
         }
       }
     },
-    "Not available here: %@; Vulkan is used." : {
+    "Not now" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Недоступно здесь: %@; используется Vulkan."
+            "value" : "Не сейчас"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此处不可用：%@；将使用 Vulkan。"
+            "value" : "暂不"
+          }
+        }
+      }
+    },
+    "Not rated" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Без оценки"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未评分"
           }
         }
       }
@@ -3502,6 +4748,7 @@
       }
     },
     "Off" : {
+      "comment" : "Moonlight host status",
       "localizations" : {
         "ru" : {
           "stringUnit" : {
@@ -3645,6 +4892,22 @@
         }
       }
     },
+    "Open Moonlight on your device and select this Mac. Enter the four-digit PIN Moonlight shows in the pairing window on this Mac, then choose SteamOS." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Откройте Moonlight на устройстве и выберите этот Mac. Введите четырёхзначный PIN из Moonlight в окне сопряжения на Mac, затем выберите SteamOS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在设备上打开 Moonlight 并选择此 Mac。在 Mac 的配对窗口中输入 Moonlight 显示的四位 PIN，然后选择 SteamOS。"
+          }
+        }
+      }
+    },
     "Open Releases Page" : {
       "localizations" : {
         "ru" : {
@@ -3657,6 +4920,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "打开发布页面"
+          }
+        }
+      }
+    },
+    "Open Statistics Page" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открыть страницу статистики"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开统计页面"
           }
         }
       }
@@ -3705,6 +4984,102 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "输出设备"
+          }
+        }
+      }
+    },
+    "PIN" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PIN"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PIN"
+          }
+        }
+      }
+    },
+    "Pair" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сопрячь"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对"
+          }
+        }
+      }
+    },
+    "Pair Moonlight" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сопряжение Moonlight"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对 Moonlight"
+          }
+        }
+      }
+    },
+    "Pair a device" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сопряжение устройства"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对设备"
+          }
+        }
+      }
+    },
+    "Paired %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сопряжение: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对时间：%@"
+          }
+        }
+      }
+    },
+    "Paired clients" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сопряжённые клиенты"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已配对客户端"
           }
         }
       }
@@ -3885,6 +5260,39 @@
         }
       }
     },
+    "Playable with issues" : {
+      "comment" : "Game rating",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Играбельно с проблемами"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可玩但有问题"
+          }
+        }
+      }
+    },
+    "Player %lld" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Игрок %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "玩家 %lld"
+          }
+        }
+      }
+    },
     "Powered off" : {
       "localizations" : {
         "ru" : {
@@ -3897,6 +5305,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已关机"
+          }
+        }
+      }
+    },
+    "Preparing FX Steam Launcher %@…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подготовка FX Steam Launcher %@…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备 FX Steam Launcher %@…"
           }
         }
       }
@@ -3933,6 +5357,22 @@
         }
       }
     },
+    "Quit FX Steam Launcher completely before replacing or moving it, then open the copy in Applications." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перед заменой или перемещением FX Steam Launcher полностью завершите его работу, затем откройте копию из папки «Программы»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换或移动 FX Steam Launcher 前，请将其完全退出，然后打开“应用程序”中的副本。"
+          }
+        }
+      }
+    },
     "Quitting FX Steam Launcher shuts SteamOS down: it resumes and shuts down cleanly. The suspended state (and a running game's unsaved progress) is not kept." : {
       "localizations" : {
         "ru" : {
@@ -3945,6 +5385,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "退出 FX Steam Launcher 会关闭 SteamOS：它会先恢复运行，再正常关机。挂起状态（以及正在运行的游戏中未保存的进度）不会保留。"
+          }
+        }
+      }
+    },
+    "Ratings are optional and shared with the statistics. A game with Share off is kept only on this Mac." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оценки необязательны и отправляются вместе со статистикой. Данные игры с выключенным «Делиться» остаются только на этом Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "评分是可选的，会随统计一起共享。关闭“共享”的游戏的数据只保存在这台 Mac 上。"
           }
         }
       }
@@ -3993,6 +5449,150 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在读取软件包清单…"
+          }
+        }
+      }
+    },
+    "Reclaim" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Освободить"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回收"
+          }
+        }
+      }
+    },
+    "Reclaim Disk Space" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Освободить место на диске"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回收磁盘空间"
+          }
+        }
+      }
+    },
+    "Reclaim Disk Space requires the disk image to be on an APFS volume. HFS+, exFAT and other filesystems cannot reclaim space this way." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Освободить место на диске» работает, только если образ диска лежит на томе APFS. HFS+, exFAT и другие файловые системы так место не освобождают."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“回收磁盘空间”要求磁盘映像位于 APFS 卷上。HFS+、exFAT 等文件系统无法以这种方式回收空间。"
+          }
+        }
+      }
+    },
+    "Reclaim Disk Space…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Освободить место на диске…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回收磁盘空间…"
+          }
+        }
+      }
+    },
+    "Reclaiming disk space…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Освобождение места на диске…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在回收磁盘空间…"
+          }
+        }
+      }
+    },
+    "Recommended: %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Рекомендуется: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推荐：%@"
+          }
+        }
+      }
+    },
+    "Recommended: loading…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Рекомендация: загрузка…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推荐：正在加载…"
+          }
+        }
+      }
+    },
+    "Recommended: unavailable" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Рекомендация недоступна"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推荐：暂不可用"
+          }
+        }
+      }
+    },
+    "Recorded sessions kept on this Mac: %lld." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Записанных сессий на этом Mac: %lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存在这台 Mac 上的会话：%lld。"
           }
         }
       }
@@ -4286,6 +5886,54 @@
         }
       }
     },
+    "Restart" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перезапустить"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重启"
+          }
+        }
+      }
+    },
+    "Restart Steam" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перезапустить Steam"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重启 Steam"
+          }
+        }
+      }
+    },
+    "Restart Steam to apply the game profiles?" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перезапустить Steam, чтобы применить профили игр?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重启 Steam 以应用游戏配置？"
+          }
+        }
+      }
+    },
     "Restart VM" : {
       "localizations" : {
         "ru" : {
@@ -4314,6 +5962,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重启虚拟机以应用"
+          }
+        }
+      }
+    },
+    "Restart the VM with %@ for %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Restart the VM with %1$@ for %2$@?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перезапустить ВМ с драйвером %@ для %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 %@ 重启虚拟机以运行 %@？"
           }
         }
       }
@@ -4480,6 +6150,55 @@
         }
       }
     },
+    "Revoke" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отозвать доступ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销访问权限"
+          }
+        }
+      }
+    },
+    "Revoke this client's access?" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отозвать доступ этого клиента?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销此客户端的访问权限？"
+          }
+        }
+      }
+    },
+    "Runs well" : {
+      "comment" : "Game rating",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Работает хорошо"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行良好"
+          }
+        }
+      }
+    },
     "SSH port" : {
       "localizations" : {
         "ru" : {
@@ -4560,6 +6279,22 @@
         }
       }
     },
+    "Send this game's sessions and rating" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отправлять сессии и оценку этой игры"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送此游戏的会话和评分"
+          }
+        }
+      }
+    },
     "Sending the report…" : {
       "localizations" : {
         "ru" : {
@@ -4588,6 +6323,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "会话已启动"
+          }
+        }
+      }
+    },
+    "Sessions already recorded on this Mac are included. You can rate games, turn sharing off for single games or altogether in Settings > Games." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Уже записанные на этом Mac сессии тоже будут отправлены. Оценить игры, отключить отправку для отдельных игр или полностью можно в «Настройки > Игры»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在这台 Mac 上记录的会话也会一并发送。你可以在“设置 > 游戏”中为游戏评分，或为单个游戏或全部关闭共享。"
+          }
+        }
+      }
+    },
+    "Sessions waiting to be sent: %lld." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сессий ждут отправки: %lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待发送的会话：%lld。"
+          }
+        }
+      }
+    },
+    "Sessions: %lld" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сессий: %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话：%lld"
           }
         }
       }
@@ -4640,6 +6423,22 @@
         }
       }
     },
+    "Share" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Делиться"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共享"
+          }
+        }
+      }
+    },
     "Share clipboard with SteamOS" : {
       "localizations" : {
         "ru" : {
@@ -4652,6 +6451,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "与 SteamOS 共享剪贴板"
+          }
+        }
+      }
+    },
+    "Share game statistics" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Делиться статистикой игр"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共享游戏统计"
+          }
+        }
+      }
+    },
+    "Share game statistics?" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Делиться статистикой игр?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共享游戏统计？"
+          }
+        }
+      }
+    },
+    "Shared folder" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Общая папка"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共享文件夹"
           }
         }
       }
@@ -5063,6 +6910,55 @@
         }
       }
     },
+    "Starts, but unplayable" : {
+      "comment" : "Game rating",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запускается, но играть нельзя"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "能启动但无法游玩"
+          }
+        }
+      }
+    },
+    "Status" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Состояние"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "状态"
+          }
+        }
+      }
+    },
+    "Steam Controller" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steam Controller"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Steam Controller"
+          }
+        }
+      }
+    },
     "Steam Deck client" : {
       "localizations" : {
         "ru" : {
@@ -5271,6 +7167,44 @@
         }
       }
     },
+    "SteamOS could not start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS could not start"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось запустить SteamOS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 无法启动"
+          }
+        }
+      }
+    },
+    "SteamOS could not trim free blocks. See the log for details." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS не смогла освободить свободные блоки. Подробности — в логе."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 未能修剪空闲块。详情请查看日志。"
+          }
+        }
+      }
+    },
     "SteamOS disk could not be grown" : {
       "localizations" : {
         "ru" : {
@@ -5351,6 +7285,22 @@
         }
       }
     },
+    "SteamOS is not ready yet; wait until Steam has started" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS ещё не готова; дождитесь запуска Steam"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 尚未就绪；请等到 Steam 启动完成"
+          }
+        }
+      }
+    },
     "SteamOS is not responding…" : {
       "localizations" : {
         "ru" : {
@@ -5379,6 +7329,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SteamOS 未运行：仅包含本次会话的控制台日志。"
+          }
+        }
+      }
+    },
+    "SteamOS is shutting down. FX Steam Launcher opens again once the update is installed." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS выключается. FX Steam Launcher откроется снова, когда обновление будет установлено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 正在关闭。更新安装完成后 FX Steam Launcher 会重新打开。"
           }
         }
       }
@@ -5416,6 +7382,38 @@
         }
       }
     },
+    "SteamOS is trimming free blocks. Keep SteamOS running until this finishes." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS обрезает свободные блоки. Не останавливайте SteamOS, пока это не закончится."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 正在整理空闲块。完成前请保持 SteamOS 运行。"
+          }
+        }
+      }
+    },
+    "SteamOS keeps running; the download continues when this window is hidden." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS продолжает работать; загрузка продолжится и при скрытом окне."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 继续运行；隐藏此窗口后下载仍会继续。"
+          }
+        }
+      }
+    },
     "SteamOS must be stopped. The partition and filesystem grow on its next boot." : {
       "localizations" : {
         "ru" : {
@@ -5432,18 +7430,18 @@
         }
       }
     },
-    "SteamOS raw GPT disk, used in place (never copied). If Steam reports not enough space, Grow Disk… adds room for games without recreating it. Free space on the Mac does not automatically increase SteamOS's capacity." : {
+    "SteamOS raw GPT disk, used in place (never copied). If Steam reports not enough space, Grow Disk… adds room for games without recreating it. After uninstalling games, Reclaim Disk Space… can reduce the image's allocated size only on APFS (capacity stays the same). Clones and snapshots may retain space on the Mac. Free space on the Mac does not automatically increase SteamOS's capacity." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Диск SteamOS в формате raw GPT используется на месте (никогда не копируется). Если Steam сообщает о нехватке места, «Увеличить диск…» добавит место для игр без пересоздания диска. Свободное место на Mac не увеличивает объём SteamOS автоматически."
+            "value" : "Диск SteamOS (raw GPT), используется на месте, без копирования. Если Steam пишет, что не хватает места, «Увеличить диск…» добавит место для игр без пересоздания диска. После удаления игр «Освободить место на диске…» может уменьшить выделенный размер образа, но только на APFS (ёмкость не меняется). Клоны и снимки могут удерживать место на Mac. Свободное место на Mac само по себе не увеличивает ёмкость SteamOS."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SteamOS 原始 GPT 磁盘，直接在原位置使用（不会拷贝）。若 Steam 提示空间不足，可用“扩展磁盘…”增加游戏空间，无需重新创建磁盘。Mac 上的可用空间不会自动增加 SteamOS 的容量。"
+            "value" : "SteamOS 原始 GPT 磁盘，原地使用（不会复制）。如果 Steam 提示空间不足，“扩展磁盘…”可在不重建的情况下为游戏增加空间。卸载游戏后，“回收磁盘空间…”仅在 APFS 上可以减小映像的已分配大小（容量不变）。克隆和快照可能仍在 Mac 上占用空间。Mac 上的可用空间不会自动增加 SteamOS 的容量。"
           }
         }
       }
@@ -5509,6 +7507,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SteamOS 已挂起 — FX Steam Launcher"
+          }
+        }
+      }
+    },
+    "SteamOS trimmed free blocks. Allocated size is still about %@; little or nothing changed this time. The image may already be compact." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS освободила свободные блоки. Выделенный размер по-прежнему около %@; на этот раз почти ничего не изменилось. Возможно, образ уже компактный."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SteamOS 已修剪空闲块。已分配大小仍约为 %@；这次几乎没有变化，映像可能已经很紧凑。"
           }
         }
       }
@@ -5589,6 +7603,60 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已停止 — 点按“创建”可从上次停止的位置继续"
+          }
+        }
+      }
+    },
+    "Stream SteamOS and its games directly from this Mac. Off by default; only enabled hosts listen on the network." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Транслировать SteamOS и игры прямо с этого Mac. По умолчанию выключено; сервер слушает сеть только после включения."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接从此 Mac 串流 SteamOS 及其游戏。默认关闭；仅在启用时监听网络。"
+          }
+        }
+      }
+    },
+    "Streaming" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Трансляция"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "串流"
+          }
+        }
+      }
+    },
+    "Streaming to %@ at %lld×%lld@%lld %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Streaming to %1$@ at %2$lld×%3$lld@%4$lld %5$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Трансляция на %@: %lld×%lld@%lld %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在向 %@ 串流：%lld×%lld@%lld %@"
           }
         }
       }
@@ -5786,6 +7854,28 @@
         }
       }
     },
+    "The FX Steam Launcher installation is incomplete: its SteamOS download tool (desync) is missing, unreadable or not executable. Download the latest DMG again and copy FX Steam Launcher to Applications, replacing the old copy. Check security software for a blocked or removed desync file, then try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The FX Steam Launcher installation is incomplete: its SteamOS download tool (desync) is missing, unreadable or not executable. Download the latest DMG again and copy FX Steam Launcher to Applications, replacing the old copy. Check security software for a blocked or removed desync file, then try again."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установка FX Steam Launcher неполная: инструмент загрузки SteamOS (desync) отсутствует, недоступен для чтения или запуска. Скачайте последнюю версию DMG заново и скопируйте FX Steam Launcher в «Программы», заменив старую копию. Проверьте, не заблокировала или не удалила ли desync защитная программа, затем повторите попытку."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FX Steam Launcher 安装不完整：SteamOS 下载工具（desync）缺失、无法读取或无法执行。请重新下载最新的 DMG，将 FX Steam Launcher 复制到“应用程序”并替换旧副本。请检查安全软件是否阻止或删除了 desync 文件，然后重试。"
+          }
+        }
+      }
+    },
     "The Steam Deck client beta (steamdeck_publicbeta). Standard sign-in with an on-screen QR code." : {
       "localizations" : {
         "ru" : {
@@ -5814,6 +7904,76 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SteamOS 控制台、本次启动的系统日志、核心转储、dmesg、Steam 客户端日志和 Proton 日志。可识别的 Steam ID、账户名称和电子邮件地址会被移除。"
+          }
+        }
+      }
+    },
+    "The bundled libwmtr_host.dylib runs DXMT's Metal calls on the Mac. Choose another executor library only if you trust it." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Входящая в комплект libwmtr_host.dylib выполняет вызовы Metal от DXMT на Mac. Выбирайте другую библиотеку-исполнитель, только если доверяете ей."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随附的 libwmtr_host.dylib 在 Mac 上执行 DXMT 的 Metal 调用。请仅在信任其他执行器库的情况下选择它。"
+          }
+        }
+      }
+    },
+    "The device must pair again to connect. Its current stream will end." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для подключения потребуется повторное сопряжение устройства. Его текущая трансляция завершится."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备须重新配对才能连接。其当前串流将结束。"
+          }
+        }
+      }
+    },
+    "The drive disconnected or reported an I/O error. Check its connection and run Disk Utility First Aid, then try again; use another drive if the error continues." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Диск отключился или сообщил об ошибке ввода-вывода. Проверьте подключение и запустите «Первую помощь» в Дисковой утилите, затем повторите попытку; если ошибка повторяется, используйте другой диск."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "磁盘已断开或报告 I/O 错误。请检查连接并运行“磁盘工具”的“急救”，然后重试；若错误持续，请使用其他磁盘。"
+          }
+        }
+      }
+    },
+    "The filesystem or its driver cannot create a file as large as the SteamOS disk. Choose an APFS, Mac OS Extended, or exFAT volume; APFS is recommended." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The filesystem or its driver cannot create a file as large as the SteamOS disk. Choose an APFS, Mac OS Extended, or exFAT volume; APFS is recommended."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файловая система или её драйвер не позволяет создать файл размером с диск SteamOS. Выберите том APFS, Mac OS Extended или exFAT; рекомендуется APFS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件系统或其驱动程序无法创建与 SteamOS 磁盘一样大的文件。请选择 APFS、Mac OS 扩展或 exFAT 卷；推荐使用 APFS。"
           }
         }
       }
@@ -5850,22 +8010,6 @@
         }
       }
     },
-    "The image chosen in Settings is not readable:\n%@\n\n" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Не удалось прочитать образ, выбранный в настройках:\n%@\n\n"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在“设置”中选择的映像无法读取：\n%@\n\n"
-          }
-        }
-      }
-    },
     "The installed libkrun has no %@ (rebuild host/libkrun and reinstall the launcher)." : {
       "localizations" : {
         "ru" : {
@@ -5894,6 +8038,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "启动器最近约 200 行日志（启动器、MoltenVK、libkrun 和 virglrenderer 消息；个人文件夹路径缩写为 ~）及启动阶段。"
+          }
+        }
+      }
+    },
+    "The location is read-only. Choose a writable folder, not the mounted FX Steam Launcher installer." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это место доступно только для чтения. Выберите папку с правом записи, а не смонтированный установщик FX Steam Launcher."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此位置为只读。请选择可写文件夹，不要选择已挂载的 FX Steam Launcher 安装映像。"
           }
         }
       }
@@ -6032,6 +8192,22 @@
         }
       }
     },
+    "The statistics service is not reachable. Sessions waiting to be sent: %lld." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервис статистики недоступен. Сессий ждут отправки: %lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接统计服务。等待发送的会话：%lld。"
+          }
+        }
+      }
+    },
     "The virtual machine ended without being asked to (%@)." : {
       "localizations" : {
         "ru" : {
@@ -6044,6 +8220,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "虚拟机意外终止（%@）。"
+          }
+        }
+      }
+    },
+    "The volume ran out of space while creating SteamOS. Free some space or choose another volume, then try again." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Во время создания SteamOS на томе закончилось место. Освободите место или выберите другой том и повторите попытку."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建 SteamOS 时卷空间已耗尽。请释放空间或选择其他卷，然后重试。"
+          }
+        }
+      }
+    },
+    "There is no permission to write to the disk or download cache. Choose a writable folder or check Finder → Get Info → Sharing & Permissions." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет права записи на диск или в кеш загрузок. Выберите папку с правом записи или проверьте Finder → Свойства → Общий доступ и права доступа."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有写入磁盘或下载缓存的权限。请选择可写文件夹，或检查“访达”→“显示简介”→“共享与权限”。"
+          }
+        }
+      }
+    },
+    "This Mac: model, chip, CPU and GPU cores, memory, macOS version; the VM's size, Vulkan driver and SteamOS build; the launcher version." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот Mac: модель, чип, ядра CPU и GPU, память, версия macOS; размер ВМ, драйвер Vulkan и сборка SteamOS; версия лаунчера."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac：型号、芯片、CPU 和 GPU 核心数、内存、macOS 版本；虚拟机规格、Vulkan 驱动和 SteamOS 版本；启动器版本。"
           }
         }
       }
@@ -6076,6 +8300,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本次启动未配置声音设备。"
+          }
+        }
+      }
+    },
+    "This controller needs Input Monitoring to pass through as itself. Enable FX Steam Launcher in Mac System Settings › Privacy & Security › Input Monitoring. If access is already enabled but the controller is still unavailable, restart the launcher." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для этого контроллера нужен доступ «Мониторинг ввода», чтобы передавать его в SteamOS как исходное устройство. Включите FX Steam Launcher в Системных настройках Mac › Конфиденциальность и безопасность › Мониторинг ввода. Если доступ уже включён, но контроллер всё ещё недоступен, перезапустите лаунчер."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此控制器需要“输入监控”权限才能以自身身份传入 SteamOS。请在 Mac 系统设置 › 隐私与安全性 › 输入监控中启用 FX Steam Launcher。如果已启用访问权限但控制器仍不可用，请重新启动启动器。"
+          }
+        }
+      }
+    },
+    "This development build does not send statistics." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта сборка для разработки не отправляет статистику."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此开发版本不发送统计数据。"
           }
         }
       }
@@ -6140,6 +8396,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "切换全屏"
+          }
+        }
+      }
+    },
+    "Trim free blocks inside SteamOS to reduce the sparse disk image's allocated size. Games and saves are not deleted. Capacity stays the same. This works only when the image is on APFS; clones and snapshots may retain space on the Mac. Currently %@ allocated. This can take several minutes." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Освободить свободные блоки внутри SteamOS, чтобы уменьшить выделенный размер разреженного образа диска. Игры и сохранения не удаляются, ёмкость не меняется. Работает, только если образ лежит на APFS; клоны и снимки могут удерживать место на Mac. Сейчас выделено %@. Это может занять несколько минут."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 SteamOS 内修剪空闲块，以减小稀疏磁盘映像的已分配大小。游戏和存档不会被删除，容量不变。仅当映像位于 APFS 上时有效；克隆和快照可能仍在 Mac 上占用空间。当前已分配 %@。这可能需要几分钟。"
+          }
+        }
+      }
+    },
+    "Turn on Share game statistics above to send anything" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтобы что-то отправлялось, включите «Делиться статистикой игр» выше"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需先开启上方的“共享游戏统计”才会发送"
           }
         }
       }
@@ -6224,6 +8512,22 @@
         }
       }
     },
+    "Use Bundled" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Встроенная"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用内置"
+          }
+        }
+      }
+    },
     "Use Default" : {
       "localizations" : {
         "ru" : {
@@ -6252,6 +8556,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "使用已有磁盘…"
+          }
+        }
+      }
+    },
+    "Use NAME=value words (up to 256 characters). Names must start with VKD3D_, DXVK_, PROTON_, WINE_, MESA_, RADV_, VK_, DXMT_, MTL_ or STEAMAC_; values may contain letters, digits and _.,:;+- only." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Используйте слова ИМЯ=значение (до 256 символов). Имена должны начинаться с VKD3D_, DXVK_, PROTON_, WINE_, MESA_, RADV_, VK_, DXMT_, MTL_ или STEAMAC_; значения могут содержать только латинские буквы, цифры и _.,:;+-."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请使用 NAME=value 格式的词（最多 256 个字符）。名称必须以 VKD3D_、DXVK_、PROTON_、WINE_、MESA_、RADV_、VK_、DXMT_、MTL_ 或 STEAMAC_ 开头；值只能包含英文字母、数字和 _.,:;+-。"
+          }
+        }
+      }
+    },
+    "Use as a Steam library" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Использовать как библиотеку Steam"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用作 Steam 库"
+          }
+        }
+      }
+    },
+    "Use the Mac's keyboard layouts in Desktop Mode" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Раскладки клавиатуры Mac в режиме рабочего стола"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在桌面模式中使用 Mac 的键盘布局"
           }
         }
       }
@@ -6497,22 +8849,6 @@
         }
       }
     },
-    "Vulkan (classic)" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vulkan (классический)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vulkan（经典）"
-          }
-        }
-      }
-    },
     "Vulkan driver" : {
       "localizations" : {
         "ru" : {
@@ -6525,6 +8861,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vulkan 驱动"
+          }
+        }
+      }
+    },
+    "Vulkan driver applies on the next start of this game (VM restart required)." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Драйвер Vulkan сменится при следующем запуске игры (нужен перезапуск ВМ)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vulkan 驱动将在下次启动此游戏时生效（需要重启虚拟机）。"
           }
         }
       }
@@ -6561,7 +8913,9 @@
         }
       }
     },
-    "W" : {},
+    "W" : {
+
+    },
     "Waiting for SteamOS to draw…" : {
       "localizations" : {
         "ru" : {
@@ -6591,6 +8945,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在唤醒…"
+          }
+        }
+      }
+    },
+    "What Is Sent…" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Что отправляется…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送内容…"
           }
         }
       }
@@ -6820,6 +9190,22 @@
         }
       }
     },
+    "Your rating of a game, if you set one in Settings > Games." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ваша оценка игры, если вы поставили её в «Настройки > Игры»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你对游戏的评分（如果你在“设置 > 游戏”中设置了）。"
+          }
+        }
+      }
+    },
     "another SteamOS disk is being created with the download cache %@: wait for it to finish or cancel it" : {
       "localizations" : {
         "ru" : {
@@ -6948,6 +9334,38 @@
         }
       }
     },
+    "cannot be loaded" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "не загружается"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载"
+          }
+        }
+      }
+    },
+    "cannot read %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "не удалось прочитать %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 %@"
+          }
+        }
+      }
+    },
     "click to capture the mouse" : {
       "localizations" : {
         "ru" : {
@@ -6980,18 +9398,18 @@
         }
       }
     },
-    "drives the virtual pad" : {
+    "downloading SteamOS failed (%@): check the internet connection and try again; the download resumes where it stopped" : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "управляет виртуальным контроллером"
+            "value" : "не удалось загрузить SteamOS (%@): проверьте подключение к интернету и попробуйте снова; загрузка продолжится с того места, где остановилась"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "控制虚拟控制器"
+            "value" : "下载 SteamOS 失败（%@）：请检查互联网连接后重试；下载将从中断处继续"
           }
         }
       }
@@ -7076,6 +9494,22 @@
         }
       }
     },
+    "last played %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "последний запуск %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次游玩 %@"
+          }
+        }
+      }
+    },
     "memory unknown" : {
       "localizations" : {
         "ru" : {
@@ -7156,6 +9590,22 @@
         }
       }
     },
+    "no answer from SteamOS within %lld s" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "нет ответа от SteamOS за %lld с"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 秒内未收到 SteamOS 的回复"
+          }
+        }
+      }
+    },
     "no disk image" : {
       "localizations" : {
         "ru" : {
@@ -7204,22 +9654,6 @@
         }
       }
     },
-    "no permission to write in %@: choose a folder you can write to, or allow writing in Finder → Get Info → Sharing & Permissions" : {
-      "localizations" : {
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "нет разрешения на запись в %@: выберите папку с доступом на запись или разрешите запись в Finder → «Свойства» → «Общий доступ и права доступа»"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无权在 %@ 中写入：请选择可写入的文件夹，或在“访达 → 显示简介 → 共享与权限”中允许写入"
-          }
-        }
-      }
-    },
     "none" : {
       "localizations" : {
         "ru" : {
@@ -7248,6 +9682,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "不是 SteamOS 磁盘"
+          }
+        }
+      }
+    },
+    "not a wmtr executor library" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "не библиотека-исполнитель wmtr"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不是 wmtr 执行器库"
           }
         }
       }
@@ -7523,6 +9973,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "所选 SteamOS 磁盘已更改；请重新选择其容量"
+          }
+        }
+      }
+    },
+    "the volume ran out of space while downloading SteamOS (%@): free some space and try again; the download resumes where it stopped" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "на томе закончилось место во время загрузки SteamOS (%@): освободите место и попробуйте снова; загрузка продолжится с того места, где остановилась"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下载 SteamOS 时宗卷空间不足（%@）：请释放一些空间后重试；下载将从中断处继续"
           }
         }
       }

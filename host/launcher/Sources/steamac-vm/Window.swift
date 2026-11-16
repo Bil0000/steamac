@@ -4,6 +4,7 @@ import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
 import GameController
+import QuartzCore
 
 /// Routes key events to the guest before AppKit's key-equivalent/menu machinery (which would
 /// otherwise swallow Cmd-combos and their keyUps).
@@ -70,12 +71,17 @@ final class WindowController: NSObject, NSWindowDelegate {
     private var mouseButtons = Set<UInt16>()
     private var lastAbs: (Int32, Int32) = (-1, -1)
     private var captured = false { didSet { window.invalidateCursorRects(for: view) } }
+    /// Last reported presentation state; log changes, not every mouse motion / wmtr present.
+    private var lastCursorPresentation: (captured: Bool, covered: Bool, hidden: Bool, overlay: Bool)?
     private var relRemainder = (0.0, 0.0)
     private var rawMouse = false
     private var mouseConnectObserver: NSObjectProtocol?
     /// Auto mode: where the guest cursor is (guest pixels); nil = unknown, re-anchor first.
     private var guestCursor: (Int, Int)?
     private var lastPointerMotion = Date.distantPast
+    /// The surface gamescope moves the cursor on, in its pixels, as the agent reports it with
+    /// each focus line (nil = not reported: the display).
+    private var guestSurface: (Int, Int)?
     /// What the guest says has focus (progress agent `focus …`); Steam until told otherwise.
     private(set) var guestFocus: GuestFocus = .steam { didSet { window.invalidateCursorRects(for: view) } }
     private var wheelHiRemainder = (0.0, 0.0)   // (vertical, horizontal) in 1/120 notch units
@@ -91,6 +97,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     private var focusedGameSize: (Int, Int)?
     /// MetalFX factor limit per axis while a lower game resolution is shown (above it: bilinear).
     static let lowResMetalFXMaxRatio = 1.5
+    private var preStreamGuestSize: (Int, Int)
     private var guestResizeWork: DispatchWorkItem?
     private var inFullScreenTransition = false
     static let minGuestSize = NSSize(width: 800, height: 500)
@@ -116,6 +123,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         self.scanoutSize = guest
         self.requestedGuestSize = guest
         self.bootGuestSize = guest
+        self.preStreamGuestSize = guest
         let rect = NSRect(x: 0, y: 0, width: width, height: height)
         let screen = WindowController.targetScreen()
         window = NSWindow(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -154,6 +162,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             self.updatePill()
             self.window.invalidateCursorRects(for: self.view)
         }
+        stallView.onVisibilityChange = { [weak self] in self?.refreshHostCursor() }
         pauseView.frame = view.bounds
         view.addSubview(pauseView)
         sleepView.frame = view.bounds
@@ -176,8 +185,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             if self.captured && self.mouseMode == .auto && !self.clickCaptures { self.releasePointer() }
             self.updateTitle()
         })
-        // Metal Performance HUD (libMTLHud, loaded by MTL_HUD_ENABLED=1, see main.swift), shown and
-        // hidden at runtime through the layer (VMView.metalHUD).
+        // Only injected when enabled at boot; hiding an injected HUD cannot unload its handlers.
         applyMetalHUD(settings.metalHUD)
         subscriptions.append(settings.$metalHUD.dropFirst().removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] on in
             self?.applyMetalHUD(on)
@@ -231,9 +239,9 @@ final class WindowController: NSObject, NSWindowDelegate {
     func scanoutResized(width: Int, height: Int) {
         view.contentPixelSize = CGSize(width: width, height: height)
         scanoutSize = (width, height)
-        window.invalidateCursorRects(for: view)
         updateUpscaleCap()
         view.redraw()
+        refreshHostCursor()   // the black bars moved
     }
 
     /// Lower game resolution (Settings > Display > "Upscale lower game resolutions"): the guest
@@ -269,6 +277,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         guard view.renderer.upscaleCap != cap else { return }
         view.renderer.upscaleCap = cap
         view.redraw()
+        refreshHostCursor()   // the black bars moved
     }
 
     /// Guest size for the current window: content size in points times `pixelScale`.
@@ -290,7 +299,35 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// Set while the VM is paused (suspended, guest asleep): window size changes (leaving full
     /// screen before the window hides, resizes while it sleeps) do not resize the guest until it
     /// runs again.
-    var holdGuestSize = false { didSet { if oldValue && !holdGuestSize { scheduleGuestResize() } } }
+    var holdGuestSize = false {
+        didSet {
+            if oldValue && !holdGuestSize {
+                if restoreStreamDisplay { endStreamDisplay() } else { scheduleGuestResize() }
+            }
+        }
+    }
+    /// Separate from the suspend hold: ending a stream must not release a paused VM's hold.
+    private var streamHoldsGuestSize = false
+    private var restoreStreamDisplay = false
+
+    func beginStreamDisplay(width: Int, height: Int) {
+        if !streamHoldsGuestSize && !restoreStreamDisplay { preStreamGuestSize = requestedGuestSize }
+        streamHoldsGuestSize = true
+        restoreStreamDisplay = false
+        guestResizeWork?.cancel()
+        requestedGuestSize = (width, height)
+        onGuestSizeRequest?(width, height)
+    }
+
+    func endStreamDisplay() {
+        guard streamHoldsGuestSize || restoreStreamDisplay else { return }
+        streamHoldsGuestSize = false
+        restoreStreamDisplay = holdGuestSize
+        guard !holdGuestSize else { return }
+        let size = settings.followWindowSize ? desiredGuestSize() : preStreamGuestSize
+        requestedGuestSize = size
+        onGuestSizeRequest?(size.0, size.1)
+    }
     /// One-shot: the window has left full screen.
     var onDidExitFullScreen: (() -> Void)?
 
@@ -302,7 +339,8 @@ final class WindowController: NSObject, NSWindowDelegate {
         guard settings.followWindowSize || settings.upscaleLowerResolutions || requestedGuestSize != bootGuestSize
         else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.window.inLiveResize, !self.inFullScreenTransition, !self.holdGuestSize else { return }
+            guard let self, !self.window.inLiveResize, !self.inFullScreenTransition,
+                  !self.holdGuestSize, !self.streamHoldsGuestSize else { return }
             let size = self.desiredGuestSize()
             guard size != self.requestedGuestSize else { return }
             self.requestedGuestSize = size
@@ -317,14 +355,20 @@ final class WindowController: NSObject, NSWindowDelegate {
     /// Programmatic / zoom-button resizes (no live resize session).
     func windowDidResize(_ notification: Notification) {
         if !window.inLiveResize && !inFullScreenTransition { scheduleGuestResize() }
+        refreshHostCursor()
     }
 
     func windowWillEnterFullScreen(_ notification: Notification) { inFullScreenTransition = true }
     func windowWillExitFullScreen(_ notification: Notification) { inFullScreenTransition = true }
-    func windowDidEnterFullScreen(_ notification: Notification) { inFullScreenTransition = false; scheduleGuestResize() }
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        inFullScreenTransition = false
+        scheduleGuestResize()
+        refreshHostCursor()
+    }
     func windowDidExitFullScreen(_ notification: Notification) {
         inFullScreenTransition = false
         scheduleGuestResize()
+        refreshHostCursor()
         if let done = onDidExitFullScreen {
             onDidExitFullScreen = nil
             done()
@@ -381,6 +425,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         }
         updateTitle()
         updateNoPictureGate()
+        refreshHostCursor()
     }
 
     /// SuspendController: the guest went to sleep (VM paused) / woke up. "Game paused" gives way
@@ -394,6 +439,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             sleepView.hide()
             captureIfGameActive()
         }
+        refreshHostCursor()
         updateTitle()
         updateNoPictureGate()
     }
@@ -419,6 +465,19 @@ final class WindowController: NSObject, NSWindowDelegate {
         let previousFocus = progress.onFocus
         progress.onFocus = { [weak self] f in previousFocus?(f); self?.guestFocusChanged(f) }
         progress.onGameSize = { [weak self] w, h in self?.guestGameSize(width: w, height: h) }
+        progress.onFocusSurface = { [weak self] s in self?.guestSurfaceChanged(s) }
+        let previousCursor = progress.onCursorVisible
+        progress.onCursorVisible = { [weak self] v in previousCursor?(v); self?.view.guestCursorVisibility(v) }
+        let previousCursorImage = progress.onCursorImage
+        progress.onCursorImage = { [weak self] w, h, xhot, yhot, bgra in
+            previousCursorImage?(w, h, xhot, yhot, bgra)
+            self?.view.guestCursorImage(width: w, height: h, xhot: xhot, yhot: yhot, bgra: bgra)
+        }
+        let previousCursorPosition = progress.onCursorPosition
+        progress.onCursorPosition = { [weak self] x, y, w, h in
+            previousCursorPosition?(x, y, w, h)
+            self?.view.guestCursorPosition(x: x, y: y, windowWidth: w, windowHeight: h)
+        }
         let previousReady = progress.onReady
         progress.onReady = { [weak self] in previousReady?(); self?.overlay.hide() }
         let previousShutdown = progress.onShutdown
@@ -474,6 +533,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         } else {
             pill.hide()
         }
+        refreshHostCursor()
     }
 
     /// Full overlay → pill (the progress stays on screen; input goes through). `sticky`: the menu
@@ -512,12 +572,21 @@ final class WindowController: NSObject, NSWindowDelegate {
 
     /// Menu "Show Metal Performance HUD" / Ctrl+Cmd+P: flips the setting (persisted, Settings > Display).
     func toggleMetalHUD() {
-        settings.metalHUD.toggle()
+        // Both callers are AppKit's main-thread menu/event dispatch, even though this
+        // controller predates actor annotations.
+        MainActor.assumeIsolated {
+            guard settings.metalHUD || MetalHUD.confirmEnable(current: settings.metalHUD, nextDriver: settings.vulkanDriver) else { return }
+            settings.metalHUD.toggle()
+        }
     }
 
     private func applyMetalHUD(_ on: Bool) {
-        view.metalHUD = on
-        log("display: Metal Performance HUD \(on ? "on" : "off")")
+        let shown = MetalHUD.visible(requested: on)
+        view.metalHUD = shown
+        CrashReporting.metalHUDChanged()
+        log("display: Metal Performance HUD \(shown ? "on" : "off") (library \(MetalHUD.loaded ? "loaded" : "not loaded"))")
+        if on && MetalHUD.driver == .kosmickrisp { log("display: \(MetalHUD.kosmicKrispNote)") }
+        if on && !shown { log("display: enabling the Metal Performance HUD requires a VM restart") }
         view.redraw()   // the HUD changes with the next present; an idle guest sends none
     }
 
@@ -665,7 +734,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         onScreenRefreshRate?(LauncherSettings.refreshRate(of: s))
     }
     func windowDidBecomeKey(_ notification: Notification) {
-        view.refreshHostCursor()
+        refreshHostCursor()
         // Activated by a click: a click in the picture captures through pointerButton (not sent to the
         // game); one on the title bar may start a window drag, which a capture would freeze.
         let byClick = NSApp.currentEvent.map { [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains($0.type) } ?? false
@@ -781,44 +850,38 @@ final class WindowController: NSObject, NSWindowDelegate {
     // focused surface's pixels and clamps the cursor to that surface. So in `auto` mode the host
     // pointer is mirrored with exact relative deltas through the virtio mouse, after anchoring the
     // guest cursor at the top-left corner with one large negative delta whenever its position is
-    // unknown (pointer entered the picture, idle, after a capture). Desktop Mode runs inside the
-    // same gamescope (Plasma is one KWin window, `focus desktop <w>x<h>`), so it takes the same
-    // path, mapped onto that window as gamescope shows it. The absolute tablet is used only in
+    // unknown (pointer entered the picture, idle, after a capture), mapped onto the focused
+    // surface as gamescope shows it (PointerMap): the agent reports its size with every focus
+    // line (`focus steam 1920x1200`: Steam's window when its Display > Resolution is not native;
+    // Desktop Mode's Plasma window, `focus desktop <w>x<h>`). The absolute tablet is used only in
     // `tablet` mode.
 
     /// Idle time after which the guest cursor may have been moved by the guest (warps, a game's
     /// smaller surface clamping); the next motion re-anchors.
     static let reanchorAfterIdle: TimeInterval = 1.5
-    /// gamescope's `--max-scale` (guest/layer/usr/lib/steamos/gamescope-session): a smaller
-    /// surface is shown at most this many times its size.
-    static let gamescopeMaxScale = 2.0
 
     private var usesTablet: Bool {
         mouseMode == .tablet
     }
 
     var hostCursorRect: NSRect? {
-        guard inputs != nil, !usesTablet, !captured, !overlay.shown, pausedGame == nil, !guestAsleep else { return nil }
-        return pointerRect
+        guard inputs != nil, !captured, Self.hostCursorShouldBeHidden(mouseMode: mouseMode, captured: false),
+              !bootOrShutdown, !overlay.shown, pausedGame == nil, !guestAsleep else { return nil }
+        return pointerMap.surfaceRect
     }
 
-    /// The surface relative motion lands on, in its pixels: the Desktop Mode desktop window, else
-    /// the display (Steam's UI and games fill it).
-    private var pointerSurface: (Int, Int) {
-        if case .desktop(let w, let h) = guestFocus { return (w, h) }
-        return scanoutSize
+    /// Current host view -> guest cursor mapping (the picture as drawn, the current scanout, the
+    /// focused surface).
+    var pointerMap: PointerMap {
+        PointerMap(picture: view.fitRect, display: scanoutSize, surface: guestSurface ?? scanoutSize)
     }
 
-    /// Where `pointerSurface` appears in the view: gamescope fits it into the display (aspect kept,
-    /// centred, upscaled at most `gamescopeMaxScale` times).
-    private var pointerRect: CGRect {
-        let fit = view.fitRect
-        let (w, h) = pointerSurface, (sw, sh) = scanoutSize
-        guard (w, h) != (sw, sh), w > 0, h > 0, sw > 0, sh > 0 else { return fit }
-        let scale = min(Double(sw) / Double(w), Double(sh) / Double(h), WindowController.gamescopeMaxScale)
-        let pw = fit.width * CGFloat(Double(w) * scale / Double(sw))
-        let ph = fit.height * CGFloat(Double(h) * scale / Double(sh))
-        return CGRect(x: fit.midX - pw / 2, y: fit.midY - ph / 2, width: pw, height: ph)
+    func guestSurfaceChanged(_ s: (Int, Int)?) {
+        guard s.map({ [$0.0, $0.1] }) != guestSurface.map({ [$0.0, $0.1] }) else { return }
+        guestSurface = s
+        log("input: guest pointer surface " + (s.map { "\($0.0)x\($0.1)" } ?? "= display"))
+        guestCursor = nil
+        refreshHostCursor()   // auto mode: the picture is this surface's rectangle
     }
 
     /// "Name (appid)" when the guest told us the game's name. IDs are interpolated as text: an
@@ -973,6 +1036,7 @@ extension WindowController {
         }
         CGAssociateMouseAndMouseCursorPosition(0)
         NSCursor.hide()
+        refreshHostCursor()
         log("input: mouse captured")
         updateTitle()
         window.invalidateCursorRects(for: pill)
@@ -992,6 +1056,7 @@ extension WindowController {
         log("input: mouse released")
         updateTitle()
         window.invalidateCursorRects(for: pill)
+        refreshHostCursor()
     }
 
     private func attachRawMouse(_ mouse: GCMouse) {
@@ -1016,7 +1081,55 @@ extension WindowController {
         cancelDeferredMetaTaps()
         releasePointer()
         releaseButtons()
+        reportCursorPresentation(at: window.mouseLocationOutsideOfEventStream)
         guestCursor = nil
+    }
+
+    /// gamescope draws the SteamOS cursor into scanout; auto mode hides the Mac cursor over the
+    /// picture (hostCursorRect, a transparent cursor rect in VMView) to avoid duplicates. On DXMT the
+    /// opaque wmtr picture covers scanout, so VMView draws the game's XFixes cursor above it, using
+    /// the guest's visibility, shape and position. Never infer a replacement Mac arrow from layer
+    /// coverage: the game may intentionally hide its cursor. Report both coverage and overlay
+    /// visibility to distinguish those cases.
+    /// Pure policy, also checked by --selftest-pointer. Captured hiding is owned by grabPointer.
+    static func hostCursorShouldBeHidden(mouseMode: MouseMode, captured: Bool) -> Bool {
+        captured || mouseMode == .auto
+    }
+
+    /// `point` is in the scanout layer's coordinates. Detect scanout occlusion, not guest cursor
+    /// visibility: only wmtr's opaque Metal sublayers replace scanout, not ordinary launcher layers.
+    static func guestCursorCovered(at point: CGPoint, in picture: CAMetalLayer) -> Bool {
+        for case let layer as CAMetalLayer in picture.sublayers ?? [] {
+            if !layer.isHidden && layer.isOpaque && layer.opacity == 1,
+               layer.contains(layer.convert(point, from: picture)) { return true }
+        }
+        return false
+    }
+
+    func guestCursorCovered(at location: NSPoint) -> Bool {
+        Self.guestCursorCovered(at: view.convert(location, from: nil), in: view.metalLayer)
+    }
+
+    /// `location` in window coordinates.
+    private func reportCursorPresentation(at location: NSPoint) {
+        let covered = guestCursorCovered(at: location)
+        let hidden = captured || (window.isKeyWindow && hostCursorRect?.contains(view.convert(location, from: nil)) == true)
+        let overlay = view.cursorOverlayVisible
+        guard lastCursorPresentation?.captured != captured || lastCursorPresentation?.covered != covered
+                || lastCursorPresentation?.hidden != hidden || lastCursorPresentation?.overlay != overlay else { return }
+        lastCursorPresentation = (captured, covered, hidden, overlay)
+        log("input: cursor presentation mode=\(mouseMode.rawValue) captured=\(captured) scanout-cursor-covered=\(covered) host-hidden=\(hidden) overlay-visible=\(overlay) focus=\(guestFocus) overlay={\(view.cursorOverlayDiagnostic)}")
+    }
+
+    /// What decides the cursor changed without the mouse moving: the progress phase, the pause
+    /// card, sleep, the pill, the overlay or the stall card and its "Report…" link coming or
+    /// going, the window becoming key or changing size, the scanout or the focused surface
+    /// changing (the picture's rectangle), a wmtr layer attaching/hiding/detaching, a capture ending.
+    /// Decided from where the pointer is now.
+    func refreshHostCursor() {
+        window.invalidateCursorRects(for: view)
+        view.refreshHostCursor()
+        reportCursorPresentation(at: window.mouseLocationOutsideOfEventStream)
     }
 
     private func button(for e: NSEvent) -> UInt16 {
@@ -1032,19 +1145,16 @@ extension WindowController {
         }
     }
 
-    private func inPicture(_ e: NSEvent) -> Bool {
-        (usesTablet ? view.fitRect : pointerRect).contains(view.convert(e.locationInWindow, from: nil))
+    private func inPicture(_ e: NSEvent) -> Bool { inPicture(at: e.locationInWindow) }
+
+    /// `location` in window coordinates.
+    private func inPicture(at location: NSPoint) -> Bool {
+        (usesTablet ? view.fitRect : pointerMap.surfaceRect).contains(view.convert(location, from: nil))
     }
 
-    /// Host pointer position in pixels of `pointerSurface`, clamped to it.
+    /// Host pointer position in pixels of the focused surface, clamped to it.
     private func guestPoint(_ e: NSEvent) -> (Int, Int) {
-        let p = view.convert(e.locationInWindow, from: nil)
-        let r = pointerRect
-        guard r.width > 0, r.height > 0 else { return (0, 0) }
-        let ux = Double((p.x - r.minX) / r.width)
-        let uy = 1 - Double((p.y - r.minY) / r.height)   // AppKit views are bottom-left origin
-        let (w, h) = pointerSurface
-        return (min(w - 1, max(0, Int(ux * Double(w)))), min(h - 1, max(0, Int(uy * Double(h)))))
+        pointerMap.surfacePoint(view.convert(e.locationInWindow, from: nil))
     }
 
     private func moveTablet(_ e: NSEvent) {
@@ -1063,7 +1173,8 @@ extension WindowController {
         let target = guestPoint(e)
         let now = Date()
         if guestCursor == nil || now.timeIntervalSince(lastPointerMotion) > WindowController.reanchorAfterIdle {
-            let far = -Int32(4 * (scanoutSize.0 + scanoutSize.1))
+            let (sw, sh) = pointerMap.surface
+            let far = -Int32(4 * (max(sw, scanoutSize.0) + max(sh, scanoutSize.1)))
             inputs.mouse.send([(EV.REL, REL.X, far), (EV.REL, REL.Y, far)])
             guestCursor = (0, 0)
         }
@@ -1093,6 +1204,7 @@ extension WindowController {
     }
 
     func pointerMoved(_ e: NSEvent) {
+        reportCursorPresentation(at: e.locationInWindow)
         if pauseView.shown || guestAsleep { return }   // nothing reaches a frozen game / sleeping guest
         if captured {
             if !rawMouse { moveRelative(dx: Double(e.deltaX), dy: Double(e.deltaY)) }
@@ -1239,6 +1351,7 @@ enum MainMenu {
         let hudItem = item("Show Metal Performance HUD", metalHUD, target, key: "p")
         hudItem.keyEquivalentModifierMask = [.command, .control]
         viewMenu.addItem(hudItem)
+        adoptHUDMenuItems(target: target, metalHUD: metalHUD)
         let help = NSMenu(title: String(localized: "Help", comment: "Application help menu"))
         help.addItem(item("Report a Problem…", report, target))
         let helpItem = NSMenuItem()
@@ -1288,6 +1401,43 @@ enum MainMenu {
         windowItem.submenu = window
         main.addItem(windowItem)
         NSApp.windowsMenu = window
+    }
+
+    /// libMTLHud (loaded by MTL_HUD_ENABLED=1, main.swift) adds a menu of its own once the HUD
+    /// attaches, with "Enable HUD": that item flips the library's global switch, which the HUD
+    /// mode the launcher sets on each layer (VMView.applyHUD) overrides, so it did nothing. It
+    /// drives the launcher's setting instead (one HUD, one state, ticked and titled by
+    /// validateMenuItem like the View menu item; the library's own "Enable"/"Hide HUD" title
+    /// would contradict the tick). Its Cmd-F9 never worked: AppKit drops the function-key
+    /// modifier the library asks for (the warning it logs at every start, before the item
+    /// reaches a menu), so the key equivalent goes too.
+    ///
+    /// The library adds the item before it sets its target, then adds the rest of its submenu
+    /// and finally the submenu's item to the main menu: every addition re-scans the menu it went
+    /// into with its submenus, now and once more after the library's current call returns, so
+    /// the item is adopted whatever order the library builds the menu in.
+    static let adoptedHUDItemTag = 0x4855
+    private static var hudMenuObserver: NSObjectProtocol?
+    private static func adoptHUDMenuItems(target: AnyObject, metalHUD: Selector) {
+        let toggle = NSSelectorFromString("toggleEnabled:")
+        func adopt(in menu: NSMenu) {
+            for i in menu.items {
+                if let sub = i.submenu { adopt(in: sub) }
+                guard i.action == toggle, let handler = NSClassFromString("HUDKeyboardEventHandler"),
+                      (i.target as AnyObject?)?.isKind(of: handler) == true else { continue }
+                i.target = target
+                i.action = metalHUD
+                i.tag = adoptedHUDItemTag
+                i.keyEquivalent = ""
+                i.keyEquivalentModifierMask = []
+                log("menu: libMTLHud's \"\(i.title)\" drives the Metal Performance HUD setting")
+            }
+        }
+        hudMenuObserver = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { n in
+            guard let menu = n.object as? NSMenu else { return }
+            adopt(in: menu)
+            DispatchQueue.main.async { adopt(in: menu) }
+        }
     }
 
     private static func item(_ title: LocalizedStringResource, _ action: Selector, _ target: AnyObject, key: String = "") -> NSMenuItem {
