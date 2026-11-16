@@ -217,6 +217,17 @@
 #              on that allocator, whose commit crashed in fillCommandBufferArgs (SIGSEGV; Bodycam training area).
 #              vkd3d-proton leaves one for each closed D3D12 command list it never executes. Test:
 #              tests/cmd-unsubmitted.c (48 submissions after unsubmitted recordings; crashed before).
+#   0055       steamac: indexed indirect draws with robustBufferAccess2 or pipelineRobustness are no longer
+#              unrolled when the index buffer address is 4-byte aligned and its range is a multiple of 4 indices
+#              (the length in words is then exact and a multiple of the index size). The unroll is a compute
+#              dispatch, which ends the render encoder: vkd3d-proton enables robustness, so each such draw cost two
+#              Metal encoders (about 700 per frame in Bodycam, the Venus ring thread CPU bound, the GPU half idle).
+#              Workaround 12: the macOS 26 Metal 4 indirect indexed draw gives indexBufferLength - 1 to the GPU as
+#              4-byte words (the direct draw rounds bytes to words), so while it is on the length is passed in
+#              4-byte words, rounded up to the index size for driver-made buffers; indices past the bound range
+#              read 0. Other index buffers keep the unroll. Test: tests/indirect-index-bound.c (Metal validation in
+#              assert mode; a draw past the range draws nothing, the last index of 8- and 12-byte ranges draws;
+#              2000 indexed indirect draws 164 ms before, 1.6 ms after).
 #
 # Two meson builds: (1) the host compiler tools mesa_clc + vtn_bindgen2 against Homebrew LLVM
 # (shared) and SPIRV-LLVM-Translator, installed into work/build/host-kosmickrisp/clc; (2) the driver
