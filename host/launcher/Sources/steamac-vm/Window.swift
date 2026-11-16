@@ -171,7 +171,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             self.updateSetupCard()
             self.window.invalidateCursorRects(for: self.view)
         }
-        stallView.onVisibilityChange = { [weak self] in self?.refreshHostCursor() }
+        stallView.onVisibilityChange = { [weak self] in self?.refreshHostCursor(); self?.updateSetupCard() }
         setupView.onVisibilityChange = { [weak self] in self?.refreshHostCursor() }
         pauseView.frame = view.bounds
         view.addSubview(pauseView)
@@ -559,9 +559,10 @@ final class WindowController: NSObject, NSWindowDelegate {
         updateSetupCard()
     }
 
-    /// The setup card shows over the Steam UI after `ready` (never over a game, the desktop or the overlay).
+    /// The setup card shows over the Steam UI after `ready` (never over a game, the desktop, the
+    /// overlay or the GPU-idle card, which has the same place).
     private func updateSetupCard() {
-        let shown = progress?.state.phase == .running && !overlay.shown && guestFocus == .steam
+        let shown = progress?.state.phase == .running && !overlay.shown && guestFocus == .steam && !stallView.shown
         var title: String?
         var restart = false
         switch shown ? setupStatus?.code : nil {

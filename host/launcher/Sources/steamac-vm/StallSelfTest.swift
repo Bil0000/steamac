@@ -283,8 +283,8 @@ enum StallSelfTest {
             }, wait: 3.0) {
                 expectHidden("Steam UI, heartbeat lost < 5 s")
             },
-            Step(name: "11-steam-ui-not-responding", action: {}, wait: 3.0) {
-                expectShown(title: String(localized: "SteamOS is not responding…"),
+            Step(name: "11-steam-ui-not-responding", action: { guest("setup preparing\n") }, wait: 3.0) {
+                (setup.shown ? "setup card should give way to the not-responding card" : nil) ?? expectShown(title: String(localized: "SteamOS is not responding…"),
                             detail: String(localized: "waiting (\(sampleSeconds) s)"))
                     ?? (view.cardFrame.contains(view.reportLinkFrame) && !view.reportLinkFrame.isEmpty
                         ? nil : "Report… link missing on the not-responding card: \(view.reportLinkFrame) in \(view.cardFrame)")
@@ -308,7 +308,11 @@ enum StallSelfTest {
                 heartbeats.store(true, ordering: .relaxed)
                 heartbeat()
             }, wait: 1.8) {
-                view.isIdle ? expectHidden("heartbeat back in the Steam UI") : "indicator view not hidden + idle after heartbeat"
+                view.isIdle ? expectHidden("heartbeat back in the Steam UI") ?? expectSetup(String(localized: "Setting up game support…"), spinner: true)
+                            : "indicator view not hidden + idle after heartbeat"
+            },
+            Step(name: "12-setup-off", action: { guest("setup off\n") }, wait: 0.6) {
+                expectSetup(nil)
             },
             // Switch to Desktop: the agent ends with the gamescope session, no heartbeat follows.
             Step(name: "12a-desktop-no-heartbeat-6.5s", action: { heartbeats.store(false, ordering: .relaxed); guest("focus desktop\n") },
