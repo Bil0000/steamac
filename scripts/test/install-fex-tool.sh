@@ -28,4 +28,7 @@ rm "$d/home/fex-eac-work/valve-backup/FEX-valve/usr/bin/FEXpidof"; run restore; 
 mk "$d/home/fex-eac-work/valve-backup/FEX-valve" FEX-patched; run restore; r=$?; [ $r != 0 ] && is x FEX-patched; ok $? "restore from a mismatched backup is refused, tool untouched"
 rm -rf "$d/home/fex-eac-work/valve-backup" "$V"; mk "$V" FEX-valve; mk "$N" FEX-patched; rm "$V/ConfigTemplate.json"; run; r=$?
 [ $r != 0 ] && is x FEX-valve && [ ! -e "$d/home/fex-eac-work/valve-backup" ]; ok $? "incomplete tool is refused before any backup or swap"
+rm -rf "$d/home/fex-eac-work/valve-backup" "$V"; mk "$V" FEX-valve; mk "$N" FEX-patched
+printf '#!/bin/sh\ncase "$2" in */.ConfigTemplate.json.new) exit 1;; esac\nexec /bin/cp "$@"\n' > "$d/bin/cp"; chmod +x "$d/bin/cp"; rm "$d/bin/pgrep"
+PATH="$d/bin:$PATH" run; r=$?; [ $r != 0 ] && is x FEX-valve; ok $? "a failed copy (disk full) leaves the old tool whole, not mixed"
 rm -rf "$d"; [ $fail = 0 ] && echo "install-fex-tool: all PASS" || { echo "install-fex-tool: FAILED"; exit 1; }
