@@ -144,6 +144,27 @@ class GameSetupTests(unittest.TestCase):
         self.assertIn("changed", output)
         self.assertNotIn("Runtime installed", output)
 
+    def test_status_file_starts_with_a_code_word(self):
+        status = self.home / "state/steamac/fex-eac/status"
+        self.hook()
+        self.assertEqual(status.read_text().split("\n")[0], "installed")
+        self.assertIn("Runtime installed", self.hook("status"))
+        self.assertNotIn("installed\n", self.hook("status"))
+        self.library_game(self.steam, "10", "Game", "EasyAntiCheat")
+        self.hook()
+        self.assertEqual(status.read_text().split("\n")[0], "need-tools Proton - Experimental;Proton EasyAntiCheat Runtime")
+        (self.bin / "pgrep").write_text('#!/bin/sh\n[ "$2" = steam ]\n')
+        self.hook(expected=1)
+        self.assertEqual(status.read_text().split("\n")[0], "failed")
+        (self.bin / "pgrep").write_text("#!/bin/sh\nexit 1\n")
+        self.cmdline.write_text("steamac.fex_eac=0")
+        self.hook()
+        self.assertEqual(status.read_text().split("\n")[0], "off")
+        self.cmdline.write_text("steamac.fex_eac=1")
+        (self.stage / ".steamac-fex-source").unlink()
+        self.hook()
+        self.assertEqual(status.read_text().split("\n")[0], "preparing")
+
     def test_running_steam_prevents_runtime_and_config_changes(self):
         (self.bin / "pgrep").write_text('#!/bin/sh\n[ "$2" = steam ]\n')
         self.hook(expected=1)

@@ -1,4 +1,17 @@
 #!/usr/bin/python3
+"""steamac: experimental game support (steamac.fex_eac=1): the patched FEX in Steam's FEX-Emu tool, and Steam settings
+for installed games that ship Easy Anti-Cheat.
+
+$XDG_STATE_HOME/steamac/fex-eac/status (the host reads it through the guest agent): line 1 is a stable code, line 2 is
+English text for people.
+  preparing                  the runtime is being built in the guest
+  installed                  the patched runtime is in Steam's FEX-Emu tool
+  need-tools NAME;NAME...    these Steam tools (their steamapps/common names) are missing
+  need-restart               restart Steam to finish setup
+  failed                     setup failed; line 2 says why
+  off                        experimental game support is off
+Usage: steam-fex-eac [prepare|build|status]
+"""
 import fcntl
 import hashlib
 import json
@@ -59,10 +72,10 @@ def fingerprint(root):
     return digest.hexdigest()
 
 
-def report(message):
+def report(code, message):
     STATE.mkdir(parents=True, exist_ok=True)
     temporary = STATE / "status.new"
-    temporary.write_text(message + "\n")
+    temporary.write_text(code + "\n" + message + "\n")
     temporary.replace(STATE / "status")
     print("steam-fex-eac: " + message)
 
@@ -115,12 +128,12 @@ def configure_eac_games():
                     path.name.lower() in EAC_NAMES for pattern in ("*", "*/*", "*/*/*") for path in root.glob(pattern)):
                 games.append(appid)
     config = STEAM / "config/config.vdf"
-    if not games or not config.is_file():
-        return
     missing = [name for name in ("Proton - Experimental", "Proton EasyAntiCheat Runtime")
-               if not any((library / "steamapps/common" / name).is_dir() for library in libraries)]
+               if games and not any((library / "steamapps/common" / name).is_dir() for library in libraries)]
     if missing:
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
+    if not games or not config.is_file():
+        return missing
     accounts = sorted((STEAM / "userdata").glob("*/config/localconfig.vdf"))
     for appid in dict.fromkeys(games):
         key = ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping", appid)
@@ -154,6 +167,7 @@ def configure_eac_games():
                 results.append(f"skipped {account} ({error})")
         print(f"steam-fex-eac: App {appid}: compatibility tool {tool}; launch options "
               + (", ".join(dict.fromkeys(results)) or "no account") + ".")
+    return missing
 
 
 def main():
@@ -165,7 +179,8 @@ def main():
         if marker.exists() and json.loads(marker.read_text()).get("installed") != fingerprint(TOOL):
             print("The installed runtime changed. Restart Steam to prepare it again.")
             return
-        print((STATE / "status").read_text().strip() if (STATE / "status").exists() else "Experimental game support has not been prepared.")
+        status = (STATE / "status").read_text() if (STATE / "status").exists() else "\nExperimental game support has not been prepared."
+        print(status.partition("\n")[2].strip() or status.strip())
         return
     active = enabled()
     if not active and not marker.exists():
@@ -180,9 +195,9 @@ def main():
         if action == "build":
             if not active:
                 return
-            report("Preparing the Linux game runtime. See steamac-fex-build.service in the user journal for progress.")
+            report("preparing", "Preparing the Linux game runtime. See steamac-fex-build.service in the user journal for progress.")
             subprocess.run(["sh", str(PAYLOAD / "build-fex.sh")], env=dict(os.environ, WORK=str(WORK)), check=True)
-            report("Runtime built. Restart Steam to finish setup. Game support is not verified.")
+            report("need-restart", "Runtime built. Restart Steam to finish setup. Game support is not verified.")
             return
         if subprocess.run(["pgrep", "-x", "steam"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
             raise ValueError("Close Steam before preparing or restoring its runtime.")
@@ -190,27 +205,28 @@ def main():
             installed = json.loads(marker.read_text())
             if installed.get("installed") != fingerprint(TOOL):
                 marker.unlink()
-                report("Experimental game support is off. The runtime changed; leaving it intact with nothing to restore.")
+                report("off", "Experimental game support is off. The runtime changed; leaving it intact with nothing to restore.")
                 return
             install("restore", installed["backup"])
             marker.unlink()
-            report("Experimental game support is off. The previous runtime is restored.")
+            report("off", "Experimental game support is off. The previous runtime is restored.")
             return
-        configure_eac_games()
+        missing = configure_eac_games()
         stage = staged()
         if stage is None:
-            report("Preparing the Linux game runtime. Restart Steam when setup finishes.")
+            report("preparing", "Preparing the Linux game runtime. Restart Steam when setup finishes.")
             subprocess.run(["systemctl", "--user", "start", "--no-block", "steamac-fex-build.service"], check=True)
             return
         if not complete(TOOL):
-            report("Runtime built. Install Steam's FEX-Emu tool, then restart Steam. Game support is not verified.")
+            report("need-tools " + ";".join(missing + ["FEX-Emu"]),
+                   "Runtime built. Install " + " and ".join(missing + ["Steam's FEX-Emu tool"]) + ", then restart Steam. Game support is not verified.")
             return
         previous = json.loads(marker.read_text()) if marker.exists() else {}
         current = fingerprint(TOOL)
         if previous.get("installed") == current:
             backup = previous["backup"]
         elif current == fingerprint(stage):
-            report("Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
+            report("installed", "Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
             return
         else:
             backup = str(STATE / "backups" / current)
@@ -218,12 +234,15 @@ def main():
         temporary = marker.with_suffix(".new")
         temporary.write_text(json.dumps({"source": source(), "backup": backup, "installed": fingerprint(TOOL)}) + "\n")
         temporary.replace(marker)
-        report("Runtime installed. EAC game setup was checked; online play and game support remain unverified.")
+        if missing:
+            report("need-tools " + ";".join(missing), "Runtime installed. Install " + " and ".join(missing) + " in Steam for EAC games.")
+            return
+        report("installed", "Runtime installed. EAC game setup was checked; online play and game support remain unverified.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (OSError, ValueError, StopIteration, subprocess.CalledProcessError) as error:
-        report("Setup failed: " + str(error))
+        report("failed", "Setup failed: " + str(error))
         sys.exit(1)
