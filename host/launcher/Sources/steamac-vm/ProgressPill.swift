@@ -333,6 +333,7 @@ final class NoPictureGuard {
         didSet {
             guard game != oldValue else { return }
             focusPresented = game != nil ? probe(.max).presented : nil
+            focusedAt = CACurrentMediaTime()
             hide(game != nil ? "game focused" : "game focus lost")
             gateChanged("game focus")
         }
@@ -360,6 +361,9 @@ final class NoPictureGuard {
     private var drewGame: Int?
     /// `presented` when the game got focus: that frame is Steam's and proves nothing.
     private var focusPresented: UInt64?
+    private var focusedAt: CFTimeInterval = 0
+    /// The last game's first non-black frame: app id and seconds since it got focus.
+    private(set) var firstFrame: (game: Int, seconds: Double)?
     private var gateOpen: Bool { ready && !gamePaused && !asleep && !vmPaused && (game == nil || game != drewGame) }
     /// Timer suspended while its gate is closed: no 4 Hz main-queue wakeups
     /// during gameplay, sleep or a paused VM.
@@ -423,6 +427,8 @@ final class NoPictureGuard {
                         hide("first non-black frame")
                     }
                     if let game {
+                        firstFrame = (game, now - focusedAt)
+                        log("game: first frame \(game) after \(String(format: "%.1f", now - focusedAt)) s")
                         drewGame = game
                         gateChanged("game drew")
                         return
