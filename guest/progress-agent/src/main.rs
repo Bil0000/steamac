@@ -23,7 +23,8 @@
 //!                                 `focus desktop <w>x<h>` = the Desktop Mode session's Plasma
 //!                                 window of that size, bare `focus desktop` = the session
 //!                                 ended without a system shutdown
-//!   alive <uptime_ms> <loadavg1>  heartbeat, once a second from agent start
+//!   alive <uptime_ms> <loadavg1> [<game_cpu_s>]   heartbeat, once a second from
+//!                                 agent start; with the focused game's cgroup CPU seconds (alive.rs)
 //!   logs-begin / logs / logs-end / logs-failed   log bundle answering the
 //!                                 host's `collect-logs <id>` (collect.rs; the
 //!                                 launcher's Report a Problem)
@@ -42,6 +43,7 @@
 //!   cursor 0|1                    the focused game's cursor visible (cursor.rs; DXMT path overlay)
 //!   cursor-image <w> <h> <xhot> <yhot> <base64>   the X cursor bitmap (BGRA), on change
 //!   cursor-pos <x> <y> <win_w> <win_h>           its position in the focused game's X window
+//!   setup <code> [text]           game-runtime setup status, at start and on change (setup.rs)
 //!
 //! Host -> guest (same port): `collect-logs <id>`, served at any point of the
 //! lifecycle below (worker thread; the bundle goes out from the main loop);
@@ -49,7 +51,11 @@
 //! the Mac's sparse steamos.img reclaims SSD space); `freeze-game <appid>` /
 //! `thaw-game` / `still-background` (freeze.rs: pause the focused game while the
 //! launcher is in the background); `profiles <base64-json>`, `launch <appid>`,
-//! `restart-steam` (profiles.rs: serialized background worker);
+//! `restart-steam` (profiles.rs: serialized background worker; also resends
+//! the setup status, setup.rs, after the user clicked "Restart Steam"; ignored
+//! in Desktop Mode, where the desktop's own Steam runs);
+//! `stop-game <appid>` (the user clicked "Restart game" on a stuck launch:
+//! freeze.rs stops the game's scopes and starts it again);
 //! `keyboard-layout <index> <layout[(variant)]>...` (keyboard.rs: latest-only worker);
 //! `cursor-track 1|0` enables/disables cursor X work (default off); enable also
 //! resynchronizes the full snapshot after the host/agent connection restarts.
@@ -123,6 +129,7 @@ mod freeze;
 mod games;
 mod profiles;
 mod keyboard;
+mod setup;
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -335,7 +342,8 @@ fn ready_marker() -> String {
 /// Host -> guest requests on the port: `<command> [args]`, one per line,
 /// never blocking (each handler only starts work or answers right away).
 fn serve_host(port: &mut Port, collector: &mut collect::Collector, freezer: &mut freeze::Freezer, focus: &focus::Focus,
-              profiles: &profiles::Requests, compact: &compact::Compact, cursor: &mut cursor::Cursor, games: &games::Games) {
+              profiles: &profiles::Requests, compact: &compact::Compact, cursor: &mut cursor::Cursor, games: &games::Games,
+              setup: &mut setup::Setup, desktop: bool) {
     for line in port.read_lines() {
         let line = line.trim();
         if let Some(enabled) = port::cursor_tracking(line) {
@@ -348,7 +356,12 @@ fn serve_host(port: &mut Port, collector: &mut collect::Collector, freezer: &mut
         match cmd {
             "collect-logs" => collector.request(arg, port, games.diagnostic_appid()),
             "compact-disk" => compact.request(arg),
-            "profiles" | "launch" | "restart-steam" => profiles.request(cmd, arg),
+            "profiles" | "launch" => profiles.request(cmd, arg),
+            "restart-steam" if desktop => eprintln!("fx-progress: restart-steam: ignored in Desktop Mode"),
+            "restart-steam" => {
+                setup.resend();
+                profiles.request(cmd, arg);
+            }
             "freeze-game" => match arg.parse::<u32>() {
                 // Only the game that has the focus (the host may be a step behind).
                 Ok(id) if focus.game() == Some(id) => freezer.freeze(id),
@@ -356,6 +369,11 @@ fn serve_host(port: &mut Port, collector: &mut collect::Collector, freezer: &mut
                 Err(_) => eprintln!("fx-progress: freeze-game: bad app id {arg:?}"),
             },
             "thaw-game" => freezer.thaw("launcher active again"),
+            "stop-game" => match arg.parse::<u32>() {
+                Ok(id) if id > 0 && focus.game() == Some(id) => freeze::restart(id),
+                Ok(id) => eprintln!("fx-progress: stop-game {id}: not the focused game ({:?})", focus.game()),
+                Err(_) => eprintln!("fx-progress: stop-game: bad app id {arg:?}"),
+            },
             "still-background" => freezer.keepalive(),
             "keyboard-layout" => keyboard::request(arg),
             "" => {}
@@ -381,6 +399,7 @@ fn report_boot(
     profiles: &profiles::Requests,
     compact: &compact::Compact,
     cursor: &mut cursor::Cursor,
+    setup: &mut setup::Setup,
 ) {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/home/steamos".into());
     let log_path = std::env::var("FX_PROGRESS_STEAM_LOG")
@@ -437,12 +456,13 @@ fn report_boot(
             }
         }
         rep.port.flush();
-        serve_host(&mut rep.port, collector, freezer, focus, profiles, compact, cursor, games);
+        serve_host(&mut rep.port, collector, freezer, focus, profiles, compact, cursor, games, setup, false);
         collector.pump(&mut rep.port);
         focus.pump(&mut rep.port, false, names);
         cursor.pump(&mut rep.port);
+        setup.pump(&mut rep.port);
         if let Some(hb) = heartbeat {
-            if hb.pump(&mut rep.port) {
+            if hb.pump(&mut rep.port, focus.game()) {
                 games.pump(Instant::now(), &mut rep.port, names);
             }
         }
@@ -500,6 +520,7 @@ fn main() {
     let compact = compact::Compact::new();
     let mut names = appname::Names::new(appname::steam_root(),
         format!("/tmp/.fx-progress-named-{}", unsafe { libc::getuid() }).into());
+    let mut setup = setup::Setup::new();
     let force = std::env::var("FX_PROGRESS_FORCE").map_or(false, |v| v == "1");
     let already = !force && std::fs::read_to_string(ready_marker()).map_or(false, |s| s.trim() == boot_id());
     let mut desktop_ready_pending = false;
@@ -511,7 +532,7 @@ fn main() {
         rep.stage(Stage::Session, 100, "Session started");
         desktop_ready_pending = true;
     } else {
-        report_boot(&mut rep, &mut focus, heartbeat.as_ref(), &mut collector, &mut freezer, &mut games, &mut names, &profiles, &compact, &mut cursor_state);
+        report_boot(&mut rep, &mut focus, heartbeat.as_ref(), &mut collector, &mut freezer, &mut games, &mut names, &profiles, &compact, &mut cursor_state, &mut setup);
     }
     // Once after `ready` (or at agent start on a later session): current focus.
     focus.pump(&mut rep.port, true, &mut names);
@@ -533,10 +554,11 @@ fn main() {
         let mut pfds = Vec::with_capacity(8);
         while !terminated() {
             rep.port.flush();
-            serve_host(&mut rep.port, &mut collector, &mut freezer, &focus, &profiles, &compact, &mut cursor_state, &games);
+            serve_host(&mut rep.port, &mut collector, &mut freezer, &focus, &profiles, &compact, &mut cursor_state, &games, &mut setup, desktop);
             collector.pump(&mut rep.port);
             focus.pump(&mut rep.port, false, &mut names);
             cursor_state.pump(&mut rep.port);
+            setup.pump(&mut rep.port);
             if desktop_ready_pending && focus.desktop_shown() {
                 desktop_ready_pending = false;
                 rep.port.send("ready");
@@ -544,7 +566,7 @@ fn main() {
                 let _ = std::fs::write(ready_marker(), boot_id());
             }
             if let Some(hb) = heartbeat.as_ref() {
-                if hb.pump(&mut rep.port) {
+                if hb.pump(&mut rep.port, focus.game()) {
                     games.pump(Instant::now(), &mut rep.port, &mut names);
                 }
             }

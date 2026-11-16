@@ -20,7 +20,14 @@ import QuartzCore
 /// the guest agent's heartbeat (`alive <uptime_ms> <loadavg1>` once a second over fx.progress)
 /// and this process's CPU time (vCPU threads included): alive → "Loading…" + CPU, no
 /// heartbeat for `heartbeatTimeout` → "SteamOS is not responding…". With perf stats on it also
-/// logs the counter rates and the longest idle stretch every 5 s. Main thread only.
+/// logs the counter rates and the longest idle stretch every 5 s.
+///
+/// A launch that seems stuck: the focused game has not drawn yet (`gameDark`), the GPU has been
+/// idle for `hungThreshold` and the game's cgroups used less than `hungCores` over that time
+/// (the heartbeat's game CPU field; older agents send none and never get the prompt). The card
+/// then says "<Game> may be stuck" with "Restart game" (`onRestartGame`) and "Keep waiting",
+/// which keeps the prompt away until that game draws. A busy CPU (shader compile, x86
+/// translation) never prompts. Main thread only.
 final class StallMonitor {
     typealias Counters = (ctrl: UInt64, ring: UInt64)
 
@@ -28,6 +35,8 @@ final class StallMonitor {
     static let heartbeatTimeout: TimeInterval = 5
     static let tick: TimeInterval = 0.25
     static let perfPeriod: TimeInterval = 5
+    static let hungThreshold: TimeInterval = 60
+    static let hungCores = 0.1
 
     struct Diagnostic {
         let idle: TimeInterval
@@ -80,6 +89,12 @@ final class StallMonitor {
     private var guestLoad = 0.0
     /// Per-second CPU readings while shown: (time, process CPU seconds).
     private var cpuSamples: [(CFTimeInterval, Double)] = []
+    /// The focused game's CPU seconds from the heartbeat: (time, seconds), about `hungThreshold` of them.
+    private var gameCPUSamples: [(CFTimeInterval, Double)] = []
+    /// "Keep waiting" was clicked for this game: no prompt until it draws or a new process of it
+    /// starts (`game-start`).
+    private var waited: Int?
+    private var hungPrompt = false
     private var shownSince: (idleStart: CFTimeInterval, cpu: Double)?
     private var notRespondingReported = false
     private var longStallLogged = false
@@ -92,20 +107,38 @@ final class StallMonitor {
     var enabled = true { didSet { if enabled != oldValue { gateChanged() } } }
     /// Before `ready`, boot / shutdown overlay on screen, or the guest is shutting down.
     var suppressed = true { didSet { if suppressed != oldValue { gateChanged() } } }
-    /// A game has focus in the guest (`focus game <appid>`).
-    var gameFocused = false { didSet { if gameFocused != oldValue { gateChanged() } } }
+    /// The game that has focus in the guest (`focus game <appid>`).
+    var game: Int? {
+        didSet {
+            guard game != oldValue else { return }
+            gameCPUSamples.removeAll()
+            gateChanged()
+        }
+    }
+    private var gameFocused: Bool { game != nil }
     /// The focused game is frozen (GamePause): an idle GPU is expected.
     var paused = false { didSet { if paused != oldValue { gateChanged() } } }
     /// The focused game shows no picture or a black one (NoPictureGuard): the card covers it even
     /// while the GPU works (a loading game).
-    var gameDark = false { didSet { if gameDark != oldValue { gateChanged() } } }
+    var gameDark = false {
+        didSet {
+            guard gameDark != oldValue else { return }
+            gateChanged()
+        }
+    }
     /// Display name of the focused game, if known.
     var gameName: () -> String? = { nil }
     /// The indicator is up (or about to fade in).
     var indicatorShown: Bool { shownSince != nil }
+    /// The may-be-stuck card asks the user (its links need the pointer).
+    var asking: Bool { hungPrompt }
     /// Once per indicator stretch, when its wording turns to "SteamOS is not responding…".
     /// Recent counter/heartbeat samples accompany the report even when perf stats are off.
     var onNotResponding: ((Diagnostic) -> Void)?
+    /// "Restart game" on the may-be-stuck card (argument: app id).
+    var onRestartGame: ((Int) -> Void)?
+    /// The card asks the user (its links need the pointer).
+    var onAsk: (() -> Void)?
 
     init(view: StallIndicatorView, sample: @escaping () -> Counters?) {
         self.view = view
@@ -150,17 +183,43 @@ final class StallMonitor {
         cpuAtActivity = StallMonitor.cpuSeconds()
         gateOpenedAt = now
         if lastAlive > 0 { lastAlive = now }
+        gameCPUSamples.removeAll()
         counters = nil
         lastPoll = now
         heartbeatObservationStarted = now
         start()
     }
 
-    /// Guest heartbeat (`alive <uptime_ms> <loadavg1>`).
-    func alive(uptimeMs: Int, load: Double) {
+    /// Guest heartbeat (`alive <uptime_ms> <loadavg1> [<game_cpu_s>]`).
+    func alive(uptimeMs: Int, load: Double, gameCPU: Double? = nil) {
         lastAlive = CACurrentMediaTime()
         guestLoad = load
         guestUptimeMs = uptimeMs
+        guard let gameCPU, gameFocused else { return gameCPUSamples.removeAll() }
+        // A smaller total: a new game process.
+        if let last = gameCPUSamples.last, gameCPU < last.1 { gameCPUSamples.removeAll() }
+        gameCPUSamples.append((lastAlive, gameCPU))
+        while gameCPUSamples.count > 2, gameCPUSamples[1].0 <= lastAlive - StallMonitor.hungThreshold { gameCPUSamples.removeFirst() }
+    }
+
+    /// The game showed its first picture (NoPictureGuard; not a pause or sleep that only closes
+    /// its gate): "Keep waiting" is over.
+    func gameDrew(_ appid: Int) {
+        if waited == appid { waited = nil }
+    }
+
+    /// `game-start`: a new process of the game (a relaunch) gets the prompt again.
+    func gameStarted(_ appid: Int) {
+        if waited == appid { waited = nil }
+    }
+
+    /// The focused game has not drawn, its GPU idled and its CPU stayed near zero for `hungThreshold`.
+    private func hung(_ now: CFTimeInterval) -> Bool {
+        guard coversDarkGame, game != waited, !notResponding(at: now),
+              now - max(lastActivity, gateOpenedAt) >= StallMonitor.hungThreshold,
+              let first = gameCPUSamples.first, let last = gameCPUSamples.last,
+              first.0 <= now - StallMonitor.hungThreshold, last.0 > first.0 else { return false }
+        return (last.1 - first.1) / (last.0 - first.0) < StallMonitor.hungCores
     }
 
     /// The agent ended with the gamescope session (bare `focus desktop`: Switch to Desktop, Return
@@ -225,7 +284,20 @@ final class StallMonitor {
         noteCPU(now)
         let starting = shownSince == nil
         if starting { shownSince = (lastActivity, cpuAtActivity) }
-        let (title, detail) = text(now: now, idle: now - lastActivity)
+        let stuck = hung(now)
+        if stuck != hungPrompt {
+            hungPrompt = stuck
+            if stuck {
+                log("stall: game \(game ?? 0) may be stuck (gpu idle \(Int(now - lastActivity)) s, game CPU \(gameCPUText)), asking")
+                onAsk?()
+            }
+            view.showsSpinner = !stuck
+            view.actions = stuck ? [
+                (String(localized: "Restart game", comment: "Button on the may-be-stuck card"), { [weak self] in self?.restartGame() }),
+                (String(localized: "Keep waiting", comment: "Button on the may-be-stuck card"), { [weak self] in self?.keepWaiting() }),
+            ] : []
+        }
+        let (title, detail) = stuck ? stuckText() : text(now: now, idle: now - lastActivity)
         view.showsReportLink = dead
         view.update(title: title, detail: detail)
         if starting {
@@ -262,7 +334,25 @@ final class StallMonitor {
         log("stall: gpu idle \(String(format: "%.1f", duration)) s (\(status(now, cpu: cpu)))"
             + (reason.map { ", ended by \($0)" } ?? ""))
         cpuSamples.removeAll()
+        hungPrompt = false
+        view.actions = []
+        view.showsSpinner = true
         view.hide()
+    }
+
+    private func restartGame() {
+        guard let game else { return }
+        log("stall: restarting game \(game) (user choice)")
+        gameCPUSamples.removeAll()
+        gateOpenedAt = CACurrentMediaTime()
+        onRestartGame?(game)
+        evaluate(CACurrentMediaTime())
+    }
+
+    private func keepWaiting() {
+        log("stall: keep waiting for game \(game ?? 0) (user choice)")
+        waited = game
+        evaluate(CACurrentMediaTime())
     }
 
     // MARK: wording
@@ -297,6 +387,16 @@ final class StallMonitor {
             ? String(localized: "VM CPU \(cores) cores · guest alive")
             : String(localized: "VM CPU \(cores) cores")
         return (title, detail)
+    }
+
+    private func stuckText() -> (String, String) {
+        (gameName().map { String(localized: "\($0) may be stuck", comment: "Card over a game that does not load: game name") }
+            ?? String(localized: "The game may be stuck"), "")
+    }
+
+    private var gameCPUText: String {
+        guard let a = gameCPUSamples.first, let b = gameCPUSamples.last, b.0 > a.0 else { return "unknown" }
+        return String(format: "%.2f cores", (b.1 - a.1) / (b.0 - a.0))
     }
 
     /// For the log: "guest alive, CPU 2.9 cores".
@@ -419,16 +519,16 @@ final class StallMonitor {
 }
 
 /// The indicator: a translucent card in the lower third with a spinner and two lines of text,
-/// over the last guest frame (FX overlay colors). Never takes mouse events, except on its
-/// "Report…" link while it says SteamOS is not responding; when hidden it is `isHidden` with
-/// every animation removed.
+/// over the last guest frame (FX overlay colors). Never takes mouse events, except on its links
+/// ("Report…" while it says SteamOS is not responding, `actions`); when hidden it is `isHidden`
+/// with every animation removed.
 final class StallIndicatorView: NSView {
     private let card = CALayer()
     private let track = CAShapeLayer()
     private let arc = CAShapeLayer()
     private let titleLayer = CATextLayer()
     private let detailLayer = CATextLayer()
-    private let linkLayer = CATextLayer()
+    private var linkLayers: [CATextLayer] = []
     private var title = ""
     private var detail = ""
     private(set) var shown = false
@@ -444,9 +544,22 @@ final class StallIndicatorView: NSView {
     var cardFrame: CGRect { card.frame }
     var spinnerFrame: CGRect { arc.frame.offsetBy(dx: card.frame.minX, dy: card.frame.minY) }
     /// "Report…" on the card (Report a Problem), in view coordinates; empty when not shown.
-    var reportLinkFrame: CGRect {
-        showsReportLink && onReport != nil ? linkLayer.frame.offsetBy(dx: card.frame.minX, dy: card.frame.minY) : .zero
+    var reportLinkFrame: CGRect { hasReportLink ? linkFrames[0] : .zero }
+    /// Every link on the card ("Report…" first, then `actions`), in view coordinates.
+    var linkFrames: [CGRect] { linkLayers.map { $0.frame.offsetBy(dx: card.frame.minX, dy: card.frame.minY) } }
+    private var hasReportLink: Bool { showsReportLink && onReport != nil }
+    /// Links after "Report…": title and click action.
+    var actions: [(title: String, action: () -> Void)] = [] {
+        didSet {
+            guard actions.map(\.title) != oldValue.map(\.title) else { return }
+            reportLinkChanged = true
+            needsLayout = true
+            window?.invalidateCursorRects(for: self)
+        }
     }
+    var currentActions: [String] { actions.map(\.title) }
+    /// The spinner (hidden for a notice that waits on the user).
+    var showsSpinner = true { didSet { if showsSpinner != oldValue { needsLayout = true } } }
     /// Opens Report a Problem (the link is shown only when this is set).
     var onReport: (() -> Void)?
     /// The "not responding" wording: show the link.
@@ -478,7 +591,7 @@ final class StallIndicatorView: NSView {
         arc.strokeColor = OverlayView.color(0x66c0f4)
         arc.lineCap = .round
         arc.strokeEnd = 0.7
-        for t in [titleLayer, detailLayer, linkLayer] {
+        for t in [titleLayer, detailLayer] {
             t.alignmentMode = .left
             t.truncationMode = .end
             t.isWrapped = false
@@ -495,17 +608,31 @@ final class StallIndicatorView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard !isHidden, alphaValue > 0, let superview else { return nil }
-        return reportLinkFrame.contains(convert(point, from: superview)) ? self : nil
+        let p = convert(point, from: superview)
+        return linkFrames.contains { $0.contains(p) } ? self : nil
     }
 
+    /// A link works with the click that activates the window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func mouseDown(with event: NSEvent) {
-        guard reportLinkFrame.contains(convert(event.locationInWindow, from: nil)) else { return }
-        log("stall: Report… clicked")
-        onReport?()
+        let p = convert(event.locationInWindow, from: nil)
+        guard var i = linkFrames.firstIndex(where: { $0.contains(p) }) else { return }
+        if hasReportLink {
+            if i == 0 {
+                log("stall: Report… clicked")
+                onReport?()
+                return
+            }
+            i -= 1
+        }
+        guard i < actions.count else { return }
+        log("stall: \(actions[i].title) clicked")
+        actions[i].action()
     }
 
     override func resetCursorRects() {
-        if !reportLinkFrame.isEmpty { addCursorRect(reportLinkFrame, cursor: .pointingHand) }
+        for f in linkFrames { addCursorRect(f, cursor: .pointingHand) }
     }
 
     override var isOpaque: Bool { false }
@@ -541,14 +668,14 @@ final class StallIndicatorView: NSView {
             self.fading = false
             guard !self.shown else { return }
             self.isHidden = true
-            for l in [self.layer!, self.card, self.track, self.arc, self.titleLayer, self.detailLayer, self.linkLayer] { l.removeAllAnimations() }
+            for l in [self.layer!, self.card, self.track, self.arc, self.titleLayer, self.detailLayer] + self.linkLayers { l.removeAllAnimations() }
             self.onVisibilityChange?()
         })
     }
 
     /// True when hidden and idle (no layer animations running).
     var isIdle: Bool {
-        isHidden && [layer!, card, track, arc, titleLayer, detailLayer, linkLayer].allSatisfy { ($0.animationKeys() ?? []).isEmpty }
+        isHidden && ([layer!, card, track, arc, titleLayer, detailLayer] + linkLayers).allSatisfy { ($0.animationKeys() ?? []).isEmpty }
     }
 
     private func startSpinner() {
@@ -585,8 +712,8 @@ final class StallIndicatorView: NSView {
             .foregroundColor: OverlayView.color(0x8f98a0)])
     }
 
-    private var linkString: NSAttributedString {
-        NSAttributedString(string: String(localized: "Report…", comment: "Link to report an unresponsive VM to the developer"), attributes: [
+    private func linkString(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 13 * scaleFactor, weight: .semibold),
             .foregroundColor: OverlayView.color(0x66c0f4),
             .underlineStyle: NSUnderlineStyle.single.rawValue])
@@ -616,16 +743,25 @@ final class StallIndicatorView: NSView {
         let k = scaleFactor
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         let t = titleString, d = detailString
-        let link = showsReportLink && onReport != nil ? linkString : nil
-        let pad = 18 * k, spin = 26 * k, gap = 14 * k
+        let links = ((hasReportLink ? [String(localized: "Report…", comment: "Link to report an unresponsive VM to the developer")] : [])
+                     + actions.map(\.title)).map(linkString)
+        while linkLayers.count > links.count { linkLayers.removeLast().removeFromSuperlayer() }
+        while linkLayers.count < links.count {
+            let l = CATextLayer()
+            l.alignmentMode = .left
+            l.isWrapped = false
+            card.addSublayer(l)
+            linkLayers.append(l)
+        }
+        let pad = 18 * k, spin = showsSpinner ? 26 * k : 0, gap = 14 * k
         let textWidth = ceil(max(t.size().width, d.size().width)) + 2
-        let linkWidth = link.map { ceil($0.size().width) + 2 } ?? 0
-        let linkSpace = link == nil ? 0 : gap + linkWidth
-        let width = min(b.width - 32, pad + spin + gap + textWidth + linkSpace + pad + 4 * k)
+        let linkWidths = links.map { ceil($0.size().width) + 2 }
+        let linkSpace = linkWidths.reduce(0) { $0 + gap + $1 }
+        let width = min(b.width - 32, pad + (showsSpinner ? spin + gap : 0) + textWidth + linkSpace + pad + 4 * k)
         let height = 62 * k
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for l in [layer!, card, track, arc, titleLayer, detailLayer, linkLayer] { l.contentsScale = scale }
+        for l in [layer!, card, track, arc, titleLayer, detailLayer] + linkLayers { l.contentsScale = scale }
         card.frame = CGRect(x: (b.width - width) / 2, y: (b.height * 0.26 - height / 2).rounded(), width: width, height: height).integral
         card.cornerRadius = 14 * k
         card.shadowRadius = 18 * k
@@ -637,16 +773,21 @@ final class StallIndicatorView: NSView {
             s.frame = spinFrame
             s.path = circle
             s.lineWidth = line
+            s.isHidden = !showsSpinner
         }
-        let textX = pad + spin + gap
+        let textX = pad + (showsSpinner ? spin + gap : 0)
         let textW = max(0, width - textX - pad - linkSpace)
-        titleLayer.frame = CGRect(x: textX, y: height / 2 + 1 * k, width: textW, height: 20 * k)
+        titleLayer.frame = CGRect(x: textX, y: detail.isEmpty ? (height - 20 * k) / 2 : height / 2 + 1 * k, width: textW, height: 20 * k)
         detailLayer.frame = CGRect(x: textX, y: height / 2 - 18 * k, width: textW, height: 16 * k)
-        linkLayer.frame = link == nil ? .zero : CGRect(x: width - pad - linkWidth, y: (height - 18 * k) / 2, width: linkWidth, height: 18 * k)
+        var linkX = width - pad - linkSpace
+        for (i, l) in linkLayers.enumerated() {
+            linkX += gap
+            l.frame = CGRect(x: linkX, y: (height - 18 * k) / 2, width: linkWidths[i], height: 18 * k)
+            l.string = links[i]
+            linkX += linkWidths[i]
+        }
         titleLayer.string = t
         detailLayer.string = d
-        linkLayer.string = link
-        linkLayer.isHidden = link == nil
         CATransaction.commit()
         window?.invalidateCursorRects(for: self)
         if reportLinkChanged {

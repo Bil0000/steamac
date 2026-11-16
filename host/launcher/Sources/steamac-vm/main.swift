@@ -520,6 +520,7 @@ do {
     }
     let stall = StallMonitor(view: wc.stallView, sample: gpuCounters)
     stall.onNotResponding = { CrashReporting.stallNotResponding($0) }
+    stall.onRestartGame = { _ = progressPort.send("stop-game \($0)") }
     wc.attach(stall: stall)
     // After `ready`: "Waiting for SteamOS to draw…" when the window shows no / a black picture.
     let noPicture = NoPictureGuard { presenter.scanout.probe(sampleIfNewerThan: $0) }
@@ -608,6 +609,8 @@ do {
     lifecycle.report = { openReport("menu", on: wc.window) }
     settingsContext.reportProblem = { openReport("settings", on: settingsWindow.window) }
     wc.stallView.onReport = { openReport("stall", on: wc.window) }
+    wc.setupView.onReport = { openReport("setup", on: wc.window) }
+    wc.onRestartSteam = { _ = progressPort.send("restart-steam") }
     MainActor.assumeIsolated { ReportControl.open = { openReport("control", on: wc.window) } }
     MainMenu.install(target: lifecycle, settings: #selector(Lifecycle.menuSettings), report: #selector(Lifecycle.menuReport),
                      checkForUpdates: #selector(Lifecycle.menuCheckForUpdates),

@@ -15,6 +15,8 @@ enum StallSelfTest {
     static let ring = Atomic<UInt64>(0)
     static let mode = Atomic<Int>(0)
     static let heartbeats = Atomic<Bool>(true)
+    /// The heartbeat's game CPU field: 0 = none (older agent), 1 = busy (one core), 2 = idle.
+    static let gameCPU = Atomic<Int>(0)
 
     struct Step {
         let name: String
@@ -50,8 +52,10 @@ enum StallSelfTest {
         let presenter = Presenter(display: display, renderer: renderer)
         display.sink = presenter
         let W = o.displayWidth, H = o.displayHeight
+        let inputs = VMInputs(keyboard: InputDevices.keyboard(), tablet: InputDevices.tablet(), mouse: InputDevices.mouse())
         let wc = WindowController(title: OverlaySelfTest.windowTitleForTest, width: W, height: H, renderer: renderer,
-                                  inputs: nil, mouseMode: .auto)
+                                  inputs: inputs, mouseMode: .auto)
+        wc.settings.autoCaptureGames = false
         presenter.view = wc.view
         wc.view.metalLayer.framebufferOnly = false
         // The card pixel test must not depend on saved HUD/upscaler preferences.
@@ -78,6 +82,24 @@ enum StallSelfTest {
         func heartbeat() {
             guest("alive \(Int(ProcessInfo.processInfo.systemUptime * 1000)) 1.25\n")
         }
+        wc.onRestartSteam = { _ = port.send("restart-steam") }
+        _ = fcntl(port.guestInputFd, F_SETFL, fcntl(port.guestInputFd, F_GETFL) | O_NONBLOCK)
+        /// Host -> guest lines sent since the last call.
+        func hostLines() -> [String] {
+            var buf = [UInt8](repeating: 0, count: 4096)
+            let n = Darwin.read(port.guestInputFd, &buf, buf.count)
+            return n > 0 ? String(decoding: buf[0..<n], as: UTF8.self).split(separator: "\n").map(String.init) : []
+        }
+        func click(_ r: CGRect) {
+            let p = wc.stallView.convert(NSPoint(x: r.midX, y: r.midY), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: wc.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                                              pressure: type == .leftMouseDown ? 1 : 0) {
+                    NSApp.sendEvent(e)
+                }
+            }
+        }
 
         wc.show()
         wc.overlay.show(animated: false)
@@ -86,6 +108,7 @@ enum StallSelfTest {
         // Activity (60 Hz) and heartbeat (1 Hz) generators.
         let activity = Thread {
             var nextHeartbeat = ProcessInfo.processInfo.systemUptime + 1
+            var cpu = 0.0
             while true {
                 switch mode.load(ordering: .relaxed) {
                 case 1: ctrl.add(1, ordering: .relaxed)
@@ -96,7 +119,10 @@ enum StallSelfTest {
                 if now >= nextHeartbeat && heartbeats.load(ordering: .relaxed) {
                     nextHeartbeat = now + 1
                     let ms = Int(now * 1000)
-                    _ = "alive \(ms) 1.25\n".withCString { Darwin.write(port.guestOutputFd, $0, strlen($0)) }
+                    let g = gameCPU.load(ordering: .relaxed)
+                    if g == 1 { cpu += 1 }
+                    let field = g == 0 ? "" : String(format: " %.3f", cpu)
+                    _ = "alive \(ms) 1.25\(field)\n".withCString { Darwin.write(port.guestOutputFd, $0, strlen($0)) }
                 }
                 Thread.sleep(forTimeInterval: 1.0 / 60)
             }
@@ -113,6 +139,32 @@ enum StallSelfTest {
         let sampleCPU = "CPUVALUE"
         let sampleSeconds = 987   // < 1000: no digit grouping in the localized template
         let workingDetail = String(localized: "VM CPU \(sampleCPU) cores · guest alive")
+        let setup = wc.setupView
+        setup.onReport = { log("stall selftest: setup Report… link activated") }
+        func expectSetup(_ title: String?, spinner: Bool = false, actions: [String] = [], report: Bool = false) -> String? {
+            guard let title else { return setup.shown ? "setup card should be hidden, shows \"\(setup.currentTitle)\"" : nil }
+            guard setup.shown else { return "setup card should show \"\(title)\"" }
+            guard setup.currentTitle == title else { return "setup title \"\(setup.currentTitle)\", expected \"\(title)\"" }
+            guard setup.showsSpinner == spinner else { return "setup spinner \(setup.showsSpinner), expected \(spinner)" }
+            guard setup.currentActions == actions else { return "setup actions \(setup.currentActions), expected \(actions)" }
+            return report == !setup.reportLinkFrame.isEmpty ? nil : "setup Report… link \(report ? "missing" : "shown")"
+        }
+        let restartSteam = String(localized: "Restart Steam", comment: "Button: restart the Steam client in SteamOS")
+        nonisolated(unsafe) var sentAfterRestart: [String] = []
+        monitor.onRestartGame = { _ = port.send("stop-game \($0)") }
+        let stuck = String(localized: "The game may be stuck")
+        let restartGame = String(localized: "Restart game", comment: "Button on the may-be-stuck card")
+        let keepWaiting = String(localized: "Keep waiting", comment: "Button on the may-be-stuck card")
+        func expectLoading(_ what: String) -> String? {
+            guard monitor.indicatorShown, view.shown else { return "\(what): loading card should be shown" }
+            return view.currentTitle == working && view.currentActions.isEmpty && view.showsSpinner
+                ? nil : "\(what): \"\(view.currentTitle)\" \(view.currentActions), expected \"\(working)\" without links"
+        }
+        func expectStuck() -> String? {
+            guard monitor.indicatorShown, view.shown else { return "may-be-stuck card should be shown" }
+            return view.currentTitle == stuck && view.currentActions == [restartGame, keepWaiting] && !view.showsSpinner
+                ? nil : "\"\(view.currentTitle)\" \(view.currentActions), expected \"\(stuck)\" with Restart game / Keep waiting"
+        }
         func expectHidden(_ what: String) -> String? {
             !monitor.indicatorShown && !view.shown ? nil : "\(what): indicator should be hidden"
         }
@@ -135,6 +187,43 @@ enum StallSelfTest {
             },
             Step(name: "03-steam-ui-idle-3s", action: { mode.store(0, ordering: .relaxed) }, wait: 3.0) {
                 expectHidden("Steam UI focused, GPU idle 3 s")
+            },
+            Step(name: "03a-setup-preparing", action: { guest("setup preparing Building the game runtime\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Setting up game support…"), spinner: true) ?? expectHidden("setup card only")
+            },
+            Step(name: "03b-setup-need-tools", action: {
+                guest("setup need-tools Proton EasyAntiCheat Runtime;Proton BattlEye Runtime\n")
+            }, wait: 0.6) {
+                let tools = ListFormatter.localizedString(byJoining: ["Proton EasyAntiCheat Runtime", "Proton BattlEye Runtime"])
+                return expectSetup(String(localized: "Install \(tools) in Steam to play games with anti-cheat",
+                                          comment: "Card over the Steam UI: Steam tool names"))
+            },
+            Step(name: "03c-setup-need-restart", action: { _ = hostLines(); guest("setup need-restart\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Restart Steam to finish setting up"), actions: [restartSteam])
+            },
+            Step(name: "03d-setup-restart-clicked", action: {
+                if let r = setup.linkFrames.first { click(r) }
+            }, wait: 0.6) {
+                sentAfterRestart = hostLines()
+                return sentAfterRestart == ["restart-steam"] ? expectSetup(nil) : "host sent \(sentAfterRestart), expected restart-steam"
+            },
+            Step(name: "03e-setup-failed", action: { guest("setup failed FEX build exited with 1\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Game support could not be set up"), report: true)
+            },
+            Step(name: "03f-setup-unknown-ignored", action: { guest("setup something-new 1\n") }, wait: 0.6) {
+                expectSetup(String(localized: "Game support could not be set up"), report: true)
+            },
+            Step(name: "03g-setup-installed", action: { guest("setup installed\n") }, wait: 0.6) {
+                expectSetup(nil)
+            },
+            Step(name: "03h-setup-not-over-game", action: { guest("setup preparing\n"); guest("focus game 4242\n") }, wait: 0.6) {
+                expectSetup(nil)
+            },
+            Step(name: "03h2-setup-not-over-desktop", action: { guest("focus desktop 1280x800\n") }, wait: 0.6) {
+                expectSetup(nil)
+            },
+            Step(name: "03i-setup-off", action: { guest("focus steam\n"); guest("setup off\n") }, wait: 0.6) {
+                expectSetup(nil)
             },
             Step(name: "04-game-focused-1.5s", action: { guest("focus game 4242\n") }, wait: 1.5) {
                 wc.guestFocus == .game(4242) ? expectHidden("game focused 1.5 s ago (stale idle must not count)")
@@ -171,7 +260,7 @@ enum StallSelfTest {
             Step(name: "09a-host-main-queue-delayed", action: {
                 heartbeats.store(false, ordering: .relaxed)
                 stallDiagnostic = nil
-                monitor.gameFocused = true
+                monitor.game = 4242
                 Thread.sleep(forTimeInterval: 6)
             }, wait: 0.4) {
                 expectShown(title: working, detail: String(localized: "VM CPU \(sampleCPU) cores"))
@@ -181,7 +270,7 @@ enum StallSelfTest {
                 // The previous screenshot may take longer than the observation
                 // window; a real silence during that capture is not a false report.
                 stallDiagnostic = nil
-                monitor.gameFocused = false
+                monitor.game = nil
                 heartbeats.store(true, ordering: .relaxed)
                 heartbeat()
             }, wait: 1.8) {
@@ -196,8 +285,8 @@ enum StallSelfTest {
             }, wait: 3.0) {
                 expectHidden("Steam UI, heartbeat lost < 5 s")
             },
-            Step(name: "11-steam-ui-not-responding", action: {}, wait: 3.0) {
-                expectShown(title: String(localized: "SteamOS is not responding…"),
+            Step(name: "11-steam-ui-not-responding", action: { guest("setup preparing\n") }, wait: 3.0) {
+                (setup.shown ? "setup card should give way to the not-responding card" : nil) ?? expectShown(title: String(localized: "SteamOS is not responding…"),
                             detail: String(localized: "waiting (\(sampleSeconds) s)"))
                     ?? (view.cardFrame.contains(view.reportLinkFrame) && !view.reportLinkFrame.isEmpty
                         ? nil : "Report… link missing on the not-responding card: \(view.reportLinkFrame) in \(view.cardFrame)")
@@ -221,7 +310,11 @@ enum StallSelfTest {
                 heartbeats.store(true, ordering: .relaxed)
                 heartbeat()
             }, wait: 1.8) {
-                view.isIdle ? expectHidden("heartbeat back in the Steam UI") : "indicator view not hidden + idle after heartbeat"
+                view.isIdle ? expectHidden("heartbeat back in the Steam UI") ?? expectSetup(String(localized: "Setting up game support…"), spinner: true)
+                            : "indicator view not hidden + idle after heartbeat"
+            },
+            Step(name: "12-setup-off", action: { guest("setup off\n") }, wait: 0.6) {
+                expectSetup(nil)
             },
             // Switch to Desktop: the agent ends with the gamescope session, no heartbeat follows.
             Step(name: "12a-desktop-no-heartbeat-6.5s", action: { heartbeats.store(false, ordering: .relaxed); guest("focus desktop\n") },
@@ -236,6 +329,48 @@ enum StallSelfTest {
             },
             Step(name: "14-setting-on", action: { monitor.enabled = true }, wait: 2.6) {
                 expectShown(title: working, detail: workingDetail)
+            },
+            // A launch that has not drawn: busy game CPU never prompts, an idle one does after 60 s.
+            Step(name: "14a-dark-game-busy-cpu-120s", action: {
+                monitor.gameDark = true
+                gameCPU.store(1, ordering: .relaxed)
+            }, wait: 120) {
+                expectLoading("game CPU busy for 120 s, GPU idle")
+            },
+            Step(name: "14b-dark-game-idle-cpu-prompts", action: { gameCPU.store(2, ordering: .relaxed) }, wait: 63) {
+                expectStuck()
+            },
+            Step(name: "14b2-stuck-prompt-keeps-pointer", action: {
+                wc.settings.autoCaptureGames = true
+                let centre = wc.view.convert(NSPoint(x: wc.view.bounds.midX, y: wc.view.bounds.midY), to: nil)
+                if let e = NSEvent.mouseEvent(with: .leftMouseDown, location: centre, modifierFlags: [], timestamp: 0,
+                                              windowNumber: wc.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    wc.pointerButton(e, down: true)
+                }
+            }, wait: 0.1) {
+                let captured = wc.pointerCaptured
+                wc.releasePointer()
+                wc.settings.autoCaptureGames = false
+                return captured ? "a click on the picture took the mouse while the may-be-stuck card asks"
+                    : wc.autoCaptureBlocked ? expectStuck() : "auto-capture would take the mouse while the may-be-stuck card asks"
+            },
+            Step(name: "14c-restart-game", action: { _ = hostLines(); if let r = view.linkFrames.first { click(r) } }, wait: 0.6) {
+                let sent = hostLines()
+                return sent == ["stop-game 4242"] ? expectLoading("after Restart game") : "host sent \(sent), expected stop-game 4242"
+            },
+            Step(name: "14d-idle-again-prompts", action: {}, wait: 62) {
+                expectStuck()
+            },
+            Step(name: "14e-keep-waiting", action: { if view.linkFrames.count > 1 { click(view.linkFrames[1]) } }, wait: 5) {
+                expectLoading("after Keep waiting")
+            },
+            // A pause, sleep or paused VM closes NoPictureGuard's gate (gameDark false) without a frame.
+            Step(name: "14f-keep-waiting-survives-pause", action: { monitor.gameDark = false; monitor.gameDark = true }, wait: 62) {
+                expectLoading("Keep waiting, then a pause and resume without a frame")
+            },
+            // A relaunch that hangs at the same point: its CPU total need not be smaller.
+            Step(name: "14g-relaunch-prompts-again", action: { guest("game-start 4242\n") }, wait: 1.0) {
+                expectStuck()
             },
             Step(name: "15-shutdown", action: { guest("shutdown poweroff\n") }, wait: 0.6) {
                 wc.overlay.shown && progress.state.phase == .shutdown(reboot: false)
@@ -274,7 +409,7 @@ enum StallSelfTest {
                 let path = "\(outDir)/stall-\(step.name).png"
                 do { try PNG.write(img, to: path) } catch { failures.append("\(step.name): \(error)") }
                 failures += DispatchQueue.main.sync {
-                    pixelChecks(step.name, img, drawable: wc.overlay.isHidden ? shot.0 : nil, view)
+                    pixelChecks(step.name, img, drawable: wc.overlay.isHidden ? shot.0 : nil, setup.shown ? setup : view)
                 }
                 log("stall selftest: \(step.name) indicator=\(view.shown ? "shown" : "hidden")"
                     + (view.shown ? " \"\(view.currentTitle)\" / \"\(view.currentDetail)\"" : "") + " -> \(path)")
@@ -312,15 +447,17 @@ enum StallSelfTest {
             if frameProbe.0 < 200 || frameProbe.1 > 60 { f.append("\(name): guest frame should stay visible around the card, got \(frameProbe)") }
             let c = px(pad)
             if c.0 > 75 || c.1 > 80 || c.2 > 90 { f.append("\(name): card padding should be dark, got \(c)") }
-            let s = view.spinnerFrame
-            var blue = 0
-            for yi in 0..<Int(s.height) {
-                for xi in 0..<Int(s.width) {
-                    let p = px(CGPoint(x: s.minX + CGFloat(xi), y: s.minY + CGFloat(yi)))
-                    if p.2 > 180 && p.0 < 160 { blue += 1 }
+            if view.showsSpinner {
+                let s = view.spinnerFrame
+                var blue = 0
+                for yi in 0..<Int(s.height) {
+                    for xi in 0..<Int(s.width) {
+                        let p = px(CGPoint(x: s.minX + CGFloat(xi), y: s.minY + CGFloat(yi)))
+                        if p.2 > 180 && p.0 < 160 { blue += 1 }
+                    }
                 }
+                if blue < 15 { f.append("\(name): spinner not drawn (\(blue) blue points)") }
             }
-            if blue < 15 { f.append("\(name): spinner not drawn (\(blue) blue points)") }
         } else if !view.isHidden {
             f.append("\(name): hidden indicator view should be isHidden")
         } else if let d = drawable, let dpx = OverlaySelfTest.pixels(d), d.width == img.width, d.height == img.height {

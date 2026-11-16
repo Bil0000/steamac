@@ -107,8 +107,9 @@ final class BootProgress {
     var onProvision: ((_ ok: Bool, _ reason: String) -> Void)?
     /// Guest password payload: `config applied` / `config failed <reason>` (or hvc0 `steamac-config: …`).
     var onConfig: ((_ ok: Bool, _ reason: String) -> Void)?
-    /// Guest agent heartbeat, once a second: `alive <uptime_ms> <loadavg1>`.
-    var onAlive: ((_ uptimeMs: Int, _ load: Double) -> Void)?
+    /// Guest agent heartbeat, once a second: `alive <uptime_ms> <loadavg1> [<game_cpu_s>]` (the
+    /// focused game's cgroup CPU seconds; older agents omit it).
+    var onAlive: ((_ uptimeMs: Int, _ load: Double, _ gameCPU: Double?) -> Void)?
     /// `game-start <appid>` / `game-mem <appid> <anon_kib> <guest_used_kib>` /
     /// `game-proton <appid> <version>` / `game-exit <appid>`.
     var onGameEvent: ((GuestGameEvent) -> Void)?
@@ -122,6 +123,8 @@ final class BootProgress {
     /// window pixels.
     var onCursorPosition: ((_ x: Int, _ y: Int, _ windowWidth: Int, _ windowHeight: Int) -> Void)?
     var onProfilesOK: ((_ hash: String, _ pending: Bool) -> Void)?
+    /// `setup <code> [text]`: the game-runtime setup status (at agent start and when it changes).
+    var onSetup: ((_ code: String, _ text: String) -> Void)?
 
     private var sawConsole = false
     private var okLines = 0
@@ -262,7 +265,7 @@ final class BootProgress {
             if size.count == 2, size[0] > 0, size[1] > 0 { onGameSize?(size[0], size[1]) }
         case "alive":
             guard parts.count >= 3, let ms = Int(parts[1]), let load = Double(parts[2]) else { return }
-            onAlive?(ms, load)
+            onAlive?(ms, load, parts.count > 3 ? Double(parts[3].prefix { $0 != " " }) : nil)
         case "cursor-ready":
             onCursorReady?()
         case "cursor":
@@ -302,6 +305,10 @@ final class BootProgress {
                 guard parts.count >= 3 else { return }
                 onGameEvent?(.proton(appid: id, version: parts[2]))
             }
+        case "setup":
+            let words = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true).map(String.init)
+            guard words.count >= 2 else { return }
+            onSetup?(words[1], words.count > 2 ? words[2] : "")
         default:
             break   // forward compatible
         }

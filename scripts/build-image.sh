@@ -14,7 +14,7 @@
 #
 # Usage: scripts/build-image.sh [step...]
 #   steps: builder rootfs initramfs fex layer disk check   (default: all, in order)
-# Env:   HOME_SIZE_GIB (default 64), STEAMOS_PASSWORD (default "steamos"),
+# Env:   HOME_SIZE_GIB (default 128), STEAMOS_PASSWORD (default "steamos"),
 #        FORCE_DISK=1 to rebuild steamos.img even if it exists (it holds user
 #        state once booted, so it is never overwritten silently),
 #        ALLOW_NO_VENUS=1 to build a test layer without work/out/mesa-venus.

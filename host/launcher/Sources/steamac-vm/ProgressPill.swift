@@ -333,6 +333,7 @@ final class NoPictureGuard {
         didSet {
             guard game != oldValue else { return }
             focusPresented = game != nil ? probe(.max).presented : nil
+            focusedAt = CACurrentMediaTime()
             hide(game != nil ? "game focused" : "game focus lost")
             gateChanged("game focus")
         }
@@ -348,6 +349,8 @@ final class NoPictureGuard {
     var lastKnown: () -> String? = { nil }
     /// Report to show, or nil to hide.
     var onChange: ((Report?) -> Void)?
+    /// A focused game's first non-black frame (app id).
+    var onGameDrew: ((Int) -> Void)?
     private(set) var report: Report?
 
     init(probe: @escaping (UInt64) -> Scanout.Probe) {
@@ -355,15 +358,25 @@ final class NoPictureGuard {
     }
 
     /// Game that showed a non-black frame: a dark scene later, also after a trip to Steam, is not loading.
-    /// shortcut: kept until another game draws, so a relaunch of the same game gets no card; track the
-    /// game's process if that matters.
+    /// Kept until another game draws or this one starts again (`gameStarted`).
     private var drewGame: Int?
     /// `presented` when the game got focus: that frame is Steam's and proves nothing.
     private var focusPresented: UInt64?
+    private var focusedAt: CFTimeInterval = 0
+    /// The last game's first non-black frame: app id and seconds since it got focus.
+    private(set) var firstFrame: (game: Int, seconds: Double)?
     private var gateOpen: Bool { ready && !gamePaused && !asleep && !vmPaused && (game == nil || game != drewGame) }
     /// Timer suspended while its gate is closed: no 4 Hz main-queue wakeups
     /// during gameplay, sleep or a paused VM.
     private var running = false
+
+    /// `game-start`: a new run of the game must draw again before its dark picture counts as a scene.
+    func gameStarted(_ appid: Int) {
+        guard drewGame == appid else { return }
+        drewGame = nil
+        if game == appid { focusPresented = probe(.max).presented; focusedAt = CACurrentMediaTime() }
+        gateChanged("game started")
+    }
 
     func start() {
         guard timer == nil else { return }
@@ -423,7 +436,10 @@ final class NoPictureGuard {
                         hide("first non-black frame")
                     }
                     if let game {
+                        firstFrame = (game, now - focusedAt)
+                        log("game: first frame \(game) after \(String(format: "%.1f", now - focusedAt)) s")
                         drewGame = game
+                        onGameDrew?(game)
                         gateChanged("game drew")
                         return
                     }

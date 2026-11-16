@@ -230,6 +230,8 @@ enum PillSelfTest {
             },
             Step(name: "17c-game-picture-hides-card", action: { frames = .pattern }, wait: 0.8) {
                 expectNoPill("game picture") ?? (wc.stallView.shown ? "loading card should hide on the game's picture" : nil)
+                    ?? (noPicture.firstFrame.map { $0.game == 4242 && (8...15).contains($0.seconds) } == true
+                        ? nil : "first frame of game 4242 ~8.5 s after focus, got \(String(describing: noPicture.firstFrame))")
             },
             Step(name: "17d-game-dark-scene-no-card", action: { frames = .black }, wait: 3.5) {
                 expectNoPill("dark scene after the game drew")
@@ -258,6 +260,10 @@ enum PillSelfTest {
             Step(name: "17k-dark-after-early-frame-no-card", action: { frames = .black }, wait: 3.5) {
                 expectNoPill("dark scene after an early first frame")
                     ?? (wc.stallView.shown ? "a game frame newer than the focus change must count as drawn" : nil)
+            },
+            Step(name: "17l-relaunch-black-card", action: { guest("game-start 4244") }, wait: 3.5) {
+                expectNoPill("relaunched game black")
+                    ?? (wc.stallView.shown ? nil : "a relaunched game must draw again before its black picture counts as a scene")
             },
             Step(name: "18-steam-black-5.5s", action: { gpuBusy = false; guest("focus steam") }, wait: 5.5) {
                 expectPill(waiting, detail: String(localized: "black picture \(sampleSeconds) s"), percent: false)

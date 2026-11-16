@@ -19,7 +19,7 @@ enum DiskLayout {
 
     /// PART_SIZE_* of scripts/config.env (MiB).
     static let espMiB: UInt64 = 256, efiMiB: UInt64 = 64, rootMiB: UInt64 = 10240, varMiB: UInt64 = 1024
-    static let defaultHomeGiB = 64
+    static let defaultHomeGiB = 128
     static let mib: UInt64 = 1 << 20
     static let sector: UInt64 = 512
 
