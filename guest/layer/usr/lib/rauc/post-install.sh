@@ -55,7 +55,9 @@
 #     rootfs-X/var-X, layer, masks; steamos-post-update.service runs once.
 #     graphical.target -> steamos-boot.service -> steamos-bootconf set-mode
 #     booted -> splctl set-state X good (BOOT_X_LEFT=3): update committed.
-#  8. Rollback: if X never reaches graphical.target, BOOT_X_LEFT drops 2,1,0
+#     [steamac] On the first boot of a new BUILD_ID, steamos-boot.service.d
+#     waits for Steam's UI first (boot-good-gate); no UI = not committed.
+#  8. Rollback: if X never reaches graphical.target (or Steam, see 7), BOOT_X_LEFT drops 2,1,0
 #     and the initramfs boots Y (BOOT_Y_LEFT was 3 from its last good boot);
 #     RAUC then reports X "bad" (get-state X -> boot-attempts 1), primary stays
 #     X in BOOT_ORDER but is skipped while BOOT_X_LEFT=0. The next update

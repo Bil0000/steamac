@@ -1,0 +1,41 @@
+#!/bin/bash
+# steamac: steamos-boot.service (drop-in 50-steamac.conf) marks the booted slot good as soon as
+# graphical.target is reached, before autologin, gamescope or Steam run. On the first boot of a
+# new SteamOS build this ExecStartPre holds that until the fx-progress-agent `ready` marker of
+# this boot (Steam's UI or the desktop on screen). Without it the slot is not marked good, the
+# initramfs attempt counter stays lowered, and after three such boots the other slot boots.
+#   (no args)  wait (bounded) when BUILD_ID differs from the last good build; no stamp yet
+#              (new disk, or the first boot with this layer) or no fx.progress port: no wait
+#   --stamp    ExecStartPost: record BUILD_ID as the last good build
+# Test overrides: STEAMAC_ROOT (path prefix), STEAMAC_READY_TIMEOUT (seconds).
+set -euo pipefail
+
+root=${STEAMAC_ROOT:-}
+stamp=$root/var/lib/steamac/good-build
+build=$(sed -n 's/^BUILD_ID=//p' "$root/etc/os-release" | tr -d '"')
+
+if [[ ${1:-} == --stamp ]]; then
+    mkdir -p "${stamp%/*}"
+    printf '%s\n' "$build" > "$stamp"
+    exit 0
+fi
+
+good=$(cat "$stamp" 2>/dev/null || true)
+[[ -n $good && $good != "$build" ]] || exit 0
+if [[ ! -e $root/dev/virtio-ports/fx.progress ]]; then
+    echo "steamac: new SteamOS build $build, no fx.progress port: not waiting for Steam"
+    exit 0
+fi
+boot=$(cat "$root/proc/sys/kernel/random/boot_id")
+ready=$root/tmp/.fx-progress-ready-1000
+timeout=${STEAMAC_READY_TIMEOUT:-1800}
+echo "steamac: new SteamOS build $build (last good $good): waiting up to ${timeout}s for Steam before marking this slot good"
+for ((i = 0; i < timeout; i++)); do
+    if [[ $(cat "$ready" 2>/dev/null) == "$boot" ]]; then
+        echo "steamac: Steam is up on build $build"
+        exit 0
+    fi
+    sleep 1
+done
+echo "steamac: no Steam UI on build $build after ${timeout}s: this slot is not marked good" >&2
+exit 1

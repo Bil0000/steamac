@@ -107,7 +107,7 @@ for f in usr/bin/splctl usr/lib/rauc/post-install.sh usr/lib/steamac/kernelsetup
          usr/lib/steamac/nested-desktop usr/lib/steamac/steam-frame-latency usr/lib/steamac/steam-launch-app usr/lib/steamac/mem-trim usr/lib/steamac/steam-ui-gpu \
          usr/lib/steamac/desktop-bin/kwin_wayland_wrapper \
          usr/lib/steamac/desktop-bin/steamosctl usr/lib/steamos/gamescope-session \
-         usr/lib/steamac/compact-disk; do
+         usr/lib/steamac/compact-disk usr/lib/steamac/boot-good-gate; do
     [[ -x $ST/$f ]] || { echo "[layer] $f missing or not executable" >&2; exit 1; }
     bash -n "$ST/$f"
 done
