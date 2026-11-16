@@ -1311,7 +1311,7 @@ extension WindowController {
         if down {
             guard inPicture(e) else { return }
             if clickCaptures {
-                grabPointer()   // the capturing click itself is not forwarded
+                if stall?.asking != true { grabPointer() }   // the capturing click itself is not forwarded
                 return
             }
         }

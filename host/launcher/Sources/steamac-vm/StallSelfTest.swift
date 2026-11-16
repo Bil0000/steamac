@@ -52,8 +52,10 @@ enum StallSelfTest {
         let presenter = Presenter(display: display, renderer: renderer)
         display.sink = presenter
         let W = o.displayWidth, H = o.displayHeight
+        let inputs = VMInputs(keyboard: InputDevices.keyboard(), tablet: InputDevices.tablet(), mouse: InputDevices.mouse())
         let wc = WindowController(title: OverlaySelfTest.windowTitleForTest, width: W, height: H, renderer: renderer,
-                                  inputs: nil, mouseMode: .auto)
+                                  inputs: inputs, mouseMode: .auto)
+        wc.settings.autoCaptureGames = false
         presenter.view = wc.view
         wc.view.metalLayer.framebufferOnly = false
         // The card pixel test must not depend on saved HUD/upscaler preferences.
@@ -338,8 +340,19 @@ enum StallSelfTest {
             Step(name: "14b-dark-game-idle-cpu-prompts", action: { gameCPU.store(2, ordering: .relaxed) }, wait: 63) {
                 expectStuck()
             },
-            Step(name: "14b2-stuck-prompt-keeps-pointer", action: {}, wait: 0) {
-                wc.autoCaptureBlocked ? expectStuck() : "auto-capture would take the mouse while the may-be-stuck card asks"
+            Step(name: "14b2-stuck-prompt-keeps-pointer", action: {
+                wc.settings.autoCaptureGames = true
+                let centre = wc.view.convert(NSPoint(x: wc.view.bounds.midX, y: wc.view.bounds.midY), to: nil)
+                if let e = NSEvent.mouseEvent(with: .leftMouseDown, location: centre, modifierFlags: [], timestamp: 0,
+                                              windowNumber: wc.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    wc.pointerButton(e, down: true)
+                }
+            }, wait: 0.1) {
+                let captured = wc.pointerCaptured
+                wc.releasePointer()
+                wc.settings.autoCaptureGames = false
+                return captured ? "a click on the picture took the mouse while the may-be-stuck card asks"
+                    : wc.autoCaptureBlocked ? expectStuck() : "auto-capture would take the mouse while the may-be-stuck card asks"
             },
             Step(name: "14c-restart-game", action: { _ = hostLines(); if let r = view.linkFrames.first { click(r) } }, wait: 0.6) {
                 let sent = hostLines()
