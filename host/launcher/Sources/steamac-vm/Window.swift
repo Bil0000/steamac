@@ -550,7 +550,7 @@ final class WindowController: NSObject, NSWindowDelegate {
 
     /// `setup <code> [text]` from the guest agent; unknown codes are ignored.
     private func setupChanged(code: String, text: String) {
-        guard ["preparing", "installed", "need-tools", "need-restart", "failed", "off"].contains(code) else {
+        guard ["preparing", "installed", "need-tools", "need-restart", "need-update", "failed", "off"].contains(code) else {
             log("setup: ignoring unknown status \(code)")
             return
         }
