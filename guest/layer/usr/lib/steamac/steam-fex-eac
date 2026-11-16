@@ -215,22 +215,29 @@ def unwrap(keep):
             print(f"steam-fex-eac: Skipping {account}: {error}")
 
 
-def unmap():
-    """Remove the compatibility tool entries we wrote that still name our tool."""
+def unmap(keep=()):
+    """Remove the compatibility tool entries we wrote that still name our tool, except for games in keep."""
     record = STATE / "mapped.json"
     if not record.exists():
         return
     config = STEAM / "config/config.vdf"
+    mapped = json.loads(record.read_text())
     try:
-        for appid in json.loads(record.read_text()):
+        for appid in mapped:
             key = (*MAPPING, appid)
+            if appid in keep:
+                continue
             if config.is_file() and current(config, (*key, "name")) == "proton_experimental":
                 remove(config, key)
                 print(f"steam-fex-eac: App {appid}: compatibility tool proton_experimental removed.")
     except ValueError as error:
         print(f"steam-fex-eac: Compatibility tools not changed ({config}: {error}); trying again at the next Steam start.")
         return
-    record.unlink()
+    kept = [appid for appid in mapped if appid in keep]
+    if kept:
+        VDF["atomic_write"](record, json.dumps(kept) + "\n")
+    else:
+        record.unlink()
 
 
 def tool_appids(names):
@@ -309,12 +316,13 @@ def configure_eac_games():
     found = libraries()
     games = eac_games(found)
     unwrap(games)
+    unmap(games)
     config = STEAM / "config/config.vdf"
     missing = [name for name in ("Proton - Experimental", "Proton EasyAntiCheat Runtime")
                if games and not any((library / "steamapps/common" / name).is_dir() for library in found)]
     if missing:
         print("steam-fex-eac: Install " + " and ".join(missing) + " in Steam for EAC games.")
-    request_tools(missing)
+    request_tools(missing + ([TOOL.name] if not complete(TOOL) else []))
     if not games or not config.is_file():
         return missing
     record = STATE / "mapped.json"

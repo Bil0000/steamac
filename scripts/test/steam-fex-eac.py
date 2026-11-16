@@ -397,7 +397,8 @@ class GameSetupTests(unittest.TestCase):
         self.game_settings("709")
         (self.steam / "appcache").mkdir()
         (self.steam / "appcache/appinfo.vdf").write_bytes(appinfo_v29(
-            {11: ("Tool", "Proton - Experimental"), 12: ("Tool", "Proton EasyAntiCheat Runtime"), 13: ("Game", "Protected")}))
+            {11: ("Tool", "Proton - Experimental"), 12: ("Tool", "Proton EasyAntiCheat Runtime"), 13: ("Game", "Protected"),
+             14: ("Tool", "FEX-Emu")}))
         self.hook()
         self.assertEqual((self.home / "run/steamac/steam-install-tools").read_text(),
                          "steam://install/11\nsteam://install/12\n")
@@ -416,6 +417,10 @@ class GameSetupTests(unittest.TestCase):
         self.assertEqual((self.home / "steam-calls").read_text(), "steam://install/11\nsteam://install/12\n")
         self.assertIn("ExecStartPost=-/usr/lib/steamac/steam-install-tools",
                       (ROOT / "guest/layer/usr/lib/systemd/user/steam.service.d/50-steamac.conf").read_text())
+        shutil.rmtree(self.tool)
+        self.hook()
+        self.assertEqual((self.home / "run/steamac/steam-install-tools").read_text(),
+                         "steam://install/11\nsteam://install/12\nsteam://install/14\n")
 
     def test_appinfo_is_not_read_when_no_tool_is_missing(self):
         (self.steam / "appcache").mkdir()
@@ -424,8 +429,9 @@ class GameSetupTests(unittest.TestCase):
 
     def test_scan_is_cached_per_manifest(self):
         root = self.library_game(self.steam, "705", "Protected", "EasyAntiCheat")
-        self.game_settings("705")
+        config, _ = self.game_settings("705")
         self.hook()
+        self.assertIn('"705"', config.read_text())
         (root / "Game.exe").unlink()
         self.hook()
         manifest = (self.steam / "steamapps/appmanifest_705.acf").resolve()
@@ -435,6 +441,8 @@ class GameSetupTests(unittest.TestCase):
         self.hook()
         cache = json.loads((self.home / "state/steamac/fex-eac/scan.json").read_text())
         self.assertFalse(cache[str(manifest)][2])
+        self.assertNotIn('"705"', config.read_text())
+        self.assertFalse((self.home / "state/steamac/fex-eac/mapped.json").exists())
 
     def test_bad_account_config_does_not_stop_setup(self):
         self.library_game(self.steam, "438100", "Game", "EasyAntiCheat")
