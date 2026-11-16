@@ -13,7 +13,10 @@ for entry in json.load(open(build + '/compile_commands.json')):
     if not entry['file'].endswith(source):
         continue
     flags, skip = [], False
-    for arg in shlex.split(entry['command'])[1:]:
+    args = shlex.split(entry['command'])
+    while args and not args[0].startswith('-'):
+        args = args[1:]
+    for arg in args:
         if skip:
             skip = False
         elif arg in ('-o', '-c', '-MF', '-MQ'):
