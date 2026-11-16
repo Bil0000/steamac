@@ -39,7 +39,7 @@ echo x > "$d/part/FEX/ext/f"; PATH="$d/c:$PATH" WORK="$d/part" sh "$d/build.sh" 
 if [ $rc -ne 0 ] && grep -q 'local changes' "$d/part-out" && [ "$(cat "$d/part/FEX/ext/f")" = x ]; then echo "ok   modified submodule is refused and kept"; else echo "FAIL modified submodule: rc=$rc"; fail=1; fi
 if [ "${ONLINE:-0}" = 1 ]; then
   tag=$(sed -n 's/^FEX_EAC_TAG=//p' "$S"); sha=$(sed -n 's/^FEX_EAC_SHA=//p' "$S")
-  got=$(git ls-remote https://github.com/StonkGuy/FEX.git "refs/tags/$tag^{}" | cut -f1)
+  got=$(git ls-remote https://github.com/StonkGuy/FEX.git "refs/tags/$tag" "refs/tags/$tag^{}" | tail -1 | cut -f1)
   [ "$got" = "$sha" ] && echo "ok   $tag = $sha" || { echo "FAIL $tag is '$got', script pins $sha"; fail=1; }
 fi
 exit $fail

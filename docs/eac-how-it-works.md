@@ -29,10 +29,10 @@ session never authenticates.
 
 ## What the patched FEX does
 
-FEX-2610 with the EAC patches ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610), currently pinned to `eac-2610.3` and built in the guest with `-DBUILD_STEAM_SUPPORT=ON`) emulates the x86-64 view of a `ptrace`
+FEX-2610 with the EAC patches ([StonkGuy/FEX](https://github.com/StonkGuy/FEX/tree/eac-2610), currently pinned to `eac-2610.5` and built in the guest with `-DBUILD_STEAM_SUPPORT=ON`) emulates the x86-64 view of a `ptrace`
 tracee, runs guest signal handlers with the Linux signal mask, and keeps registers set on syscall-entered handlers; patch
 0002 stops pages that keep faulting on self-modifying code from being write-protected. Earlier `.2` tests passed all three checks.
-The current `.3` pin still needs those guest checks and a real game test. Patch
+The current `.5` pin runs Bodycam with EAC. Patch
 descriptions and reasoning: [patches.md](https://github.com/StonkGuy/eac-arm64-emulation-poc/blob/master/docs/patches.md)
 in the research repo.
 
