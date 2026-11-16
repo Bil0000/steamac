@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -66,6 +67,19 @@ class GameSetupTests(unittest.TestCase):
         self.assertIn("--user start --no-block steamac-fex-build.service", (self.home / "service-calls").read_text())
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve FEX")
         self.assertIn("Preparing", output)
+
+    def test_prebuilt_layer_stage_installs_without_the_build_service(self):
+        payload = self.home / "payload"
+        payload.mkdir()
+        for name in ("build-fex.sh", "install-fex-tool.sh"):
+            shutil.copy(ROOT / "fex-eac" / name, payload / name)
+        self.seed(payload / "stage", "FEX-prebuilt")
+        (payload / "stage/.steamac-fex-source").write_text(self.source + "\n")
+        shutil.rmtree(self.stage)
+        self.env["STEAMAC_FEX_DIR"] = str(payload)
+        self.hook()
+        self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-prebuilt FEX")
+        self.assertFalse((self.home / "service-calls").exists())
 
     def test_staged_runtime_installs_and_repairs_steam_update(self):
         self.hook()

@@ -5,7 +5,8 @@
 # Contents: guest/layer/usr (steamac files) + work/out/mesa-venus/usr (Venus
 # ICDs, the patched zink GL stack and the x86_64 fault reporter from
 # guest/mesa; required unless ALLOW_NO_VENUS=1) + the fx-progress-agent binary
-# built by step 25 from guest/progress-agent.
+# built by step 25 from guest/progress-agent + the patched FEX stage built by
+# step 27.
 set -euo pipefail
 . /src/scripts/config.env
 
@@ -18,6 +19,16 @@ cp -a /src/guest/layer/usr "$ST/usr"
 install -d "$ST/usr/lib/steamac/fex-eac"
 for file in build-fex.sh install-fex-tool.sh; do
     install -m 0755 "/src/fex-eac/$file" "$ST/usr/lib/steamac/fex-eac/$file"
+done
+# Prebuilt runtime: steam-fex-eac installs it when its receipt names build-fex.sh's FEX_EAC_SHA.
+FEX=/work/out/fex-eac/stage
+fex_sha=$(sed -n 's/^FEX_EAC_SHA=//p' /src/fex-eac/build-fex.sh)
+[[ $(cat "$FEX/.steamac-fex-source" 2>/dev/null) == "$fex_sha" ]] \
+    || { echo "[layer] $FEX is missing or not FEX $fex_sha: run scripts/build-image.sh fex" >&2; exit 1; }
+cp -a "$FEX" "$ST/usr/lib/steamac/fex-eac/stage"
+for f in FEXCompatTool usr/bin/FEX usr/bin/FEXServer; do
+    [[ $(od -An -tx1 -N20 "$ST/usr/lib/steamac/fex-eac/stage/$f" | tr -d ' \n') == 7f454c46020101*b700 ]] \
+        || { echo "[layer] fex-eac/stage/$f is not an aarch64 ELF" >&2; exit 1; }
 done
 
 if [[ -d $VENUS/usr ]]; then

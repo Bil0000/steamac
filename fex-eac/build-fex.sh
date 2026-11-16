@@ -38,7 +38,8 @@ fi
   { echo "$FEX_EAC_TAG is $(git rev-parse "$FEX_EAC_TAG^{commit}"), expected $FEX_EAC_SHA" >&2; exit 1; }
 git submodule update --init --recursive --depth 1
 
-# Release Steam-mode build: no tests, thunks or FEXConfig, native CPU tuning, module scanning off for clang 19.
+# Release Steam-mode build: no tests, thunks or FEXConfig, native CPU tuning (TUNE_CPU= overrides it), module scanning
+# off for clang 19.
 cmake -S . -B build-steam -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER=clang \
@@ -49,7 +50,7 @@ cmake -S . -B build-steam -G Ninja \
   -DBUILD_FEXCONFIG=OFF \
   -DENABLE_LTO=OFF \
   -DENABLE_ASSERTIONS=OFF \
-  -DTUNE_CPU=native \
+  -DTUNE_CPU="${TUNE_CPU:-native}" \
   -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
   -DCMAKE_INSTALL_PREFIX=/usr
 

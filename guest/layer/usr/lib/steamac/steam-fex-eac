@@ -13,7 +13,6 @@ import sys
 HOME = Path.home()
 STEAM = HOME / ".local/share/Steam"
 WORK = Path(os.environ.get("WORK", HOME / "fex-eac-work"))
-STAGE = WORK / "stage"
 TOOL = STEAM / "steamapps/common/FEX-Emu"
 PAYLOAD = Path(os.environ.get("STEAMAC_FEX_DIR", "/usr/lib/steamac/fex-eac"))
 STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "steamac/fex-eac"
@@ -39,6 +38,14 @@ def complete(root):
     return all((root / name).is_file() and (root / name).stat().st_size for name in FILES)
 
 
+def staged():
+    for root in (PAYLOAD / "stage", WORK / "stage"):
+        receipt = root / ".steamac-fex-source"
+        if complete(root) and receipt.is_file() and receipt.read_text().strip() == source():
+            return root
+    return None
+
+
 def fingerprint(root):
     if not complete(root):
         return None
@@ -60,8 +67,8 @@ def report(message):
     print("steam-fex-eac: " + message)
 
 
-def install(action, backup):
-    env = dict(os.environ, STAGE=str(STAGE), BACKUP=str(backup))
+def install(action, backup, stage=WORK / "stage"):
+    env = dict(os.environ, STAGE=str(stage), BACKUP=str(backup))
     subprocess.run(["sh", str(PAYLOAD / "install-fex-tool.sh"), action], env=env, check=True)
 
 
@@ -190,8 +197,8 @@ def main():
             report("Experimental game support is off. The previous runtime is restored.")
             return
         configure_eac_games()
-        receipt = STAGE / ".steamac-fex-source"
-        if not complete(STAGE) or not receipt.is_file() or receipt.read_text().strip() != source():
+        stage = staged()
+        if stage is None:
             report("Preparing the Linux game runtime. Restart Steam when setup finishes.")
             subprocess.run(["systemctl", "--user", "start", "--no-block", "steamac-fex-build.service"], check=True)
             return
@@ -202,12 +209,12 @@ def main():
         current = fingerprint(TOOL)
         if previous.get("installed") == current:
             backup = previous["backup"]
-        elif current == fingerprint(STAGE):
+        elif current == fingerprint(stage):
             report("Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
             return
         else:
             backup = str(STATE / "backups" / current)
-        install("install", backup)
+        install("install", backup, stage)
         temporary = marker.with_suffix(".new")
         temporary.write_text(json.dumps({"source": source(), "backup": backup, "installed": fingerprint(TOOL)}) + "\n")
         temporary.replace(marker)

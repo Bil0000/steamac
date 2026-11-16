@@ -337,6 +337,11 @@ if dxmt_guest:
         archive('Wine-winecrt0', '11.2', 'LGPL-2.1-or-later',
                 dxmt_location + 'aarch64-windows/winemetal.dll', wine_url,
                 root / 'work/cache/dxmt/wine-11.2.tar.xz', ('COPYING.LIB', 'LICENSE'))
+fex_sha = re.search(r'^FEX_EAC_SHA=([0-9a-f]{40})$', (root / 'fex-eac/build-fex.sh').read_text(), re.M).group(1)
+fex_licenses = root / 'work/out/fex-eac/licenses'
+add('FEX', fex_sha[:10], 'MIT AND LicenseRef-See-Included-Text', layer + ':/usr/lib/steamac/fex-eac/stage',
+    'https://github.com/StonkGuy/FEX/tree/' + fex_sha,
+    [(f.name, f.read_bytes()) for f in sorted(fex_licenses.iterdir())] if fex_licenses.is_dir() else [])
 own_docs = []
 for filename in ('LICENSE', 'NOTICE'):
     path = root / filename
