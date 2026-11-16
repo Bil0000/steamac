@@ -6,5 +6,9 @@ Description=FX Steam Launcher: return boot page cache to the Mac
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/steamac/mem-trim
+# 75 = a game is running: no drop now, run again 5 minutes later.
+SuccessExitStatus=75
+RestartForceExitStatus=75
+RestartSec=300
 Nice=19
 IOSchedulingClass=idle
