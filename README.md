@@ -659,8 +659,8 @@ For tests with `--control-fifo`: `close`, `suspend`, `resume` (also wakes a slee
 
 Steam → Power → **Switch to Desktop** starts KDE Plasma; the desktop's **Return to Gaming Mode** icon
 goes back. On the Steam Frame image this mode is a VR desktop (`plasma-session.target` wants
-SteamVR, which the VM masks), so the layer replaces it: `plasma-session.target` and
-`steamac-nested-desktop.service` run Plasma as one KWin window inside the same gamescope
+SteamVR, which the VM masks), so the layer replaces it:
+`steamac-nested-desktop.service` runs Plasma as one KWin window inside the same gamescope
 (`/usr/lib/steamac/nested-desktop`, like Valve's `steamos-nested-desktop`), sized to the display, so
 gamescope shows it 1:1. `gamescope-onready` waits for that service: when Plasma exits, the session
 ends and SDDM logs back in. Plasma gets its own runtime directory and D-Bus session bus; the layer's

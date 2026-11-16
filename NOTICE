@@ -19,8 +19,6 @@ MIT (LICENSES/MIT.txt) - derived from Valve Corporation's deckard-steamvr-sessio
 (SteamOS for Steam Frame; MIT according to its package metadata):
   guest/layer/usr/lib/steamos/gamescope-session
   guest/layer/usr/lib/systemd/user/gamescope-session.service
-  guest/layer/usr/lib/systemd/user/gamescope-session.target
-  guest/layer/usr/lib/systemd/user/plasma-session.target
   guest/layer/usr/share/deckard/mesavars.sh
   Copyright (c) Valve Corporation; changes Copyright 2026 FX GAMES FZ LLC
 

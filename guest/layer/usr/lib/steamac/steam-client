@@ -90,6 +90,11 @@ if [[ $desktop == 1 ]]; then
     exec /usr/bin/steam -silent -vrdisable -deckard "$@"
 fi
 
+if [[ ! -f $stock ]]; then
+    echo "steamac: $stock not found (moved by a SteamOS update?): Steam starts stock, without the client selection" >&2
+    exit 0
+fi
+
 signin=0
 if [[ -z $branch ]] && ! account_remembered; then
     if curl -fsS -m 5 -o /dev/null --head https://client-update.steamstatic.com/steam_client_steamdeck_stable_linuxarm64; then

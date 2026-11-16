@@ -55,7 +55,9 @@
 #     rootfs-X/var-X, layer, masks; steamos-post-update.service runs once.
 #     graphical.target -> steamos-boot.service -> steamos-bootconf set-mode
 #     booted -> splctl set-state X good (BOOT_X_LEFT=3): update committed.
-#  8. Rollback: if X never reaches graphical.target, BOOT_X_LEFT drops 2,1,0
+#     [steamac] On the first boot of a new BUILD_ID, steamos-boot.service.d
+#     waits for Steam's UI first (boot-good-gate); no UI = not committed.
+#  8. Rollback: if X never reaches graphical.target (or Steam, see 7), BOOT_X_LEFT drops 2,1,0
 #     and the initramfs boots Y (BOOT_Y_LEFT was 3 from its last good boot);
 #     RAUC then reports X "bad" (get-state X -> boot-attempts 1), primary stays
 #     X in BOOT_ORDER but is skipped while BOOT_X_LEFT=0. The next update
@@ -63,6 +65,11 @@
 #     A manual rollback is `steamos-bootconf set-mode reboot-other`.
 # ---------------------------------------------------------------------------
 set -euo pipefail
+
+# holo-sync-var copies only the /etc files listed in atomic-update-keep.conf and
+# /etc/atomic-update.conf.d/*.conf to the new slot; keep the launcher's settings.
+{ mkdir -p /etc/atomic-update.conf.d && echo '/etc/steamac/**' > /etc/atomic-update.conf.d/50-steamac.conf; } \
+    || echo "steamac: cannot write /etc/atomic-update.conf.d/50-steamac.conf: /etc/steamac will not carry over" >&2
 
 root_dev=$(findmnt -n -v -o SOURCE /)
 stock=$(mktemp -d /run/steamac-rauc-stock.XXXXXX)
@@ -72,9 +79,20 @@ rc=0
 unshare --mount --propagation private /bin/bash -c '
     set -e
     mount -o ro "$1" "$2"
+    grep -Eq "steamos-chroot .*-- steamos-finalize-install" "$2/usr/lib/rauc/post-install.sh" \
+        || echo "steamac: ERROR: stock post-install.sh has no \"steamos-chroot ... -- steamos-finalize-install\" call: the rauc-shims/steamos-chroot fix does not apply, the update may fail" >&2
     PATH=/usr/lib/steamac/rauc-shims:$PATH
     export PATH
     exec "$2/usr/lib/rauc/post-install.sh"
 ' steamac-post-install "$root_dev" "$stock" || rc=$?
 rmdir "$stock" || :
+# The stock script switches the primary slot through steamos-bootconf -> splctl;
+# make sure a later steamos-bootconf that no longer calls splctl still does.
+case $(splctl get-current) in A) new_slot=B ;; B) new_slot=A ;; *) new_slot= ;; esac
+if (( rc == 0 )) && [[ -n $new_slot ]]; then
+    if [[ $(splctl get-primary) != "$new_slot" || $(splctl get-state "$new_slot") != good ]]; then
+        echo "steamac: stock post-install did not make slot $new_slot primary with boot tries left: splctl set-primary $new_slot" >&2
+        splctl set-primary "$new_slot" || rc=$?
+    fi
+fi
 exit "$rc"

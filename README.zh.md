@@ -530,7 +530,7 @@ PrepareForSleep(false)，Steam 醒来；“正在唤醒…”进度小条持续�
 ### 桌面模式
 
 Steam → 电源 → **切换到桌面**启动 KDE Plasma；桌面的**返回游戏模式**图标回去。在 Steam Frame 映像上该模式是 VR 桌面（`plasma-session.target` 想要
-SteamVR，虚拟机中已屏蔽），层将其替换：`plasma-session.target` 与
+SteamVR，虚拟机中已屏蔽），层将其替换：
 `steamac-nested-desktop.service` 在同一 gamescope 中把 Plasma 跑成一个 KWin 窗口
 （`/usr/lib/steamac/nested-desktop`，如 Valve 的 `steamos-nested-desktop`），按显示尺寸，gamescope
 1:1 显示。`gamescope-onready` 等该服务：Plasma 退出即会话结束，SDDM 重新登录。Plasma 有独立运行时目录与 D-Bus 会话总线；层的
