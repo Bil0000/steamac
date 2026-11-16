@@ -52,7 +52,8 @@
 //! `thaw-game` / `still-background` (freeze.rs: pause the focused game while the
 //! launcher is in the background); `profiles <base64-json>`, `launch <appid>`,
 //! `restart-steam` (profiles.rs: serialized background worker; also resends
-//! the setup status, setup.rs, after the user clicked "Restart Steam");
+//! the setup status, setup.rs, after the user clicked "Restart Steam"; ignored
+//! in Desktop Mode, where the desktop's own Steam runs);
 //! `stop-game <appid>` (the user clicked "Restart game" on a stuck launch:
 //! freeze.rs stops the game's scopes and starts it again);
 //! `keyboard-layout <index> <layout[(variant)]>...` (keyboard.rs: latest-only worker);
@@ -342,7 +343,7 @@ fn ready_marker() -> String {
 /// never blocking (each handler only starts work or answers right away).
 fn serve_host(port: &mut Port, collector: &mut collect::Collector, freezer: &mut freeze::Freezer, focus: &focus::Focus,
               profiles: &profiles::Requests, compact: &compact::Compact, cursor: &mut cursor::Cursor, games: &games::Games,
-              setup: &mut setup::Setup) {
+              setup: &mut setup::Setup, desktop: bool) {
     for line in port.read_lines() {
         let line = line.trim();
         if let Some(enabled) = port::cursor_tracking(line) {
@@ -356,6 +357,7 @@ fn serve_host(port: &mut Port, collector: &mut collect::Collector, freezer: &mut
             "collect-logs" => collector.request(arg, port, games.diagnostic_appid()),
             "compact-disk" => compact.request(arg),
             "profiles" | "launch" => profiles.request(cmd, arg),
+            "restart-steam" if desktop => eprintln!("fx-progress: restart-steam: ignored in Desktop Mode"),
             "restart-steam" => {
                 setup.resend();
                 profiles.request(cmd, arg);
@@ -454,7 +456,7 @@ fn report_boot(
             }
         }
         rep.port.flush();
-        serve_host(&mut rep.port, collector, freezer, focus, profiles, compact, cursor, games, setup);
+        serve_host(&mut rep.port, collector, freezer, focus, profiles, compact, cursor, games, setup, false);
         collector.pump(&mut rep.port);
         focus.pump(&mut rep.port, false, names);
         cursor.pump(&mut rep.port);
@@ -552,7 +554,7 @@ fn main() {
         let mut pfds = Vec::with_capacity(8);
         while !terminated() {
             rep.port.flush();
-            serve_host(&mut rep.port, &mut collector, &mut freezer, &focus, &profiles, &compact, &mut cursor_state, &games, &mut setup);
+            serve_host(&mut rep.port, &mut collector, &mut freezer, &focus, &profiles, &compact, &mut cursor_state, &games, &mut setup, desktop);
             collector.pump(&mut rep.port);
             focus.pump(&mut rep.port, false, &mut names);
             cursor_state.pump(&mut rep.port);

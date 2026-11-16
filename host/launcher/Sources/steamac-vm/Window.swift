@@ -559,9 +559,9 @@ final class WindowController: NSObject, NSWindowDelegate {
         updateSetupCard()
     }
 
-    /// The setup card shows over the Steam UI after `ready` (never over a game or the overlay).
+    /// The setup card shows over the Steam UI after `ready` (never over a game, the desktop or the overlay).
     private func updateSetupCard() {
-        let shown = progress?.state.phase == .running && !overlay.shown && focusedGame == nil
+        let shown = progress?.state.phase == .running && !overlay.shown && guestFocus == .steam
         var title: String?
         var restart = false
         switch shown ? setupStatus?.code : nil {

@@ -217,6 +217,9 @@ enum StallSelfTest {
             Step(name: "03h-setup-not-over-game", action: { guest("setup preparing\n"); guest("focus game 4242\n") }, wait: 0.6) {
                 expectSetup(nil)
             },
+            Step(name: "03h2-setup-not-over-desktop", action: { guest("focus desktop 1280x800\n") }, wait: 0.6) {
+                expectSetup(nil)
+            },
             Step(name: "03i-setup-off", action: { guest("focus steam\n"); guest("setup off\n") }, wait: 0.6) {
                 expectSetup(nil)
             },
