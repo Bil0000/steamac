@@ -3,7 +3,8 @@
 # guest/layer/usr/lib/rauc/post-install.sh (RAUC post-install wrapper) around a fake stock script:
 #   keep     /etc/atomic-update.conf.d/50-steamac.conf lists /etc/steamac/** before the stock script runs
 #   primary  the stock script exits 0 but leaves the booted slot primary: the wrapper sets the other;
-#            with no booted slot known (get-current empty) it changes nothing
+#            with no booted slot known (get-current empty) it changes nothing; the other slot
+#            already primary but with no boot tries left (after a rollback) gets set-primary again
 #   shim     a stock script without "steamos-chroot ... -- steamos-finalize-install" gets one error
 #            line and still runs; with the call, no error line
 # Runs as root in a throwaway Linux container (writes /etc/atomic-update.conf.d):
@@ -22,10 +23,11 @@ cat > "$T/bin/splctl" <<SPL
 case \$1 in
     get-current) cat $T/current ;;
     get-primary) cat $T/primary ;;
-    set-primary) echo "\$2" > $T/primary ;;
+    get-state) cat $T/state ;;
+    set-primary) echo "\$2" > $T/primary; echo good > $T/state ;;
 esac
 SPL
-echo A > "$T/primary"; echo A > "$T/current"
+echo A > "$T/primary"; echo A > "$T/current"; echo good > "$T/state"
 cat > "$T/stock/usr/lib/rauc/post-install.sh" <<STOCK
 #!/bin/bash
 cat /etc/atomic-update.conf.d/50-steamac.conf > $T/keep-seen 2>/dev/null
@@ -42,6 +44,9 @@ run || fail keep "exit $?: $(cat "$T/out")"
 : > "$T/current"
 run || fail primary "exit $?"
 [ "$(cat "$T/primary")" = B ] || fail primary "unknown booted slot: primary set to $(cat "$T/primary")"
+echo A > "$T/current"; echo bad > "$T/state"
+run || fail primary "exit $?"
+[ "$(cat "$T/state")" = good ] || fail primary "slot B primary with no boot tries left after post-install"
 echo A > "$T/current"
 grep -q ERROR "$T/out" && fail shim "error line with the call present: $(cat "$T/out")"
 sed -i '$d' "$T/stock/usr/lib/rauc/post-install.sh"
