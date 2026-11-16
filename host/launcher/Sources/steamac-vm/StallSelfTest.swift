@@ -348,6 +348,10 @@ enum StallSelfTest {
             Step(name: "14e-keep-waiting", action: { if view.linkFrames.count > 1 { click(view.linkFrames[1]) } }, wait: 5) {
                 expectLoading("after Keep waiting")
             },
+            // A pause, sleep or paused VM closes NoPictureGuard's gate (gameDark false) without a frame.
+            Step(name: "14f-keep-waiting-survives-pause", action: { monitor.gameDark = false; monitor.gameDark = true }, wait: 62) {
+                expectLoading("Keep waiting, then a pause and resume without a frame")
+            },
             Step(name: "15-shutdown", action: { guest("shutdown poweroff\n") }, wait: 0.6) {
                 wc.overlay.shown && progress.state.phase == .shutdown(reboot: false)
                     ? expectHidden("shutdown overlay") : "shutdown overlay should be shown"

@@ -349,6 +349,8 @@ final class NoPictureGuard {
     var lastKnown: () -> String? = { nil }
     /// Report to show, or nil to hide.
     var onChange: ((Report?) -> Void)?
+    /// A focused game's first non-black frame (app id).
+    var onGameDrew: ((Int) -> Void)?
     private(set) var report: Report?
 
     init(probe: @escaping (UInt64) -> Scanout.Probe) {
@@ -430,6 +432,7 @@ final class NoPictureGuard {
                         firstFrame = (game, now - focusedAt)
                         log("game: first frame \(game) after \(String(format: "%.1f", now - focusedAt)) s")
                         drewGame = game
+                        onGameDrew?(game)
                         gateChanged("game drew")
                         return
                     }

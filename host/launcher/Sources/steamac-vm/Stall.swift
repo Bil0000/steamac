@@ -123,7 +123,6 @@ final class StallMonitor {
     var gameDark = false {
         didSet {
             guard gameDark != oldValue else { return }
-            if !gameDark, game != nil, game == waited?.game { waited = nil }
             gateChanged()
         }
     }
@@ -200,6 +199,12 @@ final class StallMonitor {
         if let w = waited, w.game == game, gameCPU < w.cpu { waited = nil }
         gameCPUSamples.append((lastAlive, gameCPU))
         while gameCPUSamples.count > 2, gameCPUSamples[1].0 <= lastAlive - StallMonitor.hungThreshold { gameCPUSamples.removeFirst() }
+    }
+
+    /// The game showed its first picture (NoPictureGuard; not a pause or sleep that only closes
+    /// its gate): "Keep waiting" is over.
+    func gameDrew(_ appid: Int) {
+        if waited?.game == appid { waited = nil }
     }
 
     /// The focused game has not drawn, its GPU idled and its CPU stayed near zero for `hungThreshold`.

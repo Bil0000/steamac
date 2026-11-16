@@ -695,6 +695,7 @@ final class WindowController: NSObject, NSWindowDelegate {
                 progress.flatMap { $0.state.phase == .running ? $0.state.detail : nil }
             }
         }
+        noPicture.onGameDrew = { [weak self] in self?.stall?.gameDrew($0) }
         noPicture.onChange = { [weak self] report in
             self?.noPictureReport = report
             self?.stall?.gameDark = report?.game == true
