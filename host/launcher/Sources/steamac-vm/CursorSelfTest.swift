@@ -63,6 +63,9 @@ enum CursorSelfTest {
         let tablet = WindowController(title: "Tablet cursor test", width: 800, height: 500,
                                       renderer: wc.view.renderer, inputs: inputs, mouseMode: .tablet)
         if tablet.hostCursorRect != nil { failures.append("tablet mode hides its only usable cursor") }
+        let capture = WindowController(title: "Capture cursor test", width: 800, height: 500,
+                                       renderer: wc.view.renderer, inputs: inputs, mouseMode: .capture)
+        if capture.hostCursorRect != nil { failures.append("capture mode hides the cursor before a click captures") }
         func visible() -> Bool? {
             guard let data = NSCursor.currentSystem?.image.tiffRepresentation,
                   let pixels = NSBitmapImageRep(data: data) else { return nil }
@@ -221,6 +224,8 @@ enum CursorSelfTest {
         let progress = BootProgress()
         wc.attach(progress: progress)
         wc.overlay.hide(animated: false)
+        move(in: wc.window, center)
+        expect(true, "booting hides the Mac cursor over the picture")
         let card = wc.pill.cardFrame
         move(in: wc.window, wc.pill.convert(NSPoint(x: card.midX, y: card.midY), to: nil))
         expect(true, "clickable progress pill hides the Mac cursor")

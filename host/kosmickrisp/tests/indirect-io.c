@@ -1,4 +1,4 @@
-/* Dynamically indexed shader inputs/outputs longer than 16 elements (KosmicKrisp 0046).
+/* Dynamically indexed shader inputs/outputs longer than 16 elements (KosmicKrisp 0101).
  *
  * nir_to_msl emits shader_in/out as load_input/store_output with a constant offset, so an indirect index
  * into them must be lowered to an if-else tree whatever the array length; only function_temp arrays may

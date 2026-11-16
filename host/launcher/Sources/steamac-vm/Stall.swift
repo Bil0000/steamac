@@ -29,6 +29,39 @@ final class StallMonitor {
     static let tick: TimeInterval = 0.25
     static let perfPeriod: TimeInterval = 5
 
+    struct Diagnostic {
+        let idle: TimeInterval
+        let heartbeatAge: TimeInterval
+        let history: String
+        let memoryHistory: String
+        let threadSnapshot: String
+    }
+
+    private struct Reading {
+        let at: CFTimeInterval
+        let counters: Counters?
+        let heartbeatAge: TimeInterval?
+        let uptimeMs: Int
+        let load: Double
+        let cpu: Double
+        let pollGap: TimeInterval
+        let game: Bool
+        let gate: Bool
+        let hostActive: Bool
+        let hostKey: Bool
+        let hostWindow: String
+    }
+    // Independent of Settings > Performance statistics: reports otherwise had only the first
+    // 2 s of GPU idleness and could not distinguish agent loss, host scheduling and GPU stalls.
+    private var readings: [Reading] = []
+    private var nextReading = 0
+    private var lastReading: CFTimeInterval = 0
+    private var lastPoll: CFTimeInterval = 0
+    private var guestUptimeMs = 0
+    // A delayed main-queue timer cannot establish guest silence: queued progress
+    // callbacks have not had a chance to run either (STEAMAC-8).
+    private var heartbeatObservationStarted = CACurrentMediaTime()
+
     let view: StallIndicatorView
     /// nil = no counters (VM not running, no GPU): never shows.
     private let sample: () -> Counters?
@@ -49,6 +82,7 @@ final class StallMonitor {
     private var cpuSamples: [(CFTimeInterval, Double)] = []
     private var shownSince: (idleStart: CFTimeInterval, cpu: Double)?
     private var notRespondingReported = false
+    private var longStallLogged = false
     // perf stats window
     private var perfStart: CFTimeInterval = 0
     private var perfCounters: Counters?
@@ -69,13 +103,15 @@ final class StallMonitor {
     var gameName: () -> String? = { nil }
     /// The indicator is up (or about to fade in).
     var indicatorShown: Bool { shownSince != nil }
-    /// Once per indicator stretch, when its wording turns to "SteamOS is not responding…"
-    /// (argument: GPU idle seconds so far).
-    var onNotResponding: ((TimeInterval) -> Void)?
+    /// Once per indicator stretch, when its wording turns to "SteamOS is not responding…".
+    /// Recent counter/heartbeat samples accompany the report even when perf stats are off.
+    var onNotResponding: ((Diagnostic) -> Void)?
 
     init(view: StallIndicatorView, sample: @escaping () -> Counters?) {
         self.view = view
         self.sample = sample
+        readings.reserveCapacity(32)
+        VMMemoryDiagnostics.shared.start()
     }
 
     func start() {
@@ -115,6 +151,8 @@ final class StallMonitor {
         gateOpenedAt = now
         if lastAlive > 0 { lastAlive = now }
         counters = nil
+        lastPoll = now
+        heartbeatObservationStarted = now
         start()
     }
 
@@ -122,6 +160,7 @@ final class StallMonitor {
     func alive(uptimeMs: Int, load: Double) {
         lastAlive = CACurrentMediaTime()
         guestLoad = load
+        guestUptimeMs = uptimeMs
     }
 
     /// The agent ended with the gamescope session (bare `focus desktop`: Switch to Desktop, Return
@@ -148,8 +187,13 @@ final class StallMonitor {
 
     private func poll() {
         let now = CACurrentMediaTime()
+        if lastPoll > 0 && now - lastPoll > Self.heartbeatTimeout {
+            heartbeatObservationStarted = now
+            log("stall: host polling gap \(String(format: "%.2f", now - lastPoll)) s; observing fresh heartbeat window")
+        }
         let c = sample()
         let active: Bool
+        noteReading(now: now, counters: c)
         if let c, let prev = counters { active = c != prev } else { active = false }
         if let c { counters = c }
         perfNote(now: now, counters: c, active: active)
@@ -165,13 +209,15 @@ final class StallMonitor {
 
     /// Show / refresh / hide the indicator for the current state (no GPU work since `lastActivity`).
     private func evaluate(_ now: CFTimeInterval) {
-        let dead = notResponding()
+        let dead = notResponding(at: now)
         // Durations shown and logged are the GPU's whole idle time.
         guard countersAvailable, gateOpen, gameFocused || dead,
               coversDarkGame || now - max(lastActivity, gateOpenedAt) >= StallMonitor.idleThreshold else {
             if shownSince != nil {
+                let response = (heartbeatAge(at: now) ?? 0) > Self.heartbeatTimeout
+                    ? "host observation restarted" : "guest responding again"
                 hide(reason: !enabled ? "setting off" : suppressed ? "overlay"
-                     : notRespondingReported && !dead ? "guest responding again"
+                     : notRespondingReported && !dead ? response
                      : gameFocused ? "game picture back" : "game focus lost", now: now)
             }
             return
@@ -189,8 +235,20 @@ final class StallMonitor {
         }
         if !notRespondingReported && dead {
             notRespondingReported = true
-            log("stall: guest not responding (no heartbeat for \(Int(heartbeatAge ?? 0)) s, gpu idle \(Int(now - lastActivity)) s)")
-            onNotResponding?(now - lastActivity)
+            log("stall: guest not responding (no heartbeat for \(Int(heartbeatAge(at: now) ?? 0)) s, gpu idle \(Int(now - lastActivity)) s)")
+            onNotResponding?(Diagnostic(idle: now - lastActivity, heartbeatAge: heartbeatAge(at: now) ?? 0,
+                                       history: diagnosticHistory(now: now),
+                                       memoryHistory: VMMemoryDiagnostics.shared.history(),
+                                       threadSnapshot: StallThreadDiagnostics.snapshot()))
+        }
+        if !longStallLogged && now - max(lastActivity, gateOpenedAt) >= 10 {
+            longStallLogged = true
+            for line in diagnosticHistory(now: now).split(separator: "\n") {
+                log("stall: history \(line)")
+            }
+            for line in StallThreadDiagnostics.snapshot().split(separator: "\n") {
+                log("stall: \(line)")
+            }
         }
     }
 
@@ -198,6 +256,7 @@ final class StallMonitor {
         guard let since = shownSince else { return }
         shownSince = nil
         notRespondingReported = false
+        longStallLogged = false
         let duration = now - since.idleStart
         let cpu = duration > 0 ? (StallMonitor.cpuSeconds() - since.cpu) / duration : 0
         log("stall: gpu idle \(String(format: "%.1f", duration)) s (\(status(now, cpu: cpu)))"
@@ -208,18 +267,33 @@ final class StallMonitor {
 
     // MARK: wording
 
-    private var heartbeatAge: CFTimeInterval? { lastAlive > 0 ? CACurrentMediaTime() - lastAlive : nil }
+    private func heartbeatAge(at now: CFTimeInterval) -> CFTimeInterval? {
+        lastAlive > 0 ? max(0, now - lastAlive) : nil
+    }
 
-    private func notResponding() -> Bool { (heartbeatAge ?? 0) > StallMonitor.heartbeatTimeout }
+    // One poll uses one timestamp, including after diagnostic persistence or UI work.
+    // Advancing only the heartbeat clock mid-poll turns host paging into a guest hang
+    // (STEAMAC-8 b546e448: last history hb=1.14, report hb=6).
+    static func heartbeatTimedOut(at now: CFTimeInterval, lastAlive: CFTimeInterval,
+                                  observationStarted: CFTimeInterval, lastPoll: CFTimeInterval) -> Bool {
+        lastAlive > 0 && now - lastAlive > heartbeatTimeout
+            && now - observationStarted > heartbeatTimeout
+            && lastPoll > 0 && now - lastPoll <= heartbeatTimeout
+    }
+
+    private func notResponding(at now: CFTimeInterval) -> Bool {
+        Self.heartbeatTimedOut(at: now, lastAlive: lastAlive,
+                              observationStarted: heartbeatObservationStarted, lastPoll: lastPoll)
+    }
 
     private func text(now: CFTimeInterval, idle: CFTimeInterval) -> (String, String) {
-        if notResponding() {
+        if notResponding(at: now) {
             return (String(localized: "SteamOS is not responding…"), String(localized: "waiting (\(Int(idle)) s)"))
         }
         let title = gameName().map { String(localized: "Loading \($0)…", comment: "Card over a loading game: game name") }
             ?? String(localized: "Loading…")
         let cores = String(format: "%.1f", currentCPU())
-        let detail = lastAlive > 0
+        let detail = heartbeatAge(at: now).map { $0 <= Self.heartbeatTimeout } == true
             ? String(localized: "VM CPU \(cores) cores · guest alive")
             : String(localized: "VM CPU \(cores) cores")
         return (title, detail)
@@ -228,9 +302,14 @@ final class StallMonitor {
     /// For the log: "guest alive, CPU 2.9 cores".
     private func status(_ now: CFTimeInterval, cpu: Double? = nil) -> String {
         let guest: String
-        if let age = heartbeatAge {
-            guest = age > StallMonitor.heartbeatTimeout ? "guest not responding for \(Int(age)) s"
-                                                        : "guest alive, load \(String(format: "%.2f", guestLoad))"
+        if let age = heartbeatAge(at: now) {
+            if age <= Self.heartbeatTimeout {
+                guest = "guest alive, load \(String(format: "%.2f", guestLoad))"
+            } else if notResponding(at: now) {
+                guest = "guest not responding for \(Int(age)) s"
+            } else {
+                guest = "heartbeat delayed \(Int(age)) s, observing after host scheduling gap"
+            }
         } else {
             guest = "no guest heartbeat"
         }
@@ -260,6 +339,59 @@ final class StallMonitor {
         guard let since = shownSince else { return 0 }
         let dt = CACurrentMediaTime() - since.idleStart
         return dt > 0 ? max(0, (StallMonitor.cpuSeconds() - since.cpu) / dt) : 0
+    }
+
+    // MARK: stall evidence
+
+    private func noteReading(now: CFTimeInterval, counters: Counters?) {
+        let gap = lastPoll > 0 ? now - lastPoll : 0
+        lastPoll = now
+        guard now - lastReading >= 1 else { return }
+        lastReading = now
+        // Guest game focus is not host application focus (STEAMAC-8N/8P).
+        // Keep presentation state in the same bounded timeline as GPU activity:
+        // otherwise a later foreground report cannot establish when occlusion began.
+        let window = view.window
+        let windowState: String
+        if let window {
+            windowState = window.isMiniaturized ? "miniaturized"
+                : !window.isVisible ? "hidden"
+                : window.occlusionState.contains(.visible) ? "visible" : "occluded"
+        } else {
+            windowState = "detached"
+        }
+        let reading = Reading(at: now, counters: counters, heartbeatAge: heartbeatAge(at: now),
+                              uptimeMs: guestUptimeMs, load: guestLoad, cpu: Self.cpuSeconds(),
+                              pollGap: gap, game: gameFocused, gate: gateOpen,
+                              hostActive: NSApp.isActive, hostKey: window?.isKeyWindow ?? false,
+                              hostWindow: windowState)
+        if readings.count < 32 {
+            readings.append(reading)
+        } else {
+            readings[nextReading] = reading
+        }
+        nextReading = (nextReading + 1) % 32
+        CrashReporting.updateGPUHistory(diagnosticHistory(now: now) + "\n" + VMMemoryDiagnostics.shared.history())
+    }
+
+    // Unlabelled neighbouring counters can resemble a payment-card number to
+    // Sentry's scrubber (1.9.9 events 3859f512 / 4b047457, STEAMAC-8).
+    static func diagnosticCounterText(_ counters: Counters?) -> String {
+        counters.map { "ctrl=\($0.ctrl) ring=\($0.ring)" } ?? "ctrl=unavailable ring=unavailable"
+    }
+
+    private func diagnosticHistory(now: CFTimeInterval) -> String {
+        var lines = ["GPU activity samples (ago seconds; counters cumulative; CPU cumulative seconds)"]
+        for offset in 0..<readings.count {
+            let r = readings[(readings.count == 32 ? nextReading + offset : offset) % 32]
+            let heartbeat = r.heartbeatAge.map { String(format: "%.2f", $0) } ?? "none"
+            lines.append(String(format: "ago=%.2f ", now - r.at) + Self.diagnosticCounterText(r.counters)
+                         + " hb=\(heartbeat) up=\(r.uptimeMs)"
+                         + String(format: " load=%.2f cpu=%.2f gap=%.2f", r.load, r.cpu, r.pollGap)
+                         + " game=\(r.game) gate=\(r.gate)"
+                         + " host-active=\(r.hostActive) host-key=\(r.hostKey) window=\(r.hostWindow)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: perf stats
@@ -301,6 +433,10 @@ final class StallIndicatorView: NSView {
     private var detail = ""
     private(set) var shown = false
     private var fading = false
+    /// Shown or hidden (after the fade-out), and the "Report…" link placed or removed on a card
+    /// already shown: the window hides the Mac cursor over the picture and shows it over the
+    /// link, so it re-decides then.
+    var onVisibilityChange: (() -> Void)?
 
     var currentTitle: String { title }
     var currentDetail: String { detail }
@@ -317,10 +453,13 @@ final class StallIndicatorView: NSView {
     var showsReportLink = false {
         didSet {
             guard showsReportLink != oldValue else { return }
+            reportLinkChanged = true
             needsLayout = true
             window?.invalidateCursorRects(for: self)
         }
     }
+    /// layout() places the link, then onVisibilityChange re-decides the cursor over it.
+    private var reportLinkChanged = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -386,6 +525,7 @@ final class StallIndicatorView: NSView {
             ctx.duration = 0.25
             animator().alphaValue = 1
         }
+        onVisibilityChange?()
     }
 
     /// Fade out (0.2 s), then hide and drop every animation.
@@ -402,6 +542,7 @@ final class StallIndicatorView: NSView {
             guard !self.shown else { return }
             self.isHidden = true
             for l in [self.layer!, self.card, self.track, self.arc, self.titleLayer, self.detailLayer, self.linkLayer] { l.removeAllAnimations() }
+            self.onVisibilityChange?()
         })
     }
 
@@ -508,6 +649,10 @@ final class StallIndicatorView: NSView {
         linkLayer.isHidden = link == nil
         CATransaction.commit()
         window?.invalidateCursorRects(for: self)
+        if reportLinkChanged {
+            reportLinkChanged = false
+            onVisibilityChange?()
+        }
     }
 
     /// Render the indicator (model values) over `background` at `scale` pixels per point.

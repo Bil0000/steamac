@@ -1,4 +1,4 @@
-/* Indexed indirect draws with robustBufferAccess2 stay in one render pass (KosmicKrisp 0055).
+/* Indexed indirect draws with robustBufferAccess2 stay in one render pass (KosmicKrisp 0106).
  *
  * vkd3d-proton turns on robustBufferAccess2 and Unreal Engine 5 draws with indexed indirect draws. KosmicKrisp could not
  * rely on Metal for the bound of the index buffer of such a draw on macOS 26 (KK_WORKAROUND_12: the Metal 4 indirect

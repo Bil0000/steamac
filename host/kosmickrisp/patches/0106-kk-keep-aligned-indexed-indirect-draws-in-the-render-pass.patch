@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steamac <steamac@local>
+Date: Mon, 16 Nov 2026 02:00:00 +0300
+Subject: [PATCH] kk: keep aligned indexed indirect draws in the render pass
+
+With robustBufferAccess2 or pipelineRobustness, workaround 12 unrolled
+every indexed indirect draw with a compute dispatch. The dispatch ends the
+Metal render encoder, so each draw cost a compute encoder and a new render
+encoder. vkd3d-proton enables robustness and Unreal Engine 5 draws with
+indexed indirect draws: Bodycam made about 700 encoders per frame, the
+Venus ring thread was CPU bound and the GPU was idle half of the time.
+
+On macOS 26 the Metal 4 indirect indexed draw gives indexBufferLength - 1
+to the GPU as a count of 4-byte words, so the bound is 4 times too large.
+The direct draw and the Metal 3 indirect draw round the length to words
+first. Give the indirect draw the length in 4-byte words while workaround
+12 is on, rounded up to the index size (Metal validation needs a multiple
+of it), and do not unroll indirect draws whose index buffer address is
+4-byte aligned and whose range is a multiple of 4 indices, so the length
+in words is exact. Indices past the bound range then read 0, as
+robustness requires. Other index buffers keep the unroll.
+
+Generated-by: LLM
+---
+ src/kosmickrisp/vulkan/kk_cmd_draw.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index 353d76e..abb1f52 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -2062,6 +2062,11 @@ kk_dispatch_draw(struct kk_cmd_buffer *cmd, struct kk_draw_data data)
+       if (data.index.el_size_B) {
+          struct kk_addr_range index_range =
+             kk_sanitize_index_range(cmd, data.index.gpu);
++         struct kk_physical_device *pdev =
++            kk_device_physical(kk_cmd_buffer_device(cmd));
++         if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(12)))
++            index_range.range = ALIGN_POT(DIV_ROUND_UP(index_range.range, 4u),
++                                          data.index.el_size_B);
+          mtl_draw_indexed_primitives_indirect(
+             enc, data.primitive_type,
+             index_size_in_bytes_to_mtl_index_type(data.index.el_size_B),
+@@ -2158,7 +2163,8 @@ requires_unroll_robustness(struct kk_cmd_buffer *cmd,
+    /* We can't tell if the draw over-reads up-front with indirect draws, so we
+     * always have to handle it */
+    if (data->indirect)
+-      return true;
++      return (data->index_buffer.addr & 3u) != 0u ||
++             data->index_buffer.range % (4u * data->index_buffer_el_size_B);
+ 
+    /* For direct draws, we can check now if any over-read the index buffer */
+    for (uint32_t i = 0; i < data->draw_count; i++) {
+-- 
+2.43.0
+

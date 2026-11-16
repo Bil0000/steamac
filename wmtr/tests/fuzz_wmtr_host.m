@@ -6,7 +6,7 @@
  * Build (Homebrew LLVM; Apple clang has no libFuzzer), from wmtr/:
  *   clang -g -O1 -fsanitize=fuzzer,address,undefined -ObjC -Iinclude -Isrc -I../host/vrhost/include \
  *     -I../guest/vr/include -I$DXMT/src/winemetal -I$DXMT/src/airconv tests/fuzz_wmtr_host.m src/wmtr_host.m \
- *     [src/wmtr_vr.m] -framework Foundation -framework Metal -framework Cocoa -framework QuartzCore \
+ *     src/wmtr_vr.m -framework Foundation -framework Metal -framework Cocoa -framework QuartzCore \
  *     -framework IOSurface -o fuzz_wmtr_host
  * (Homebrew LLVM 23 with lld: add -fno-objc-msgsend-class-selector-stubs.)
  * Run with ASAN_OPTIONS=allow_user_segv_handler=0 (the executor's fault containment would hide ASan's reports). */
@@ -22,12 +22,6 @@
 #include "wmtr_host.h"
 
 typedef int NTSTATUS;
-#ifndef WMTR_NCALLS
-#define WMTR_NCALLS 146 /* DXMT's table only (no WMTVRSubmit) */
-#endif
-#ifndef WMTR_F_CLIENT_HANDLE
-#define WMTR_F_CLIENT_HANDLE 0
-#endif
 
 /* stubs: read every byte of the call's params struct, then write all of it (results; object results 0, as the
  * host keeps returned objects alive) */
@@ -56,15 +50,14 @@ static void *f_blob_ptr(void *c, uint32_t b, uint64_t *s) {
   return blob_base[b];
 }
 static void f_wake(void *c, uint32_t s) {}
-static const struct wmtr_host_ops ops = {f_blob_ptr, f_wake, NULL, NULL, NULL};
+static const struct wmtr_host_ops ops = {f_blob_ptr, f_wake};
 static struct wmtr_host *H;
 static struct wmtr_ring *R;
 
-/* calls the host itself handles with guest handles (pools, views, events, buffers, VR, paths) */
+/* Calls the host itself handles with guest handles (pools, views, events, buffers, VR). */
 static int handle_call(uint32_t c) {
   switch (c) {
-  case 0: case 1: case 10: case 17: case 18: case 47: case 48: case 72: case 73: case 104: case 108: case 110: case 146:
-  case 112: case 113: case 115: case 117: case 119: return 1;
+  case 0: case 1: case 10: case 17: case 18: case 47: case 48: case 72: case 73: case 104: case 108: case 110: case 146: return 1;
   default: return 0;
   }
 }

@@ -1,6 +1,6 @@
 /* wmtr host executor: runs remoted winemetal calls against Metal (DXMT's own winemetal_unix.c).
- * Embedded either in a standalone server process (two-process prototype) or in the VMM (libkrun
- * virtio-gpu context). The embedder owns shared memory and wake-ups; see struct wmtr_host_ops. */
+ * Embedded in the VMM (libkrun virtio-gpu context). The embedder owns shared memory and wake-ups;
+ * see struct wmtr_host_ops. */
 #ifndef WMTR_HOST_H
 #define WMTR_HOST_H
 #include <stdint.h>
@@ -12,14 +12,11 @@ struct wmtr_host_ops {
   void *(*blob_ptr)(void *ctx, uint32_t blob, uint64_t *size);
   /* wake a client thread waiting on reply slot `slot` (or WMTR_EVENT_SLOT) */
   void (*wake)(void *ctx, uint32_t slot);
-  /* presentation: create a view + CAMetalLayer for a client window; returns the view handle and
-   * stores the CAMetalLayer* in *layer. NULL ops -> the call fails. */
-  uint64_t (*create_view)(void *ctx, uint64_t hwnd, void *mtl_device, uint64_t *layer);
-  void (*release_view)(void *ctx, uint64_t view);
-  /* map a client path (shader caches, binary archives) to a host path; NULL op keeps it */
-  const char *(*map_path)(void *ctx, const char *client_path, char *buf, uint64_t buflen);
 };
 
+/* ABI 1 has exactly the two callbacks above. Destroy drains executor jobs and disables delayed Metal
+ * callbacks before returning: the embedder may then release ops, ctx and the ring mapping. */
+uint32_t wmtr_host_abi_version(void);
 /* `ring` is the host mapping of blob 0 (struct wmtr_ring + data + slots), already initialised by
  * the client. Starts the executor thread. */
 struct wmtr_host *wmtr_host_create(void *ring, const struct wmtr_host_ops *ops, void *ctx);
@@ -28,9 +25,15 @@ void wmtr_host_kick(struct wmtr_host *h);
 void wmtr_host_destroy(struct wmtr_host *h);
 /* done_seq of reply slot `slot`, or event_head for WMTR_EVENT_SLOT */
 uint64_t wmtr_host_progress(struct wmtr_host *h, uint32_t slot);
-/* default presenter (a window per HWND on the embedder's main thread); usable as create_view/release_view */
+/* Presenter: overlay in the launcher's VMView with WMTR_PRESENT=overlay, otherwise a window per HWND. */
 uint64_t wmtr_present_create_view(void *ctx, uint64_t hwnd, void *mtl_device, uint64_t *layer);
 void wmtr_present_release_view(void *ctx, uint64_t view);
+/* Synchronous pre-present hook: encode into command_buffer before it is committed. Objects are
+ * borrowed; retain capture resources in a Metal completion handler. Clearing waits for an in-flight
+ * callback, so userdata can then be released. The callback must not call this setter. */
+typedef void (*wmtr_stream_capture_callback)(void *userdata, void *command_buffer, void *drawable);
+void wmtr_stream_capture_set(wmtr_stream_capture_callback callback, void *userdata);
+void wmtr_layout(uint64_t *ring_bytes, uint64_t *data_offset, uint64_t *slots_offset, uint64_t *slot_size);
 /* counters for measurements */
 struct wmtr_host_stats { uint64_t requests, sync_requests, bytes, worker_calls, idle_sleeps; };
 void wmtr_host_get_stats(struct wmtr_host *h, struct wmtr_host_stats *out);

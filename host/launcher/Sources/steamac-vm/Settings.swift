@@ -21,27 +21,29 @@ final class LauncherSettings: ObservableObject {
     enum Key: String, CaseIterable {
         // General
         case showOverlay, showStallIndicator, openFullscreen, perfStats, sendCrashReports, muteInBackground, pauseInBackground,
-             closeAction, checkForUpdates, followMacTime, shareClipboard, shareConcealedClipboard
+             closeAction, checkForUpdates, followMacTime, followMacKeyboard, shareClipboard, shareConcealedClipboard, shareGameStats
         // Display
         case dpiSource, fixedDPI, fixedWidthMM, fixedHeightMM, refreshRate, followWindowSize, windowWidth, windowHeight,
              windowSizePreset, retinaResolution, metalHUD, superResolution, renderScale, upscaleLowerResolutions
         // Mouse
         case autoCaptureGames, rawMouse, gameNames
         // Controller
-        case virtualPad, padType, dualSensePassthrough, controllerID, swapABXY, stickDeadzone
+        case virtualPad, padType, dualSensePassthrough, controllerID, additionalPads, swapABXY, stickDeadzone
         // Sound
         case soundEnabled, soundOutputUID, soundVolume, soundMute, soundLatency
+        // Streaming
+        case streamingHost
         // Advanced
-        case cpus, memMiB, sshEnabled, sshPort, network, lanRemotePlay, diskImage, steamosBranch, steamClient, vulkanDriver,
-             graphicsPath, frameLatency, experimentalGameSupport
+        case cpus, memMiB, sshEnabled, sshPort, network, lanRemotePlay, diskImage, sharedFolder, sharedMount, sharedLibrary,
+             steamosBranch, steamClient, vulkanDriver, wmtr, wmtrLibrary, frameLatency, experimentalGameSupport
 
         var nextStart: Bool {
             switch self {
             case .openFullscreen, .dpiSource, .fixedDPI, .fixedWidthMM, .fixedHeightMM, .refreshRate,
-                 .windowWidth, .windowHeight, .windowSizePreset, .retinaResolution, .renderScale, .soundEnabled, .cpus, .memMiB, .sshEnabled,
+                 .windowWidth, .windowHeight, .windowSizePreset, .retinaResolution, .metalHUD, .renderScale, .soundEnabled, .cpus, .memMiB, .sshEnabled,
                  .sshPort, .network, .lanRemotePlay,
-                 .diskImage, .steamClient, .followMacTime, .vulkanDriver, .graphicsPath, .frameLatency,
-                 .experimentalGameSupport:
+                 .diskImage, .sharedFolder, .sharedMount, .sharedLibrary, .steamClient, .followMacTime, .vulkanDriver, .wmtr, .wmtrLibrary,
+                 .frameLatency, .experimentalGameSupport:
                 return true
             default:
                 return false
@@ -84,6 +86,9 @@ final class LauncherSettings: ObservableObject {
         case xbox360
         case dualSense = "dualsense"
         case dualShock4 = "dualshock4"
+        /// A Steam Controller connected to the Mac goes to SteamOS as itself (HIDPassthrough);
+        /// any other controller drives an Xbox 360 controller.
+        case steamController = "steamcontroller"
         var id: String { rawValue }
     }
 
@@ -205,63 +210,46 @@ final class LauncherSettings: ObservableObject {
         }
     }
 
-    /// How Windows games draw: through DXMT and the wmtr remoting context straight to Metal (lean), or
-    /// through DXVK, Venus and the host Vulkan driver (classic). The VM process enables the wmtr
-    /// virtio-gpu context (libkrun patch 0021) for the lean path; in the guest, the Proton-lean
-    /// compatibility tool uses DXMT only when that context is there and plain Proton otherwise.
-    enum GraphicsPath: String, CaseIterable, Identifiable {
-        case dxmt
-        case vulkan
-        var id: String { rawValue }
+    /// Experimental: the wmtr virtio-gpu context type (libkrun patch 0018, capset 30), which runs
+    /// DXMT's winemetal calls on the Mac's Metal through a host executor library. libkrun offers it
+    /// only with STEAMAC_WMTR=1 and a loadable STEAMAC_WMTR_LIB (set by VM.start); the library
+    /// checks its own ABI version against libkrun's.
+    enum Wmtr {
+        /// Library name in the app's Frameworks (work/out/host/lib for the dev launcher).
+        static let bundledLibrary = "libwmtr_host.dylib"
 
-        var name: String {
-            switch self {
-            case .dxmt: return "DXMT"
-            case .vulkan: return "Vulkan"
+        /// STEAMAC_WMTR_LIB for a `wmtrLibrary` setting ("" = the bundled library).
+        static func path(for setting: String) -> String {
+            setting.isEmpty ? "@rpath/" + bundledLibrary : setting
+        }
+
+        private enum Problem {
+            case missing, notExecutor
+        }
+
+        private static func problem(_ path: String) -> Problem? {
+            guard let handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL) else { return .missing }
+            defer { dlclose(handle) }
+            return dlsym(handle, "wmtr_host_abi_version") == nil ? .notExecutor : nil
+        }
+
+        /// English diagnostic for logs and command-line errors (nil = the library loads).
+        static func unavailableReason(_ path: String) -> String? {
+            switch problem(path) {
+            case .missing: return "cannot load \(path)"
+            case .notExecutor: return "\(path) is not a wmtr executor (no wmtr_host_abi_version)"
+            case nil: return nil
             }
         }
 
-        var title: String {
-            switch self {
-            case .dxmt: return String(localized: "DXMT (lean)")
-            case .vulkan: return String(localized: "Vulkan (classic)")
+        /// Settings > Advanced, shown after the library path.
+        static func localizedUnavailableReason(_ path: String) -> String? {
+            switch problem(path) {
+            case .missing: return String(localized: "cannot be loaded")
+            case .notExecutor: return String(localized: "not a wmtr executor library")
+            case nil: return nil
             }
         }
-
-        var detail: String {
-            switch self {
-            case .dxmt:
-                return String(localized: "Direct3D 11 games through DXMT, drawn by Metal on the Mac (games need the Proton-lean compatibility tool, chosen once per game in Steam).")
-            case .vulkan:
-                return String(localized: "Direct3D through DXVK on Vulkan (Venus) and the Vulkan driver below.")
-            }
-        }
-
-        /// The host side of the remoting context, in the app's Frameworks.
-        static let hostLibrary = "libwmtr_host.dylib"
-
-        /// Absolute path of hostLibrary in this bundle (libkrun dlopens STEAMAC_WMTR_LIB), nil if absent.
-        static var hostLibraryPath: String? {
-            guard let dir = Bundle.main.privateFrameworksPath else { return nil }
-            let p = (dir as NSString).appendingPathComponent(hostLibrary)
-            return FileManager.default.fileExists(atPath: p) ? p : nil
-        }
-
-        /// English diagnostic for logs and command-line errors; nil if this build can use the path.
-        var unavailableReason: String? {
-            guard self == .dxmt else { return nil }
-            return Self.hostLibraryPath == nil ? "not included in this build (\(Self.hostLibrary))" : nil
-        }
-
-        var localizedUnavailableReason: String? {
-            guard self == .dxmt else { return nil }
-            return Self.hostLibraryPath == nil ? String(localized: "not included in this build (\(Self.hostLibrary))") : nil
-        }
-
-        /// Classic until the lean path is measured ahead of it in VRChat (same world, EAC, hitch counts).
-        static let preferred: GraphicsPath = .vulkan
-
-        static let switchNote = String(localized: "Applies from the next start.")
     }
 
     /// Default window size choices (window points = guest pixels).
@@ -277,6 +265,10 @@ final class LauncherSettings: ObservableObject {
         .init(width: 1920, height: 1200, label: "16:10"), .init(width: 2560, height: 1440, label: "QHD, 16:9"),
         .init(width: 2560, height: 1600, label: "16:10"), .init(width: 3440, height: 1440, label: "21:9"),
         .init(width: 3840, height: 2160, label: "4K, 16:9"),
+        .init(width: 1440, height: 960, label: "3:2"), .init(width: 1920, height: 1280, label: "3:2"),
+        .init(width: 2160, height: 1440, label: "3:2"), .init(width: 2400, height: 1600, label: "3:2"),
+        .init(width: 2880, height: 1920, label: "3:2"), .init(width: 3240, height: 2160, label: "3:2"),
+        .init(width: 3840, height: 2560, label: "3:2"),
     ]
     /// `windowSizePreset` values besides "<W>x<H>": the largest size that fits the screen
     /// (re-evaluated at every start) and free W/H.
@@ -315,6 +307,10 @@ final class LauncherSettings: ObservableObject {
     /// Next-start values this VM booted with (Restart VM to apply when they differ).
     private var bootSnapshot: [Key: String] = [:]
     private var loading = false
+    @Published private(set) var profiles: [Int: GameProfile] = [:]
+    /// The effective boot driver, including a one-shot profile restart override.
+    var bootedDriver: VulkanDriver?
+    var bootedDXMT: Bool?
 
     // General
     @Published var showOverlay = true { didSet { save(.showOverlay, showOverlay) } }
@@ -333,9 +329,14 @@ final class LauncherSettings: ObservableObject {
     @Published var closeAction = CloseAction.shutDown { didSet { save(.closeAction, closeAction.rawValue) } }
     /// New-version check when the app starts (UpdateChecker; never in development builds); applies now.
     @Published var checkForUpdates = true { didSet { save(.checkForUpdates, checkForUpdates) } }
+    /// Game statistics (GameStats): finished game sessions and the player's ratings go to the
+    /// public statistics service; off until the user agrees. Applies now.
+    @Published var shareGameStats = false { didSet { save(.shareGameStats, shareGameStats) } }
     /// The guest's time zone and 12/24-hour format follow the Mac (MacTime kernel parameters)
     /// until each is changed inside SteamOS; next start.
     @Published var followMacTime = true { didSet { save(.followMacTime, followMacTime) } }
+    /// Desktop Mode's keyboard layouts follow the Mac's input sources (KeyboardLayoutSync); now.
+    @Published var followMacKeyboard = true { didSet { save(.followMacKeyboard, followMacKeyboard) } }
     // Display
     @Published var dpiSource = DPISource.auto { didSet { save(.dpiSource, dpiSource.rawValue) } }
     @Published var fixedDPI = 110 { didSet { save(.fixedDPI, fixedDPI) } }
@@ -351,7 +352,7 @@ final class LauncherSettings: ObservableObject {
     /// The guest display gets the screen's pixel density (backing scale guest pixels per window
     /// point, Options.pixelScale) instead of one pixel per point; next start.
     @Published var retinaResolution = false { didSet { save(.retinaResolution, retinaResolution) } }
-    /// Apple's Metal Performance HUD on the VM window (FPS, frame interval, GPU time, memory); applies now.
+    /// Apple's Metal HUD: enabling loads libMTLHud on the next boot; off hides it now, unloads next boot.
     @Published var metalHUD = false { didSet { save(.metalHUD, metalHUD) } }
     /// MetalFX spatial upscaling of the guest picture to the window's pixel size (Renderer); applies now.
     @Published var superResolution = false { didSet { save(.superResolution, superResolution) } }
@@ -375,6 +376,8 @@ final class LauncherSettings: ObservableObject {
     @Published var dualSensePassthrough = true { didSet { save(.dualSensePassthrough, dualSensePassthrough) } }
     /// "" = first connected controller, else GamepadBridge.identifier(of:).
     @Published var controllerID = "" { didSet { save(.controllerID, controllerID) } }
+    /// Further connected controllers are players 2…GamepadBridge.maxPads, each with a pad of its own.
+    @Published var additionalPads = true { didSet { save(.additionalPads, additionalPads) } }
     @Published var swapABXY = false { didSet { save(.swapABXY, swapABXY) } }
     /// Radial stick deadzone in percent (0 = GameController's own only).
     @Published var stickDeadzone = 0 { didSet { save(.stickDeadzone, stickDeadzone) } }
@@ -396,16 +399,26 @@ final class LauncherSettings: ObservableObject {
     @Published var network = true { didSet { save(.network, network) } }
     /// Opt-in: exposes Remote Play to the local network, unlike ordinary user-mode NAT.
     @Published var lanRemotePlay = false { didSet { save(.lanRemotePlay, lanRemotePlay) } }
+    /// Opt-in Moonlight host; only the windowed VM process opens its listeners.
+    @Published var streamingHost = false { didSet { save(.streamingHost, streamingHost) } }
     /// "" = default (see AppBundle.defaultDisk()).
     @Published var diskImage = "" { didSet { save(.diskImage, diskImage) } }
+    /// Mac folder exposed to the guest as the virtio-fs device "macshare" (Options.share); "" = none.
+    @Published var sharedFolder = "" { didSet { save(.sharedFolder, sharedFolder) } }
+    /// Where SteamOS mounts it (Options.shareMount; kernel cmdline steamac.share=).
+    @Published var sharedMount = Options.defaultShareMount { didSet { save(.sharedMount, sharedMount) } }
+    /// Register SteamLibrary inside the shared folder on the next start (Options.shareLibrary).
+    @Published var sharedLibrary = true { didSet { save(.sharedLibrary, sharedLibrary) } }
     /// SteamOS update branch "Create New Disk…" installs (atomupd vr/<branch>.json).
     @Published var steamosBranch = "stable" { didSet { save(.steamosBranch, steamosBranch) } }
     /// Steam client of the next start (`steamac.steam_client=`).
     @Published var steamClient = SteamClient.deck { didSet { save(.steamClient, steamClient.rawValue) } }
     /// Host Vulkan driver of the next start (VulkanDriver).
     @Published var vulkanDriver = VulkanDriver.preferred { didSet { save(.vulkanDriver, vulkanDriver.rawValue) } }
-    /// Graphics path of the next start (GraphicsPath).
-    @Published var graphicsPath = GraphicsPath.preferred { didSet { save(.graphicsPath, graphicsPath.rawValue) } }
+    /// Experimental wmtr context type (Wmtr) on the next start, and its executor library
+    /// ("" = the bundled libwmtr_host.dylib).
+    @Published var wmtr = false { didSet { save(.wmtr, wmtr) } }
+    @Published var wmtrLibrary = "" { didSet { save(.wmtrLibrary, wmtrLibrary) } }
     /// Frame latency mode of the next start (Vulkan path; kernel cmdline `steamac.frame_latency=1`).
     /// Off by default: the guest's DXVK config is left unchanged.
     @Published var frameLatency = false { didSet { save(.frameLatency, frameLatency) } }
@@ -445,7 +458,9 @@ final class LauncherSettings: ObservableObject {
         bool(.shareConcealedClipboard, &shareConcealedClipboard)
         if let s = d.string(forKey: Key.closeAction.rawValue).flatMap(CloseAction.init(rawValue:)) { closeAction = s }
         bool(.checkForUpdates, &checkForUpdates)
+        bool(.shareGameStats, &shareGameStats)
         bool(.followMacTime, &followMacTime)
+        bool(.followMacKeyboard, &followMacKeyboard)
         if let s = d.string(forKey: Key.dpiSource.rawValue).flatMap(DPISource.init(rawValue:)) { dpiSource = s }
         int(.fixedDPI, &fixedDPI)
         int(.fixedWidthMM, &fixedWidthMM)
@@ -472,6 +487,7 @@ final class LauncherSettings: ObservableObject {
         if let s = d.string(forKey: Key.padType.rawValue).flatMap(PadType.init(rawValue:)) { padType = s }
         bool(.dualSensePassthrough, &dualSensePassthrough)
         string(.controllerID, &controllerID)
+        bool(.additionalPads, &additionalPads)
         bool(.swapABXY, &swapABXY)
         int(.stickDeadzone, &stickDeadzone)
         bool(.soundEnabled, &soundEnabled)
@@ -485,7 +501,12 @@ final class LauncherSettings: ObservableObject {
         int(.sshPort, &sshPort)
         bool(.network, &network)
         bool(.lanRemotePlay, &lanRemotePlay)
+        bool(.streamingHost, &streamingHost)
         string(.diskImage, &diskImage)
+        string(.sharedFolder, &sharedFolder)
+        string(.sharedMount, &sharedMount)
+        if !Options.isValidShareMount(sharedMount) { sharedMount = Options.defaultShareMount }
+        bool(.sharedLibrary, &sharedLibrary)
         string(.steamosBranch, &steamosBranch)
         if !DiskCreator.branches.contains(steamosBranch) {
             log("settings: SteamOS branch \(steamosBranch) is not offered; falling back to stable")
@@ -493,7 +514,9 @@ final class LauncherSettings: ObservableObject {
         }
         if let s = d.string(forKey: Key.steamClient.rawValue).flatMap(SteamClient.init(rawValue:)) { steamClient = s }
         if let v = d.string(forKey: Key.vulkanDriver.rawValue).flatMap(VulkanDriver.init(rawValue:)) { vulkanDriver = v }
-        if let v = d.string(forKey: Key.graphicsPath.rawValue).flatMap(GraphicsPath.init(rawValue:)) { graphicsPath = v }
+        bool(.wmtr, &wmtr)
+        if d.object(forKey: Key.wmtr.rawValue) == nil, d.string(forKey: "graphicsPath") == "dxmt" { wmtr = true }
+        string(.wmtrLibrary, &wmtrLibrary)
         bool(.frameLatency, &frameLatency)
         bool(.experimentalGameSupport, &experimentalGameSupport)
         reloadGames()
@@ -529,7 +552,9 @@ final class LauncherSettings: ObservableObject {
         case .shareConcealedClipboard: guard let b else { return false }; shareConcealedClipboard = b
         case .closeAction: guard let v = CloseAction(rawValue: text) else { return false }; closeAction = v
         case .checkForUpdates: guard let b else { return false }; checkForUpdates = b
+        case .shareGameStats: guard let b else { return false }; shareGameStats = b
         case .followMacTime: guard let b else { return false }; followMacTime = b
+        case .followMacKeyboard: guard let b else { return false }; followMacKeyboard = b
         case .dpiSource: guard let v = DPISource(rawValue: text) else { return false }; dpiSource = v
         case .fixedDPI: guard let i else { return false }; fixedDPI = i
         case .fixedWidthMM: guard let i else { return false }; fixedWidthMM = i
@@ -557,6 +582,7 @@ final class LauncherSettings: ObservableObject {
         case .padType: guard let v = PadType(rawValue: text) else { return false }; padType = v
         case .dualSensePassthrough: guard let b else { return false }; dualSensePassthrough = b
         case .controllerID: controllerID = text
+        case .additionalPads: guard let b else { return false }; additionalPads = b
         case .swapABXY: guard let b else { return false }; swapABXY = b
         case .stickDeadzone: guard let i else { return false }; stickDeadzone = i
         case .soundEnabled: guard let b else { return false }; soundEnabled = b
@@ -570,11 +596,16 @@ final class LauncherSettings: ObservableObject {
         case .sshPort: guard let i else { return false }; sshPort = i
         case .network: guard let b else { return false }; network = b
         case .lanRemotePlay: guard let b else { return false }; lanRemotePlay = b
+        case .streamingHost: guard let b else { return false }; streamingHost = b
         case .diskImage: diskImage = text == "default" ? "" : text
+        case .sharedFolder: sharedFolder = text == "none" ? "" : text
+        case .sharedMount: guard Options.isValidShareMount(text) else { return false }; sharedMount = text
+        case .sharedLibrary: guard let b else { return false }; sharedLibrary = b
         case .steamosBranch: guard DiskCreator.branches.contains(text) else { return false }; steamosBranch = text
         case .steamClient: guard let v = SteamClient(rawValue: text) else { return false }; steamClient = v
         case .vulkanDriver: guard let v = VulkanDriver(rawValue: text) else { return false }; vulkanDriver = v
-        case .graphicsPath: guard let v = GraphicsPath(rawValue: text) else { return false }; graphicsPath = v
+        case .wmtr: guard let b else { return false }; wmtr = b
+        case .wmtrLibrary: wmtrLibrary = text == "default" ? "" : text
         case .frameLatency: guard let b else { return false }; frameLatency = b
         case .experimentalGameSupport: guard let b else { return false }; experimentalGameSupport = b
         }
@@ -584,7 +615,7 @@ final class LauncherSettings: ObservableObject {
     /// Restore every preference to its default (per-game entries included).
     func resetAll() {
         for k in defaults.dictionaryRepresentation().keys
-        where Key(rawValue: k) != nil || k.hasPrefix("autoCapture.") {
+        where Key(rawValue: k) != nil || k.hasPrefix("autoCapture.") || k.hasPrefix("profile.") {
             defaults.removeObject(forKey: k)
         }
         let fresh = LauncherSettings(blank: ())
@@ -593,7 +624,8 @@ final class LauncherSettings: ObservableObject {
         openFullscreen = fresh.openFullscreen; perfStats = fresh.perfStats; sendCrashReports = fresh.sendCrashReports
         muteInBackground = fresh.muteInBackground; pauseInBackground = fresh.pauseInBackground
         shareClipboard = fresh.shareClipboard; shareConcealedClipboard = fresh.shareConcealedClipboard
-        closeAction = fresh.closeAction; checkForUpdates = fresh.checkForUpdates; followMacTime = fresh.followMacTime
+        closeAction = fresh.closeAction; checkForUpdates = fresh.checkForUpdates; shareGameStats = fresh.shareGameStats
+        followMacTime = fresh.followMacTime; followMacKeyboard = fresh.followMacKeyboard
         dpiSource = fresh.dpiSource; fixedDPI = fresh.fixedDPI; fixedWidthMM = fresh.fixedWidthMM
         fixedHeightMM = fresh.fixedHeightMM; refreshRate = fresh.refreshRate; followWindowSize = fresh.followWindowSize
         windowWidth = fresh.windowWidth; windowHeight = fresh.windowHeight; windowSizePreset = fresh.windowSizePreset
@@ -602,14 +634,15 @@ final class LauncherSettings: ObservableObject {
         upscaleLowerResolutions = fresh.upscaleLowerResolutions
         autoCaptureGames = fresh.autoCaptureGames; rawMouse = fresh.rawMouse
         virtualPad = fresh.virtualPad; padType = fresh.padType; dualSensePassthrough = fresh.dualSensePassthrough
-        controllerID = fresh.controllerID; swapABXY = fresh.swapABXY
+        controllerID = fresh.controllerID; additionalPads = fresh.additionalPads; swapABXY = fresh.swapABXY
         stickDeadzone = fresh.stickDeadzone; soundEnabled = fresh.soundEnabled; soundOutputUID = fresh.soundOutputUID
         soundVolume = fresh.soundVolume; soundMute = fresh.soundMute; soundLatency = fresh.soundLatency
         cpus = fresh.cpus; memMiB = fresh.memMiB; sshEnabled = fresh.sshEnabled; sshPort = fresh.sshPort; network = fresh.network
         lanRemotePlay = fresh.lanRemotePlay
-        diskImage = fresh.diskImage; steamosBranch = fresh.steamosBranch; steamClient = fresh.steamClient
-        vulkanDriver = fresh.vulkanDriver
-        graphicsPath = fresh.graphicsPath
+        streamingHost = fresh.streamingHost
+        diskImage = fresh.diskImage; sharedFolder = fresh.sharedFolder; sharedMount = fresh.sharedMount
+        sharedLibrary = fresh.sharedLibrary; steamosBranch = fresh.steamosBranch; steamClient = fresh.steamClient
+        vulkanDriver = fresh.vulkanDriver; wmtr = fresh.wmtr; wmtrLibrary = fresh.wmtrLibrary
         frameLatency = fresh.frameLatency
         experimentalGameSupport = fresh.experimentalGameSupport
         loading = false
@@ -641,11 +674,12 @@ final class LauncherSettings: ObservableObject {
             .fixedDPI: dpiSource == .dpi ? fixedDPI : 0,
             .fixedWidthMM: dpiSource == .mm ? fixedWidthMM : 0, .fixedHeightMM: dpiSource == .mm ? fixedHeightMM : 0,
             .refreshRate: refreshRate, .windowWidth: windowWidth, .windowHeight: windowHeight,
-            .windowSizePreset: windowSizePreset, .retinaResolution: retinaResolution,
+            .windowSizePreset: windowSizePreset, .retinaResolution: retinaResolution, .metalHUD: metalHUD,
             .soundEnabled: soundEnabled, .cpus: cpus, .memMiB: memMiB, .sshEnabled: sshEnabled, .sshPort: sshPort,
             .network: network, .lanRemotePlay: lanRemotePlay,
-            .diskImage: diskImage, .steamClient: steamClient.rawValue, .followMacTime: followMacTime,
-            .vulkanDriver: vulkanDriver.rawValue, .graphicsPath: graphicsPath.rawValue, .frameLatency: frameLatency,
+            .diskImage: diskImage, .sharedFolder: sharedFolder, .sharedMount: sharedMount, .sharedLibrary: sharedLibrary,
+            .steamClient: steamClient.rawValue, .followMacTime: followMacTime,
+            .vulkanDriver: vulkanDriver.rawValue, .wmtr: wmtr, .wmtrLibrary: wmtrLibrary, .frameLatency: frameLatency,
             .experimentalGameSupport: experimentalGameSupport,
         ]
         var s: [Key: String] = [:]
@@ -661,6 +695,19 @@ final class LauncherSettings: ObservableObject {
         let now = nextStartSnapshot()
         return now[.windowWidth] != bootSnapshot[.windowWidth] || now[.windowHeight] != bootSnapshot[.windowHeight]
             || now[.windowSizePreset] != bootSnapshot[.windowSizePreset]
+    }
+
+    // MARK: per-game profiles
+
+    func profile(for appid: Int) -> GameProfile { profiles[appid] ?? GameProfile() }
+
+    func setProfile(_ profile: GameProfile, for appid: Int) {
+        guard appid > 0 else { return }
+        var value = profile
+        value.env = GameProfile.sanitizedEnv(value.env)
+        if value.isDefault { defaults.removeObject(forKey: "profile.\(appid)") }
+        else if let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: "profile.\(appid)") }
+        reloadGames()
     }
 
     // MARK: mouse auto-capture
@@ -701,6 +748,7 @@ final class LauncherSettings: ObservableObject {
     /// Forget a game (name and per-game setting).
     func removeGame(_ appid: Int) {
         defaults.removeObject(forKey: "autoCapture.\(appid)")
+        defaults.removeObject(forKey: "profile.\(appid)")
         var names = defaults.dictionary(forKey: Key.gameNames.rawValue) as? [String: String] ?? [:]
         names.removeValue(forKey: String(appid))
         defaults.set(names, forKey: Key.gameNames.rawValue)
@@ -713,6 +761,13 @@ final class LauncherSettings: ObservableObject {
 
     private func reloadGames() {
         let names = defaults.dictionary(forKey: Key.gameNames.rawValue) as? [String: String] ?? [:]
+        var loadedProfiles: [Int: GameProfile] = [:]
+        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix("profile.") {
+            guard let id = Int(key.dropFirst("profile.".count)), id > 0, let data = value as? Data,
+                  let profile = try? JSONDecoder().decode(GameProfile.self, from: data) else { continue }
+            loadedProfiles[id] = profile
+        }
+        if loadedProfiles != profiles { profiles = loadedProfiles }
         var byId: [Int: Game] = [:]
         for (k, v) in names { if let id = Int(k) { byId[id] = Game(appid: id, name: v, autoCapture: nil) } }
         for (k, v) in defaults.dictionaryRepresentation() where k.hasPrefix("autoCapture.") {

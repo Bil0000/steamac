@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Builds the guest Venus (virtio) Vulkan ICD for the Steam Frame SteamOS image:
+# Builds the guest Venus (virtio) Vulkan ICD and a zink-only GL stack for the Steam Frame
+# SteamOS image, from the pinned Mesa plus the backports in patches/:
+#   0001 zink: update pipelines when only vertex input changes (upstream backport).
+#   0002 Venus: 386f3238, zero external image handleType behaves as absent (#58).
+#   0003 Venus: ask KosmicKrisp about external legacy tiling (#58); requires KK 0088
+#        and virglrenderer 0020, not a native dma-buf tiling workaround.
 #   aarch64 (native: Steam, Proton ARM64EC/WoW64 unix side, gamescope, zink)
 #   x86_64 + i386 (FEX-emulated x86 apps; installed into the fex-mesa pressure-vessel provider),
 #   plus the x86_64 fault reporter for emulated games (/usr/lib/steamac/x86_64/fault-report.so)
@@ -68,9 +73,13 @@ for step in "${steps[@]}"; do
         log "build aarch64 (log: $WORK/build-aarch64.log)"
         inputs=$(artifacts begin mesa-aarch64)
         [[ $fetched == 1 ]] || fetch_sources
-        rm -rf "$OUT/usr/lib/libvulkan_virtio.so" "$OUT/usr/share/vulkan"
+        rm -rf "$OUT/usr/lib/libvulkan_virtio.so" "$OUT/usr/share/vulkan" "$OUT/usr/lib/dri" "$OUT/usr/lib/gbm" \
+            "$OUT/usr/share/glvnd" "$OUT/usr/share/drirc.d"
+        rm -f "$OUT"/usr/lib/libgallium-*.so "$OUT"/usr/lib/libGLX_mesa.so* "$OUT"/usr/lib/libEGL_mesa.so* \
+            "$OUT"/usr/lib/libgbm.so*
         docker run --rm --platform linux/arm64 \
-            -v "$SRC_VOLUME:/src:ro" -v "$HERE/container:/scripts:ro" -v "$OUT:/out" -v "$WORK:/work" \
+            -v "$SRC_VOLUME:/src:ro" -v "$HERE/patches:/patches:ro" -v "$HERE/container:/scripts:ro" \
+            -v "$OUT:/out" -v "$WORK:/work" \
             "$AARCH64_IMAGE" bash /scripts/build-aarch64.sh > "$WORK/build-aarch64.log" 2>&1 \
             || { tail -40 "$WORK/build-aarch64.log"; exit 1; }
         artifacts finish mesa-aarch64 "$inputs"
@@ -82,9 +91,8 @@ for step in "${steps[@]}"; do
         rm -rf "$OUT/usr/share/guestos" "$OUT/usr/lib/steamac"
         docker run --rm --platform linux/amd64 \
             -e STEAMOS_X86_MIRROR -e STEAMOS_X86_BRANCH -e FEX_PROVIDER -e HOLO_KEYRING_PKG -e HOLO_KEYRING_SHA256 \
-            -e LIBDISPLAY_INFO_PKG -e LIBDISPLAY_INFO_SHA256 \
-            -e LIB32_LIBDISPLAY_INFO_PKG -e LIB32_LIBDISPLAY_INFO_SHA256 \
-            -v "$SRC_VOLUME:/src:ro" -v "$HERE/container:/scripts:ro" -v "$OUT:/out" -v "$WORK:/work" \
+            -v "$SRC_VOLUME:/src:ro" -v "$HERE/patches:/patches:ro" -v "$HERE/container:/scripts:ro" \
+            -v "$OUT:/out" -v "$WORK:/work" \
             "$X86_IMAGE" bash /scripts/build-x86.sh > "$WORK/build-x86.log" 2>&1 \
             || { tail -40 "$WORK/build-x86.log"; exit 1; }
         artifacts finish mesa-x86 "$inputs"
@@ -100,7 +108,8 @@ for step in "${steps[@]}"; do
         docker run --rm --platform linux/arm64 --privileged \
             -e MESA_URL -e MESA_COMMIT -e VENUS_PROTOCOL_COMMIT -e AARCH64_IMAGE -e X86_IMAGE \
             -e STEAMOS_X86_MIRROR -e STEAMOS_X86_BRANCH -e FEX_PROVIDER \
-            -v "$ROOTFS_IMG:/rootfs.img:ro" -v "$HERE/container:/scripts:ro" -v "$OUT:/out" -v "$WORK:/work" \
+            -v "$ROOTFS_IMG:/rootfs.img:ro" -v "$HERE/patches:/patches:ro" -v "$HERE/container:/scripts:ro" \
+            -v "$OUT:/out" -v "$WORK:/work" \
             "$TOOLS_IMAGE" sh -c 'sh /scripts/manifest.sh && sh /scripts/verify.sh' 2>&1 | tee "$WORK/verify.log"
         artifacts finish mesa "$inputs"
         ;;

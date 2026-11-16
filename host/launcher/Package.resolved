@@ -1,20 +1,22 @@
 {
-  "originHash" : "725981ca62875190f7b706705ebd762f5ad0ce92d7ad58c1cfd225460f6e84e7",
+  "originHash" : "38a721087607039b3c0c0652ef6a229db5e3abf81e2a8abc3baafa35d9f18599",
   "pins" : [
-    {
-      "identity" : "kscrash",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/getsentry/KSCrash.git",
-      "state" : {
-        "revision" : "18a633dec20c265f03386294f9d82d208bb13094"
-      }
-    },
     {
       "identity" : "sentry-cocoa",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/getsentry/sentry-cocoa.git",
       "state" : {
-        "revision" : "b539e098293067be54fa5cf1f11d9e16cdbba94a"
+        "revision" : "b539e098293067be54fa5cf1f11d9e16cdbba94a",
+        "version" : "9.30.0"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle.git",
+      "state" : {
+        "revision" : "ab7d71291238df6e0492143b120c9b696a35f603",
+        "version" : "2.10.1"
       }
     }
   ],

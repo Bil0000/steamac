@@ -9,12 +9,11 @@ import Foundation
 enum L10nSelfTest {
     static let languages = ["ru", "zh-Hans"]
 
-    /// Strings of the launcher's own settings and windows (graphics path, render scale, frame latency,
-    /// GPU-idle card) whose translation must be present in every language.
+    /// Strings of the launcher's own settings and windows (render scale, frame latency, experimental
+    /// game support, GPU-idle card) whose translation must be present in every language.
     static var probes: [String] {
-        ["Graphics path", "DXMT (lean)", "Vulkan (classic)", "Applies from the next start.",
-         "Not available here: %@; Vulkan is used.", "Render scale", "Off (1.0×)", "Upscale lower game resolutions",
-         "Frame latency", "Experimental game support", "Loading…", "not included in this build (%@)"]
+        ["Render scale", "Off (1.0×)", "Upscale lower game resolutions",
+         "Frame latency", "Experimental game support", "Loading…"]
     }
 
     static func run() -> Never {

@@ -122,7 +122,7 @@ enum ShortcutsSelfTest {
             key(.keyUp, code, text)
             expect(drain().map { "\($0.0):\($0.1)" } == ["\(Keymap.linuxKey(UInt16(code))!):0"], "plain key release changed: \(code)")
         }
-        wc.guestFocusChanged(.desktop(width: 1280, height: 800))
+        wc.guestFocusChanged(.desktop)
         key(.flagsChanged, kVK_Command, "", command)
         key(.keyDown, kVK_ANSI_X, "x", command)
         key(.keyUp, kVK_ANSI_X, "x", command)
@@ -154,7 +154,7 @@ enum ShortcutsSelfTest {
         wc.guestFocusChanged(.steam)
         key(.flagsChanged, kVK_Command, "")
         expect(drain().isEmpty, "focus change emits a deferred Meta tap")
-        wc.guestFocusChanged(.desktop(width: 1280, height: 800))
+        wc.guestFocusChanged(.desktop)
         key(.flagsChanged, kVK_Option, "", option)
         key(.keyDown, kVK_LeftArrow, "\u{f702}", option)
         key(.keyUp, kVK_LeftArrow, "\u{f702}", option)

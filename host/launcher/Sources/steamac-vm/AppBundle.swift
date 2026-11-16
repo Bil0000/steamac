@@ -1,6 +1,8 @@
 import AppKit
 import Darwin
 import Foundation
+import Security
+import UniformTypeIdentifiers
 
 /// Running inside "FX Steam Launcher.app" (build.sh / bundle.sh): the kernel, initramfs, layer
 /// disk, gvproxy, desync and Valve's RAUC CA are bundled in Contents/Resources; the SteamOS disk
@@ -16,6 +18,100 @@ enum AppBundle {
     /// SSH off and no default guest password on created disks. The dev launcher has neither.
     static var releaseDefaults: Bool {
         Bundle.main.object(forInfoDictionaryKey: "SteamacReleaseDefaults") as? Bool ?? false
+    }
+
+    /// A local copy may have lost a resource even when the published DMG is complete
+    /// (STEAMAC-8K). Paths are kept in the local log, not in the warning's diagnostic fields.
+    struct InstallationFailure: LocalizedError, CustomStringConvertible {
+        let diagnostics: [String: String]
+        var description: String {
+            "The FX Steam Launcher installation is incomplete: its SteamOS download tool (desync) is missing, unreadable or not executable. Download the latest DMG again and copy FX Steam Launcher to Applications, replacing the old copy. Check security software for a blocked or removed desync file, then try again. " + Self.reopenGuidance
+        }
+        var errorDescription: String? {
+            String(localized: "The FX Steam Launcher installation is incomplete: its SteamOS download tool (desync) is missing, unreadable or not executable. Download the latest DMG again and copy FX Steam Launcher to Applications, replacing the old copy. Check security software for a blocked or removed desync file, then try again.")
+                + " " + String(localized: "Quit FX Steam Launcher completely before replacing or moving it, then open the copy in Applications.")
+        }
+        private static let reopenGuidance = "Quit FX Steam Launcher completely before replacing or moving it, then open the copy in Applications."
+    }
+
+    struct ResourceStatus {
+        let regular: Bool
+        let readable: Bool
+        let executable: Bool
+        let statError: Int32
+        var usable: Bool { regular && readable && executable }
+        var presence: String { statError == 0 ? "present" : (statError == ENOENT ? "missing" : "unavailable") }
+
+        init(path: String) {
+            var st = stat()
+            let result = stat(path, &st)
+            statError = result == 0 ? 0 : errno
+            regular = result == 0 && (st.st_mode & S_IFMT) == S_IFREG
+            readable = access(path, R_OK) == 0
+            executable = access(path, X_OK) == 0
+        }
+    }
+
+    /// App Translocation's containing directory is a stable macOS path marker. This avoids
+    /// linking private Security.framework translocation APIs.
+    static func isTranslocated(_ bundleURL: URL) -> Bool {
+        bundleURL.pathComponents.contains("AppTranslocation")
+    }
+
+    /// Only runs after a required bundled tool failed its availability check.
+    static func installationFailure(bundleURL: URL, desync: ResourceStatus) -> InstallationFailure {
+        let resources = bundleURL.appendingPathComponent("Contents/Resources", isDirectory: true)
+        var diagnostics = [
+            "translocated": String(isTranslocated(bundleURL)),
+            "translocation_check": "bundle path component",
+            "desync_presence": desync.presence,
+            "desync_stat_errno": String(desync.statError),
+            "desync_regular_file": String(desync.regular),
+            "desync_readable": String(desync.readable),
+            "desync_executable": String(desync.executable),
+        ]
+        // ENOENT on desync alone does not prove a partial copy or security-software removal:
+        // STEAMAC-AE could not list Resources or even create a static-code object for the app.
+        // Retain parent availability without sending the installation's absolute path.
+        for (name, url) in [("bundle", bundleURL),
+                            ("contents", bundleURL.appendingPathComponent("Contents", isDirectory: true)),
+                            ("resources", resources)] {
+            var st = stat()
+            let result = stat(url.path, &st)
+            let code = result == 0 ? 0 : errno
+            diagnostics[name + "_presence"] = code == 0 ? "present" : (code == ENOENT ? "missing" : "unavailable")
+            diagnostics[name + "_stat_errno"] = String(code)
+            diagnostics[name + "_directory"] = String(result == 0 && (st.st_mode & S_IFMT) == S_IFDIR)
+        }
+        do {
+            let entries = try FileManager.default.contentsOfDirectory(at: resources, includingPropertiesForKeys: nil)
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            diagnostics["resources_count"] = String(entries.count)
+            diagnostics["resources_listing"] = entries.map { entry in
+                var st = stat()
+                let size = lstat(entry.path, &st) == 0 ? String(st.st_size) : "unknown"
+                let relative = "Contents/Resources/" + entry.lastPathComponent
+                return "\(relative.debugDescription) size=\(size)"
+            }.joined(separator: "\n")
+        } catch {
+            let e = error as NSError
+            diagnostics["resources_listing_error"] = "\(e.domain) \(e.code)"
+        }
+        var code: SecStaticCode?
+        let created = SecStaticCodeCreateWithPath(bundleURL as CFURL, SecCSFlags(), &code)
+        diagnostics["code_signature_create_status"] = String(created)
+        if created == errSecSuccess, let code {
+            let flags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode)
+            let validity = SecStaticCodeCheckValidity(code, flags, nil)
+            diagnostics["code_signature_validity_status"] = String(validity)
+            diagnostics["code_signature_valid"] = String(validity == errSecSuccess)
+        } else {
+            diagnostics["code_signature_valid"] = "unknown"
+            diagnostics["code_signature_validity_status"] = "not checked (code creation failed)"
+        }
+        log("installation: bundle path \(bundleURL.path)")
+        for key in diagnostics.keys.sorted() { log("installation: \(key)=\(diagnostics[key]!)") }
+        return InstallationFailure(diagnostics: diagnostics)
     }
 
     static var appSupportDir: String {
@@ -40,13 +136,57 @@ enum AppBundle {
     }
 
     static func defaultDisk() -> String? {
-        defaultDiskCandidates().first { FileManager.default.isReadableFile(atPath: $0) }
+        defaultDiskCandidates().first(where: isDiskImage)
+    }
+
+    /// Validate the raw SteamOS GPT, not its suffix: recovery archives and Steam's macOS
+    /// installer are readable files too, but cannot boot (STEAMAC-7Y/7Z).
+    static func isDiskImage(_ path: String) -> Bool {
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &directory), !directory.boolValue,
+              let table = try? GPT.read(path: path) else { return false }
+        return DiskLayout.parts(homeGiB: DiskLayout.defaultHomeGiB).allSatisfy { part in
+            var matches = 0
+            for entry in table.entries where entry.name == part.name {
+                guard entry.type == part.type else { return false }
+                matches += 1
+            }
+            return matches == 1
+        }
+    }
+
+    static var invalidDiskMessage: String {
+        String(localized: "Choose a raw SteamOS GPT disk with the SteamOS partitions (including esp, rootfs-A and home), not a recovery archive or Steam's macOS installer. Use Create SteamOS Disk to download and create the correct disk.")
+    }
+
+    /// Shared by both disk pickers: do not save a bad selection or silently ignore it.
+    @MainActor
+    static func acceptDiskSelection(_ path: String) -> Bool {
+        guard isDiskImage(path) else {
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Not a usable SteamOS disk")
+            alert.informativeText = (path as NSString).abbreviatingWithTildeInPath + "\n\n" + invalidDiskMessage
+            alert.runModal()
+            return false
+        }
+        return true
+    }
+
+    /// "Choose a SteamOS disk image" panels (first run, Settings > Advanced): files only, no
+    /// packages (public.data excludes bundles and folders; a raw image of any name conforms).
+    static func configureDiskPanel(_ panel: NSOpenPanel) {
+        panel.title = String(localized: "Choose a SteamOS disk image")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = [.data]
     }
 
     /// The disk the next start uses (Settings value or default), nil if none is usable.
     static func configuredDisk(_ settings: LauncherSettings) -> String? {
         if !settings.diskImage.isEmpty {
-            return FileManager.default.isReadableFile(atPath: settings.diskImage) ? settings.diskImage : nil
+            return isDiskImage(settings.diskImage) ? settings.diskImage : nil
         }
         return defaultDisk()
     }
@@ -105,7 +245,7 @@ enum AppBundle {
     /// on screen; a shell launch has the message on stderr).
     @MainActor
     static func alertIfLaunchedFromFinder(_ title: LocalizedStringResource, _ message: String) {
-        guard resources != nil && getppid() == 1 else { return }
+        guard resources != nil && (getppid() == 1 || Supervisor.isChild) else { return }
         let alert = NSAlert()
         alert.messageText = String(localized: title)
         alert.informativeText = message
@@ -133,13 +273,10 @@ enum FirstRun {
                 chosen = CreateDiskWindowController.runModal(settings: settings)
             } else if choice == .alertSecondButtonReturn {
                 let panel = NSOpenPanel()
-                panel.title = String(localized: "Choose a SteamOS disk image")
+                AppBundle.configureDiskPanel(panel)
                 panel.message = String(localized: "Raw GPT disk image (e.g. steamos.img). It stays where it is.")
-                panel.canChooseFiles = true
-                panel.canChooseDirectories = false
-                panel.allowsMultipleSelection = false
-                panel.treatsFilePackagesAsDirectories = false
-                if panel.runModal() == .OK, let url = panel.url, FileManager.default.isReadableFile(atPath: url.path) {
+                if panel.runModal() == .OK, let url = panel.url,
+                   MainActor.assumeIsolated({ AppBundle.acceptDiskSelection(url.path) }) {
                     chosen = url.path
                 }
             } else {
@@ -165,7 +302,7 @@ enum FirstRun {
         var info = String(localized: "FX Steam Launcher needs a SteamOS disk image (steamos.img, ~87 GB sparse).\n\n")
         if !settings.diskImage.isEmpty {
             let path = (settings.diskImage as NSString).abbreviatingWithTildeInPath
-            info += String(localized: "The image chosen in Settings is not readable:\n\(path)\n\n")
+            info += path + "\n\n" + AppBundle.invalidDiskMessage + "\n\n"
         }
         let paths = looked.joined(separator: "\n")
         info += String(localized: "Looked in:\n\(paths)\n\n")

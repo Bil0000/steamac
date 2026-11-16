@@ -26,6 +26,47 @@ struct Options {
     /// the guest then abandons PCM_START, PipeWire is killed by systemd and games freeze (VRChat).
     var cmdline = "console=hvc0 loglevel=4 rootwait virtio_snd.msg_timeout_ms=10000"
     var disks: [DiskSpec] = []
+    /// --share DIR / Settings > Advanced "Shared folder": a Mac folder exposed to the guest as the
+    /// virtio-fs device tagged `Options.shareTag` (VM.init). nil = no share.
+    var share: String?
+    static let shareTag = "macshare"
+    /// --share-mount PATH / Settings > Advanced "Mount point in SteamOS": where the guest mounts the share
+    /// (kernel cmdline steamac.share=PATH; the initramfs creates a runtime mount unit for it).
+    var shareMount = Options.defaultShareMount
+    /// Register SteamLibrary inside the share once per guest path (`steamac.share_library=1`).
+    var shareLibrary = true
+    static let defaultShareMount = "/home/steamos/MacShare"
+    static func isReadableFolder(_ path: String) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+            && FileManager.default.isReadableFile(atPath: path)
+    }
+    /// A subdirectory of the writable home, never the home itself.
+    static let shareMountRoots = ["/home/steamos/"]
+    /// The same check as the initramfs ("shared folder" section): a subdirectory of
+    /// `shareMountRoots`, no empty, "." or ".." components, only [A-Za-z0-9/_.-].
+    static func isValidShareMount(_ p: String) -> Bool {
+        guard shareMountRoots.contains(where: { p.hasPrefix($0) && p.count > $0.count }),
+              !p.hasSuffix("/"),
+              p.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "/_.-".unicodeScalars.contains($0)) })
+        else { return false }
+        return !p.split(separator: "/", omittingEmptySubsequences: false).dropFirst().contains { $0.isEmpty || $0 == "." || $0 == ".." }
+    }
+
+    /// --selftest-settings: the validator agrees with the initramfs on what it accepts.
+    static func shareMountSelfCheck() -> [String] {
+        var failures: [String] = []
+        for good in ["/home/steamos/MacShare", "/home/steamos/Games/Mac-1", "/home/steamos/.cache"] where !isValidShareMount(good) {
+            failures.append("share mount: \(good) rejected")
+        }
+        for bad in ["", "/", "/home", "/home/steamos", "/home/steamos/", "/mnt", "/mnt/mac", "/media/mac", "/usr/mac", "/etc", "/home/steamos//x",
+                    "/home/steamos/../x", "/home/steamos/./x", "/home/steamos/My Games", "~/Games", "/home/steamos/x/",
+                    "/home/steamos/é", "/home/steamos/a:b", "/home/steamosx"] where isValidShareMount(bad) {
+            failures.append("share mount: \(bad) accepted")
+        }
+        log("selftest-settings: share mount: \(failures.isEmpty ? "ok" : "FAIL: \(failures.joined(separator: "; "))")")
+        return failures
+    }
     /// Settings > Advanced, --cpus / --mem, else automatic for this Mac (VMSizing; applySettings).
     var cpus = VMSizing.autoCPUs(.current)
     var memMiB = VMSizing.autoMemMiB(.current)
@@ -70,6 +111,9 @@ struct Options {
     var network = true
     var lanRemotePlay = false
     var selftestRemotePlay = false
+    var selftestStream = false
+    var selftestPointer = false
+    var selftestGameLayers = false
     var sound = true
     var sshPort = 2222
     /// Steam client of this boot (kernel cmdline `steamac.steam_client=`).
@@ -78,14 +122,16 @@ struct Options {
     var macTime = true
     /// Host Vulkan driver of this boot (virglrenderer opens it; VM.start).
     var vulkanDriver = LauncherSettings.VulkanDriver.moltenvk
-    var graphicsPath = LauncherSettings.GraphicsPath.vulkan
-    var selftestGraphicsPath = false
     /// Settings > Advanced "Frame latency" (kernel cmdline `steamac.frame_latency=1`): the guest's
     /// DXVK config gets dxgi.maxFrameLatency = 1 for the Vulkan path. Default false: unset.
     var frameLatency = false
     var experimentalGameSupport = false
     /// --launch-app APPID: Steam starts this game once per boot (kernel cmdline steamac.launch_app=).
     var launchApp: Int?
+    var selftestGraphicsPath = false
+    /// Experimental wmtr context type: its executor library (STEAMAC_WMTR_LIB, set by VM.start
+    /// with STEAMAC_WMTR=1); nil = off.
+    var wmtrLibrary: String?
     var shmMiB = 8192
     var gpuFlags: UInt32? = nil
     var gvproxyPath: String?
@@ -93,7 +139,7 @@ struct Options {
     var mouseMode: MouseMode = .auto
     var controlFifo: String?
     var autoCapture: Bool?
-    /// The guest gets a gamepad over fx.pad (`--no-gamepad`: no port, no pad this run).
+    /// The guest gets gamepads over fx.pad, fx.pad2, … (`--no-gamepad`: no ports, no pads this run).
     var gamepad = true
     /// `--pad`: what the guest's gamepad is this run (instead of Settings > Controller).
     var padType: LauncherSettings.PadType?
@@ -127,7 +173,6 @@ struct Options {
     var acceptLicense = false
     var selftestProvision = false
     var selftestMetalCache = false
-    var selftestGameLayers = false
     var selftestL10n = false
     var referenceDisk: String?
     /// --ssh-password DISK: print the disk's generated guest password (GuestPassword) and exit.
@@ -141,15 +186,16 @@ struct Options {
     var explicit: Set<String> = []
 
     static let usage = """
-    usage: steamac-vm --kernel PATH [--initrd PATH] [--cmdline STR] --disk PATH[:ro] ...
+    usage: steamac-vm --kernel PATH [--initrd PATH] [--cmdline STR] --disk PATH[:ro] ... [--share DIR [--share-mount PATH] | --no-share]
+                      [--share-library | --no-share-library]
                       [--cpus N] [--mem MiB] [--display WxH] [--refresh HZ] [--headless]
                       [--log FILE] [--no-net] [--no-sound] [--ssh-port PORT | --no-ssh] [--shm-mib MiB]
                       [--gpu-flags HEX] [--gvproxy PATH] [--frame-dump PNG]
-                      [--mouse auto|tablet|capture] [--no-gamepad] [--pad auto|xbox360|dualsense|dualshock4]
+                      [--mouse auto|tablet|capture] [--no-gamepad] [--pad auto|xbox360|dualsense|dualshock4|steamcontroller]
                       [--krun-log-level 0-5] [--perf-stats]
                       [--no-crash-reports] [--steam-client frame|deck|deckbeta]
-                      [--vulkan-driver moltenvk|kosmickrisp] [--graphics-path dxmt|vulkan]
-                      [--frame-latency | --no-frame-latency] [--lan-remote-play | --no-lan-remote-play]
+                      [--vulkan-driver moltenvk|kosmickrisp] [--lan-remote-play | --no-lan-remote-play]
+                      [--wmtr-lib PATH | --no-wmtr] [--frame-latency | --no-frame-latency]
                       [--experimental-game-support | --no-experimental-game-support]
            steamac-vm --selftest-display [--headless] [--selftest-out DIR] [--display WxH]
            steamac-vm --selftest-overlay [--selftest-out DIR] [--display WxH]
@@ -158,10 +204,12 @@ struct Options {
            steamac-vm --selftest-settings [--selftest-out DIR]
            steamac-vm --selftest-provision [--reference-disk IMG]
            steamac-vm --selftest-remote-play
+           steamac-vm --selftest-stream
            steamac-vm --selftest-metal-cache
+           steamac-vm --selftest-pointer
            steamac-vm --selftest-game-layers
            steamac-vm --selftest-l10n
-           steamac-vm --selftest-graphics-path [--graphics-path dxmt|vulkan]
+           steamac-vm --selftest-graphics-path [--wmtr-lib PATH | --no-wmtr]
            steamac-vm --create-disk PATH [--branch stable|rc] [--home-gib N]
                       [--password PW] [--keep-cache] [--accept-eula]
            steamac-vm --ssh-password DISK
@@ -179,6 +227,18 @@ struct Options {
                            virtio_snd.msg_timeout_ms=10000"; fsck.repair=yes, steamac.ssh/steam_client/tz
                            are added unless STR sets them)
       --disk PATH[:ro]     raw virtio-blk disk; repeatable, order = vda, vdb, ...
+      --share DIR          expose the Mac folder DIR to SteamOS as the virtio-fs device tagged "macshare"
+                           (default: Settings > Advanced "Shared folder", none unless chosen). virtio-fs does
+                           not confine the guest to DIR: root in SteamOS may reach what this Mac user can read
+      --share-mount PATH   where SteamOS mounts the shared folder (default: Settings > Advanced "Mount point in
+                           SteamOS", /home/steamos/MacShare): a subdirectory of /home/steamos/;
+                           kernel cmdline steamac.share=PATH, the initramfs creates a mount unit for it on every boot
+      --no-share           no shared folder this run
+      --share-library      create SteamLibrary in the shared folder on next start and register it in Steam
+                           once per path (default: Settings > Advanced "Use as a Steam library", on).
+                           Proton requires symbolic links: APFS recommended, exFAT unsupported;
+                           automatic registration skips shares without symbolic link support
+      --no-share-library   do not create or register a shared Steam library this run
       --cpus N             vCPUs (default: Settings > Advanced, automatic = this Mac's performance
                            cores, 2..8)
       --mem MiB            guest RAM (default: Settings > Advanced, automatic = half this Mac's RAM,
@@ -225,10 +285,16 @@ struct Options {
                            controller", which applies while the VM runs)
       --pad TYPE           what the virtual gamepad is in SteamOS this run (default: Settings >
                            Controller): auto: the same kind as the controller that drives it
-                           (DualSense, DualShock 4, else Xbox 360); xbox360: Microsoft X-Box 360 pad
-                           (xpad); dualsense, dualshock4: Sony pad as the Linux hid-playstation /
-                           hid-sony drivers expose it (PlayStation button glyphs in Steam). Any
-                           connected controller drives it; its rumble plays on that controller.
+                           (DualSense, DualShock 4, else Xbox 360), with a Steam Controller passed
+                           through as itself; steamcontroller: a Steam Controller goes to SteamOS
+                           as itself, any other controller drives an
+                           Xbox 360 pad; xbox360: Microsoft X-Box 360 pad (xpad); dualsense,
+                           dualshock4: Sony pad as the Linux hid-playstation / hid-sony drivers
+                           expose it (PlayStation button glyphs in Steam). Any connected
+                           controller drives it; its rumble plays on that controller.
+                           Further controllers are players 2-4 with a pad each (auto: of
+                           its own controller's kind; Settings > Controller "Additional
+                           controllers").
       --krun-log-level N   libkrun log level 0=off .. 5=trace (default 1=error)
       --steam-client C     Steam client SteamOS starts (kernel cmdline steamac.steam_client=C, added on
                            every boot; default: Settings > Advanced "Steam client", deck unless changed):
@@ -243,6 +309,10 @@ struct Options {
                            include it: host/kosmickrisp);
                            moltenvk: MoltenVK with steamac's patches (every Mac).
                            Switching makes Steam and games rebuild their shader caches.
+      --wmtr-lib PATH      experimental: offer the guest the wmtr virtio-gpu context type (capset 30), DXMT's
+                           winemetal calls run on this Mac's Metal by the executor library PATH
+                           (default: Settings > Advanced "Allow DXMT", off unless changed)
+      --no-wmtr            the guest gets no wmtr context type for this run
       --frame-latency      frame latency mode on (kernel cmdline steamac.frame_latency=1; default:
                            Settings > Advanced "Frame latency", off): the guest's DXVK config gets
                            dxgi.maxFrameLatency = 1 (Vulkan path only), trading some throughput for
@@ -282,7 +352,7 @@ struct Options {
                            STEAMAC_SENTRY_DEBUG=1 prints the Sentry SDK's debug log
 
     Updates (Settings > General "Check for updates at startup", on; never in the dev launcher
-    work/out/steamac-vm): the first boot asks api.github.com for the latest fxgl/steamac release, at
+    work/out/steamac-vm): the first boot asks api.github.com for the latest Bil0000/steamac release, at
     most every 6 h; menu FX Steam Launcher > Check for Updates… checks at any time. Test hooks:
     STEAMAC_UPDATE_URL (release JSON, http(s):// or file://; also enables the dev launcher's startup
     check), STEAMAC_FAKE_VERSION (the version this launcher compares as)
@@ -310,6 +380,9 @@ struct Options {
       --selftest-metal-cache reproduce an inaccessible Metal module cache and verify startup recovery
       --selftest-l10n      the bundle's ru and zh-Hans tables: present, the same keys, the same format
                            arguments, the launcher's settings strings translated
+      --selftest-pointer   host pointer -> guest cursor mapping (Retina on/off, window vs scanout size,
+                           full-screen letterbox, MetalFX, the guest's focused surface from focus lines)
+      --selftest-game-layers verify game layer visibility and the Metal HUD's game/picture policy
       --resize-selftest S  S seconds after Steam is ready, resize the window 1600x1000 -> fullscreen ->
                            windowed -> 1280x800, wait for the guest's new scanout each time and dump
                            frames to <--frame-dump>-resize-N-*.png
@@ -322,7 +395,9 @@ struct Options {
                            -screen = as composited on screen, Metal HUD included) |
                            settings TAB|close | settings-dump PNG | set KEY VALUE | restart |
                            update check|startup|state | update press download|skip|later|ok |
-                           update dump PNG (+ -with-vm = beside the VM window, as on screen)
+                           update dump PNG (+ -with-vm = beside the VM window, as on screen) |
+                           stats state|flush|ask|reset-question | stats press share|decline |
+                           stats dump PNG (game statistics question window)
 
     Window keys follow the Mac menu bindings. See the View and Mouse menus.
     Ctrl+Option releases the mouse.
@@ -359,6 +434,11 @@ struct Options {
                 if p.hasSuffix(":ro") { ro = true; p.removeLast(3) }
                 else if p.hasSuffix(":rw") { p.removeLast(3) }
                 o.disks.append(DiskSpec(path: p, readOnly: ro))
+            case "--share": o.share = try value(a)
+            case "--no-share": o.share = nil
+            case "--share-mount": o.shareMount = try value(a)
+            case "--share-library": o.shareLibrary = true
+            case "--no-share-library": o.shareLibrary = false
             case "--cpus": o.cpus = try int(a)
             case "--mem": o.memMiB = try int(a)
             case "--display":
@@ -398,12 +478,6 @@ struct Options {
                     throw OptionError("--steam-client: frame, deck or deckbeta")
                 }
                 o.steamClient = c
-            case "--graphics-path":
-                let v = try value(a)
-                guard let g = LauncherSettings.GraphicsPath(rawValue: v) else {
-                    throw OptionError("--graphics-path: dxmt or vulkan")
-                }
-                o.graphicsPath = g
             case "--selftest-graphics-path": o.selftestGraphicsPath = true
             case "--selftest-cursor": o.selftestCursor = true
             case "--selftest-shortcuts": o.selftestShortcuts = true
@@ -421,6 +495,8 @@ struct Options {
                     throw OptionError("--vulkan-driver: moltenvk or kosmickrisp")
                 }
                 o.vulkanDriver = d
+            case "--wmtr-lib": o.wmtrLibrary = try value(a)
+            case "--no-wmtr": o.wmtrLibrary = nil
             case "--shm-mib": o.shmMiB = try int(a)
             case "--gpu-flags":
                 let v = try value(a)
@@ -442,7 +518,7 @@ struct Options {
             case "--pad":
                 let v = try value(a)
                 guard let t = LauncherSettings.PadType(rawValue: v) else {
-                    throw OptionError("--pad: auto, xbox360, dualsense or dualshock4")
+                    throw OptionError("--pad: auto, xbox360, dualsense, dualshock4 or steamcontroller")
                 }
                 o.padType = t
             case "--krun-log-level": o.krunLogLevel = UInt32(clamping: try int(a))
@@ -462,8 +538,10 @@ struct Options {
             case "--selftest-pill": o.selftestPill = true
             case "--selftest-settings": o.selftestSettings = true
             case "--selftest-remote-play": o.selftestRemotePlay = true
+            case "--selftest-stream": o.selftestStream = true
             case "--selftest-provision": o.selftestProvision = true
             case "--selftest-metal-cache": o.selftestMetalCache = true
+            case "--selftest-pointer": o.selftestPointer = true
             case "--selftest-game-layers": o.selftestGameLayers = true
             case "--selftest-l10n": o.selftestL10n = true
             case "--reference-disk": o.referenceDisk = try value(a)
@@ -526,7 +604,8 @@ struct Options {
 
     var isSelftest: Bool {
         selftestDisplay || selftestOverlay || selftestStall || selftestPill || selftestSettings || selftestProvision || selftestRemotePlay
-            || selftestMetalCache || selftestGameLayers || selftestL10n || selftestCursor || selftestShortcuts || createDisk != nil || growDisk != nil
+            || selftestMetalCache || selftestPointer || selftestGameLayers || selftestStream || selftestL10n || selftestCursor || selftestShortcuts
+            || createDisk != nil || growDisk != nil
             || showSSHPassword != nil
     }
 
@@ -535,19 +614,17 @@ struct Options {
     static func resolve(_ argv: [String], settings: LauncherSettings) throws -> (Options, [LauncherSettings.Key: String]) {
         var o = try parse(argv)
         var overrides = o.applySettings(settings)
-        if let reason = o.graphicsPath.unavailableReason {
-            guard !o.explicit.contains("--graphics-path") else {
-                throw OptionError("--graphics-path \(o.graphicsPath.rawValue): \(o.graphicsPath.name) \(reason)")
-            }
-            log("gpu: \(o.graphicsPath.name) \(reason); using Vulkan")
-            o.graphicsPath = .vulkan
-        }
         if !o.isSelftest, let reason = o.vulkanDriver.unavailableReason {
             guard !o.explicit.contains("--vulkan-driver") else {
                 throw OptionError("--vulkan-driver \(o.vulkanDriver.rawValue): \(o.vulkanDriver.name) \(reason)")
             }
             log("gpu: \(o.vulkanDriver.name) \(reason); using MoltenVK")
             o.vulkanDriver = .moltenvk
+        }
+        if !o.isSelftest, let lib = o.wmtrLibrary, let reason = LauncherSettings.Wmtr.unavailableReason(lib) {
+            guard !o.explicit.contains("--wmtr-lib") else { throw OptionError("--wmtr-lib: \(reason)") }
+            log("gpu: wmtr: \(reason); the guest gets no wmtr context type")
+            o.wmtrLibrary = nil
         }
         if !o.isSelftest {
             AppBundle.fill(&o, settings: settings, overrides: &overrides)
@@ -557,9 +634,10 @@ struct Options {
             func add(_ key: String, _ value: @autoclosure () -> String?) { o.cmdline += Options.kernelArg(key, value(), unlessSetIn: given) }
             add("steamac.ssh", o.sshPort == 0 ? "0" : "1")
             add("steamac.steam_client", o.steamClient.rawValue)
+            add("steamac.gfx", o.wmtrLibrary == nil ? "vulkan" : "dxmt")
             add("steamac.gpu_mib", String(VMSizing.gpuBudgetMiB(memMiB: o.memMiB, auto: o.memSource == .auto)))
-            // the guest's Proton-lean tool uses DXMT only when the host offers the wmtr context
-            add("steamac.gfx", o.graphicsPath.rawValue)
+            add("steamac.share", o.share == nil ? nil : o.shareMount)
+            add("steamac.share_library", o.share != nil && o.shareLibrary ? "1" : nil)
             // only written when on; absent is the default (off), so an explicit =0 needs no key
             if let a = Options.frameLatencyArg(o.frameLatency) { add(a.key, a.value) }
             let fex = Options.experimentalGameSupportArg(o.experimentalGameSupport)
@@ -629,7 +707,13 @@ struct Options {
         macTime = s.followMacTime
         if given("--steam-client") { ov[.steamClient] = "--steam-client \(steamClient.rawValue)" } else { steamClient = s.steamClient }
         if given("--vulkan-driver") { ov[.vulkanDriver] = "--vulkan-driver \(vulkanDriver.rawValue)" } else { vulkanDriver = s.vulkanDriver }
-        if given("--graphics-path") { ov[.graphicsPath] = "--graphics-path \(graphicsPath.rawValue)" } else { graphicsPath = s.graphicsPath }
+        if given("--wmtr-lib") || given("--no-wmtr") {
+            let flag = wmtrLibrary.map { "--wmtr-lib \($0)" } ?? "--no-wmtr"
+            ov[.wmtr] = flag
+            ov[.wmtrLibrary] = flag
+        } else {
+            wmtrLibrary = s.wmtr ? LauncherSettings.Wmtr.path(for: s.wmtrLibrary) : nil
+        }
         if given("--frame-latency") || given("--no-frame-latency") {
             ov[.frameLatency] = frameLatency ? "--frame-latency" : "--no-frame-latency"
         } else { frameLatency = s.frameLatency }
@@ -637,6 +721,30 @@ struct Options {
             ov[.experimentalGameSupport] = experimentalGameSupport ? "--experimental-game-support" : "--no-experimental-game-support"
         } else { experimentalGameSupport = s.experimentalGameSupport }
         if given("--no-sound") { ov[.soundEnabled] = "--no-sound" } else { sound = s.soundEnabled }
+        if given("--share") || given("--no-share") {
+            ov[.sharedFolder] = share.map { "--share \($0)" } ?? "--no-share"
+        } else {
+            // Like the DXMT library: a folder that is gone (external drive unplugged, renamed)
+            // must not stop the launcher; boot without the share and say so.
+            share = nil
+            if !s.sharedFolder.isEmpty {
+                if Options.isReadableFolder(s.sharedFolder) {
+                    share = s.sharedFolder
+                } else if !isSelftest {
+                    log("shared folder \(s.sharedFolder): not a readable folder; booting without the share")
+                }
+            }
+        }
+        if given("--share-mount") {
+            ov[.sharedMount] = "--share-mount \(shareMount)"
+        } else {
+            shareMount = Options.isValidShareMount(s.sharedMount) ? s.sharedMount : Options.defaultShareMount
+        }
+        if given("--share-library") || given("--no-share-library") {
+            ov[.sharedLibrary] = shareLibrary ? "--share-library" : "--no-share-library"
+        } else {
+            shareLibrary = s.sharedLibrary
+        }
         if given("--no-gamepad") { ov[.virtualPad] = "--no-gamepad" }
         if let padType { ov[.padType] = "--pad \(padType.rawValue)" }
         if given("--refresh") { ov[.refreshRate] = "--refresh \(refreshRate)" }
@@ -707,6 +815,12 @@ struct Options {
             }
         }
         if disks.count > 26 { throw OptionError("at most 26 disks") }
+        if let share {
+            guard Options.isReadableFolder(share) else { throw OptionError("--share: not a readable folder: \(share)") }
+            guard Options.isValidShareMount(shareMount) else {
+                throw OptionError("--share-mount: a subdirectory of \(Options.shareMountRoots.joined(separator: ", ")), no . or .. components, characters A-Z a-z 0-9 / _ . - only: \(shareMount)")
+            }
+        }
     }
 }
 

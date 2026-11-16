@@ -4,11 +4,14 @@
 # a signed, notarized and stapled DMG with an /Applications link:
 #   work/out/dist/FX Steam Launcher.app
 #   work/out/dist/FX-Steam-Launcher-<CFBundleShortVersionString>.dmg
-# The copy drops the dev-only SteamacBuildOut Info.plist key (this build tree's path). Every nested
-# Mach-O (Frameworks dylibs, helper tools in Resources) is signed before the bundle, so helpers
-# added to bundle.sh later are covered without changes here.
+# The copy drops the dev-only SteamacBuildOut Info.plist key (this build tree's path) and gets the
+# in-app update configuration (SparkleUpdates): SUFeedURL, SUPublicEDKey, SUVerifyUpdateBeforeExtraction
+# and SURequireSignedFeed. Nested code is signed inside-out before the bundle: every loose Mach-O
+# (Frameworks dylibs, helper tools in Resources, Sparkle's Autoupdate), then nested bundles deepest
+# first (Sparkle's Updater.app, Sparkle.framework), so code added to bundle.sh later is covered
+# without changes here. host/launcher/appcast.sh publishes the DMG to the update feed.
 #
-#   host/launcher/dist.sh [--no-notarize]
+#   host/launcher/dist.sh [--no-notarize] [--no-sentry-upload]
 #
 # DIST_SIGN=adhoc builds the same DMG without an Apple Developer account (CI release builds, forks):
 # the copy is signed ad hoc (codesign -s -, no hardened runtime, no timestamp) with the same
@@ -25,9 +28,22 @@
 #                          xcrun notarytool store-credentials steamac-notary \
 #                              --apple-id <Apple ID> --team-id <team> --password <app-specific password>
 #   --no-notarize          sign only (local tests; Gatekeeper rejects downloaded copies)
-#   SENTRY_AUTH_TOKEN      optional: upload debug files for crash reports (work/out/dSYMs from
-#   SENTRY_ORG             build.sh + the app's executables and libraries, matched by Mach-O UUID)
-#   SENTRY_PROJECT         with sentry-cli to https://sentry.fxgam.es; skipped when unset
+#   --no-sentry-upload     do not upload debug files (only implied by --no-notarize)
+#   SENTRY_AUTH_TOKEN      required for a notarized build: upload the debug files of every Mach-O the
+#   SENTRY_ORG             app ships (work/out/dSYMs from build.sh + the executables and libraries
+#   SENTRY_PROJECT         themselves) with sentry-cli to https://sentry.fxgam.es, matched by Mach-O UUID.
+#                          1.9 shipped without them (no SENTRY_* set, only a "NOT uploaded" line), so
+#                          crashes in steamac-vm and libkrun stayed unsymbolicated: checked before
+#                          signing now, and every shipped Mach-O must pass sentry-cli debug-files check.
+#                          The dSYMs are kept as work/out/dist/FX-Steam-Launcher-<version>-dSYMs (later
+#                          builds replace work/out/dSYMs).
+#   SPARKLE_FEED_URL       the appcast; with SPARKLE_PUBLIC_KEY it turns on in-app updates. Without
+#                          both, the app keeps the GitHub release check (UpdateCheck.swift).
+#   SPARKLE_PUBLIC_KEY     its EdDSA public key. A notarized build with a feed
+#                          requires its private half in the keychain (generate_keys -p prints the
+#                          keychain's public key), so appcast.sh can sign the release's updates. Sparkle's
+#                          generate_keys in host/launcher/.build/artifacts/sparkle/Sparkle/bin; restore the
+#                          private key from its offline backup with generate_keys -f FILE.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -41,18 +57,30 @@ ENTITLEMENTS="$HERE/steamac-vm.entitlements"
 die() { echo "dist.sh: $*" >&2; exit 1; }
 
 notarize=1
-case ${1:-} in
-    "") ;;
-    --no-notarize) notarize=0 ;;
-    *) die "usage: $0 [--no-notarize]" ;;
-esac
+sentry_upload=1
+for arg in "$@"; do
+    case $arg in
+        --no-notarize) notarize=0; sentry_upload=0 ;;
+        --no-sentry-upload) sentry_upload=0 ;;
+        *) die "usage: $0 [--no-notarize] [--no-sentry-upload]" ;;
+    esac
+done
 mode=${DIST_SIGN:-developer-id}
 case $mode in
     developer-id) ;;
-    adhoc) notarize=0 ;;
+    adhoc) notarize=0; sentry_upload=0 ;;
     *) die "DIST_SIGN must be developer-id or adhoc, not '$mode'" ;;
 esac
 [[ -d $SRC ]] || die "missing $SRC (run host/launcher/build.sh)"
+# Crash reports of a release need its symbols: fail before signing, not after notarizing.
+if [[ $sentry_upload == 1 ]]; then
+    [[ -n ${SENTRY_AUTH_TOKEN:-} && -n ${SENTRY_ORG:-} && -n ${SENTRY_PROJECT:-} ]] \
+        || die "set SENTRY_AUTH_TOKEN, SENTRY_ORG and SENTRY_PROJECT (debug files for crash reports), or pass --no-sentry-upload"
+    command -v sentry-cli >/dev/null || die "sentry-cli not found (brew install getsentry/tools/sentry-cli)"
+    [[ $(dwarfdump --uuid "$SRC/Contents/MacOS/steamac-vm" | awk '{print $2; exit}') == \
+       $(dwarfdump --uuid "$OUT/dSYMs/steamac-vm.dSYM" 2>/dev/null | awk '{print $2; exit}') ]] \
+        || die "work/out/dSYMs/steamac-vm.dSYM is not the app's steamac-vm: rebuild with build.sh"
+fi
 # An already assembled app is not an escape hatch around guest provenance.
 # Check its own sealed resource bytes and receipts before touching dist/.
 python3 "$ROOT/scripts/guest-artifacts.py" check-bundle "$SRC/Contents/Resources"
@@ -91,6 +119,18 @@ if [[ $notarize == 1 ]]; then
 (or set NOTARY_PROFILE, or pass --no-notarize for a local test build)"
 fi
 
+# In-app updates (SparkleUpdates): releases always carry the feed and its public key.
+SPARKLE_BIN="$HERE/.build/artifacts/sparkle/Sparkle/bin"
+feed=${SPARKLE_FEED_URL:-}
+ed_key=${SPARKLE_PUBLIC_KEY:-}
+[[ -n $feed && -z $ed_key || -z $feed && -n $ed_key ]] && die "set both SPARKLE_FEED_URL and SPARKLE_PUBLIC_KEY, or neither"
+if [[ $notarize == 1 && -n $feed ]]; then
+    keychain_key=$("$SPARKLE_BIN/generate_keys" -p 2>/dev/null || true)
+    [[ $keychain_key == "$ed_key" ]] || die "the keychain's Sparkle key (${keychain_key:-none}) is not $ed_key: appcast.sh could
+not sign this release's updates; import the key backup with $SPARKLE_BIN/generate_keys -f <file>
+(or set SPARKLE_PUBLIC_KEY for another feed)"
+fi
+
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SRC/Contents/Info.plist")
 DMG_NAME="FX-Steam-Launcher-$version.dmg"
 mkdir -p "$DIST"
@@ -110,6 +150,15 @@ ditto "$SRC" "$APP"
 if [[ $notarize == 1 ]]; then
     /usr/libexec/PlistBuddy -c "Add :SteamacDistTeamID string $team" "$APP/Contents/Info.plist"
 fi
+if [[ -n $feed ]]; then
+    for entry in "SUFeedURL string $feed" "SUPublicEDKey string $ed_key" \
+                 "SUVerifyUpdateBeforeExtraction bool true" "SURequireSignedFeed bool true"; do
+        /usr/libexec/PlistBuddy -c "Add :$entry" "$APP/Contents/Info.plist"
+    done
+    echo "in-app updates from $feed (EdDSA public key $ed_key)"
+else
+    echo "no in-app updates (SPARKLE_FEED_URL unset): the app checks GitHub releases"
+fi
 
 if [[ $mode == adhoc ]]; then
     echo "=== signing ad hoc (no Developer ID, not notarized)"
@@ -119,16 +168,27 @@ else
     sign() { codesign --force --timestamp --options runtime --sign "$sign_id" "$@"; }
 fi
 main_exe="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+bundles=()      # nested bundles, deepest first
+bundle_exes=()  # their main executables (signed with the bundle)
+while IFS= read -r -d '' b; do
+    bundles+=("$b")
+    case $b in
+        *.framework) bundle_exes+=("$b/Versions/$(readlink "$b/Versions/Current")/$(basename "$b" .framework)") ;;
+        *) bundle_exes+=("$b/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$b/Contents/Info.plist")") ;;
+    esac
+done < <(find "$APP/Contents" -depth -type d \( -name '*.app' -o -name '*.framework' -o -name '*.xpc' \) -print0)
 nested=()
 while IFS= read -r -d '' f; do
     [[ $f == "$main_exe" ]] && continue
+    for e in ${bundle_exes[@]+"${bundle_exes[@]}"}; do [[ $f == "$e" ]] && continue 2; done
     file -b "$f" | grep -q '^Mach-O' && nested+=("$f")
 done < <(find "$APP/Contents" -type f -print0)
 for f in "${nested[@]}"; do sign "$f"; done
+for b in ${bundles[@]+"${bundles[@]}"}; do sign "$b"; done
 sign --entitlements "$ENTITLEMENTS" "$APP"
 
 codesign --verify --deep --strict "$APP"
-for f in "$main_exe" "${nested[@]}"; do
+for f in "$main_exe" "${nested[@]}" ${bundles[@]+"${bundles[@]}"}; do
     info=$(codesign -dv "$f" 2>&1)
     if [[ $mode == adhoc ]]; then
         grep -q '^Signature=adhoc$' <<<"$info" || die "${f#"$APP/"}: not signed ad hoc"
@@ -189,18 +249,24 @@ if [[ $mode == adhoc ]]; then
 elif [[ $notarize != 1 ]]; then
     echo "NOT notarized (--no-notarize): Gatekeeper blocks this DMG once downloaded"
 fi
+echo "update feed: after attaching $DMG_NAME to the GitHub release v$version, run host/launcher/appcast.sh"
 
 # Debug files for symbolicated crash reports (CrashReporting.swift). Never a hardcoded token.
-if [[ -z ${SENTRY_AUTH_TOKEN:-} || -z ${SENTRY_ORG:-} || -z ${SENTRY_PROJECT:-} ]]; then
-    echo "debug files NOT uploaded to Sentry: set SENTRY_AUTH_TOKEN, SENTRY_ORG and SENTRY_PROJECT to upload"
-elif ! command -v sentry-cli >/dev/null; then
-    echo "debug files NOT uploaded to Sentry: sentry-cli not found (brew install getsentry/tools/sentry-cli)"
+if [[ $sentry_upload == 0 ]]; then
+    echo "debug files NOT uploaded to Sentry (--no-notarize / --no-sentry-upload)"
 else
-    [[ -d $OUT/dSYMs ]] || die "missing $OUT/dSYMs (run host/launcher/build.sh)"
-    exe_uuid=$(dwarfdump --uuid "$DIST/$NAME.app/Contents/MacOS/steamac-vm" | awk '{print $2; exit}')
-    dsym_uuid=$(dwarfdump --uuid "$OUT/dSYMs/steamac-vm.dSYM" | awk '{print $2; exit}')
-    [[ $exe_uuid == "$dsym_uuid" ]] || die "work/out/dSYMs/steamac-vm.dSYM ($dsym_uuid) is not the app's steamac-vm ($exe_uuid): rebuild with build.sh"
-    echo "=== uploading debug files to sentry.fxgam.es ($SENTRY_ORG/$SENTRY_PROJECT)"
+    # Every Mach-O the app ships (executable, Frameworks, helpers in Resources), each checked usable
+    # by sentry-cli (symbol table and unwind info) and uploaded with the build's dSYMs.
+    machos=()
+    while IFS= read -r -d '' f; do
+        dwarfdump --uuid "$f" >/dev/null 2>&1 || continue
+        [[ $(sentry-cli debug-files check "$f") == *"Usable: yes"* ]] || die "no usable debug information in $f"
+        machos+=("$f")
+    done < <(find "$DIST/$NAME.app/Contents" -type f \( -perm -u+x -o -name '*.dylib' \) -print0)
+    kept="$DIST/FX-Steam-Launcher-$version-dSYMs"
+    rm -rf "$kept"
+    cp -R "$OUT/dSYMs" "$kept"
+    echo "=== uploading debug files of ${#machos[@]} Mach-O files + $kept to sentry.fxgam.es ($SENTRY_ORG/$SENTRY_PROJECT)"
     sentry-cli --url https://sentry.fxgam.es debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-        "$OUT/dSYMs" "$DIST/$NAME.app/Contents/MacOS" "$DIST/$NAME.app/Contents/Frameworks"
+        --wait "$kept" "${machos[@]}"
 fi

@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steamac <steamac@local>
+Date: Sat, 14 Nov 2026 18:33:45 +0300
+Subject: [PATCH] kk: free the timestamp chunks of a destroyed device's command
+ buffers
+
+Timestamp counter heap entries are chunks of the process' 32 shared Metal
+counter heaps, held by the command buffers that recorded timestamp writes
+until they are reset or freed (0045). Under virglrenderer a guest
+application that exits or crashes has its VkDevice destroyed with its
+command pools still alive (vkr_device_destroy never destroys tracked objects
+on the render thread: on_worker_thread is false there), so their chunks
+stayed taken for the life of the VMM. vkd3d-proton writes thousands of
+timestamps per command buffer; a few game launches took every chunk, and
+from then on every timestamp of the process read 0.
+
+Each taken chunk records its device; kk_DestroyDevice returns every chunk
+the device still holds once its queue is finished. Repro:
+host/kosmickrisp/tests/ts-heap-leak.c (40 devices, each destroyed with 4
+timestamp pools of 8192 written in one command buffer it never freed: the
+last timestamp read 0 from the 5th round before).
+---
+ src/kosmickrisp/vulkan/kk_device.c     |  3 +++
+ src/kosmickrisp/vulkan/kk_query_pool.c | 26 +++++++++++++++++++++++++-
+ src/kosmickrisp/vulkan/kk_query_pool.h |  2 ++
+ 3 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index c3541fc..bdb7107 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -16,6 +16,7 @@
+ #include "kk_image_view.h"
+ #include "kk_instance.h"
+ #include "kk_physical_device.h"
++#include "kk_query_pool.h"
+ #include "kk_shader.h"
+ 
+ #include "kosmickrisp/bridge/mtl_bridge.h"
+@@ -526,6 +527,8 @@ kk_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
+       dev->has_queue = false;
+    }
+ 
++   kk_ts_free_device_chunks(dev);
++
+    /* Release the residency set last once all BOs are released. */
+    mtl_release(dev->residency_set.handle);
+    simple_mtx_destroy(&dev->residency_set.mutex);
+diff --git a/src/kosmickrisp/vulkan/kk_query_pool.c b/src/kosmickrisp/vulkan/kk_query_pool.c
+index addf1d9..3d27579 100644
+--- a/src/kosmickrisp/vulkan/kk_query_pool.c
++++ b/src/kosmickrisp/vulkan/kk_query_pool.c
+@@ -52,6 +52,9 @@ static struct {
+    mtl_counter_heap *heaps[KK_TS_HEAP_COUNT];
+    uint32_t free_count;
+    uint16_t free[KK_TS_CHUNK_COUNT];
++   /* Device of each taken chunk: chunks of command buffers still alive when
++    * their device is destroyed are returned by kk_ts_free_device_chunks. */
++   const struct kk_device *owner[KK_TS_CHUNK_COUNT];
+ } kk_ts_slots = {.mutex = SIMPLE_MTX_INITIALIZER};
+ 
+ /* Takes a free chunk, creating a shared heap if none is left. */
+@@ -82,6 +85,7 @@ kk_ts_take_chunk(struct kk_device *dev, uint16_t *chunk)
+       goto unlock;
+ 
+    *chunk = kk_ts_slots.free[--kk_ts_slots.free_count];
++   kk_ts_slots.owner[*chunk] = dev;
+    ok = true;
+ 
+ unlock:
+@@ -96,14 +100,34 @@ kk_cmd_release_timestamps(struct kk_cmd_buffer *cmd)
+       return;
+ 
+    simple_mtx_lock(&kk_ts_slots.mutex);
+-   util_dynarray_foreach(&cmd->ts_chunks, uint16_t, chunk)
++   util_dynarray_foreach(&cmd->ts_chunks, uint16_t, chunk) {
++      kk_ts_slots.owner[*chunk] = NULL;
+       kk_ts_slots.free[kk_ts_slots.free_count++] = *chunk;
++   }
+    simple_mtx_unlock(&kk_ts_slots.mutex);
+ 
+    util_dynarray_clear(&cmd->ts_chunks);
+    cmd->ts_chunk_used = 0;
+ }
+ 
++/* Returns the chunks of command buffers the application never reset or freed.
++ * Under virglrenderer a guest application that exits (or crashes) has its
++ * device destroyed with its command pools still alive; their chunks stayed
++ * taken for the life of the VMM, and after a few game launches every
++ * timestamp read 0. */
++void
++kk_ts_free_device_chunks(const struct kk_device *dev)
++{
++   simple_mtx_lock(&kk_ts_slots.mutex);
++   for (uint32_t c = 0; c < KK_TS_CHUNK_COUNT; c++) {
++      if (kk_ts_slots.owner[c] == dev) {
++         kk_ts_slots.owner[c] = NULL;
++         kk_ts_slots.free[kk_ts_slots.free_count++] = c;
++      }
++   }
++   simple_mtx_unlock(&kk_ts_slots.mutex);
++}
++
+ /* A counter heap entry of the command buffer for one timestamp sample, NULL
+  * when every entry of the process is taken. */
+ static mtl_counter_heap *
+diff --git a/src/kosmickrisp/vulkan/kk_query_pool.h b/src/kosmickrisp/vulkan/kk_query_pool.h
+index 0eeb00a..bb04665 100644
+--- a/src/kosmickrisp/vulkan/kk_query_pool.h
++++ b/src/kosmickrisp/vulkan/kk_query_pool.h
+@@ -43,5 +43,7 @@ uint32_t *kk_pool_index_ptr(const struct kk_query_pool *pool);
+ /* Gives the timestamp counter heap entries a command buffer recorded samples
+  * into back to the process (reset/free). */
+ void kk_cmd_release_timestamps(struct kk_cmd_buffer *cmd);
++struct kk_device;
++void kk_ts_free_device_chunks(const struct kk_device *dev);
+ 
+ #endif /* KK_QUERY_POOL_H */
+-- 
+2.43.0
+

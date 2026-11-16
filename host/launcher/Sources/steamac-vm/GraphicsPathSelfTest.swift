@@ -1,36 +1,37 @@
 import Foundation
 
-/// --selftest-graphics-path: the graphics path this launch resolved (saved setting, or --graphics-path)
-/// reaches the VM's kernel command line and the environment libkrun reads, and the other path's
-/// environment is cleared. Run through `open` with only `defaults write ... graphicsPath` changed, this
+/// --selftest-graphics-path: the DXMT setting this launch resolved (saved "Allow DXMT", or --wmtr-lib /
+/// --no-wmtr) reaches the VM's kernel command line and the environment libkrun reads, and the other
+/// setting's environment is cleared. Run through `open` with only `defaults write ... wmtr` changed, this
 /// shows that a plain double-click start enables the chosen path.
 enum GraphicsPathSelfTest {
     static func run(_ resolved: Options) -> Never {
         var failures = 0
         func check(_ ok: Bool, _ what: String) { if !ok { failures += 1; log("selftest-graphics-path: FAIL \(what)") } }
-        log("selftest-graphics-path: resolved \(resolved.graphicsPath.rawValue), cmdline \(resolved.cmdline)")
-        check(resolved.cmdline.split(separator: " ").contains("steamac.gfx=\(resolved.graphicsPath.rawValue)"),
-              "kernel command line lacks steamac.gfx=\(resolved.graphicsPath.rawValue)")
-        for path in [resolved.graphicsPath] + LauncherSettings.GraphicsPath.allCases.filter({ $0 != resolved.graphicsPath }) {
+        let gfx = resolved.wmtrLibrary == nil ? "vulkan" : "dxmt"
+        log("selftest-graphics-path: resolved \(gfx), cmdline \(resolved.cmdline)")
+        check(resolved.cmdline.split(separator: " ").contains("steamac.gfx=\(gfx)"),
+              "kernel command line lacks steamac.gfx=\(gfx)")
+        let bundled = LauncherSettings.Wmtr.path(for: "")
+        for lib in [resolved.wmtrLibrary, resolved.wmtrLibrary == nil ? bundled : nil] {
             var o = resolved
-            o.graphicsPath = path
+            o.wmtrLibrary = lib
             // left over from a shell or an earlier start: must not survive the Vulkan path
             setenv("STEAMAC_WMTR", "1", 1); setenv("STEAMAC_WMTR_LIB", "/nonexistent", 1)
             VM.applyGraphicsEnv(o)
             let wmtr = ProcessInfo.processInfo.environment["STEAMAC_WMTR"]
-            let lib = ProcessInfo.processInfo.environment["STEAMAC_WMTR_LIB"]
-            if path == .dxmt && path.unavailableReason == nil {
+            let env = ProcessInfo.processInfo.environment["STEAMAC_WMTR_LIB"]
+            if let lib {
                 check(wmtr == "1", "DXMT: STEAMAC_WMTR not set")
-                check(lib.map { $0.hasSuffix("/" + LauncherSettings.GraphicsPath.hostLibrary) } ?? false,
-                      "DXMT: STEAMAC_WMTR_LIB is \(lib ?? "unset")")
-                if let lib, let h = dlopen(lib, RTLD_LAZY | RTLD_LOCAL) {
+                check(env == lib, "DXMT: STEAMAC_WMTR_LIB is \(env ?? "unset"), expected \(lib)")
+                if LauncherSettings.Wmtr.unavailableReason(lib) == nil, let h = dlopen(lib, RTLD_LAZY | RTLD_LOCAL) {
                     check(dlsym(h, "wmtr_host_create") != nil, "DXMT: \(lib) has no wmtr_host_create")
                     dlclose(h)
-                } else {
-                    check(false, "DXMT: cannot load \(lib ?? "-")")
+                } else if lib != bundled {
+                    check(false, "DXMT: cannot load \(lib)")
                 }
             } else {
-                check(wmtr == nil && lib == nil, "\(path.name): wmtr environment left set")
+                check(wmtr == nil && env == nil, "Vulkan: wmtr environment left set")
             }
         }
         // Frame latency (Settings > Advanced): on maps to steamac.frame_latency=1, off adds no key;

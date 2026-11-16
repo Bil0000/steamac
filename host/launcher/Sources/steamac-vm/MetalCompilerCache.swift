@@ -13,6 +13,8 @@ import Metal
 /// launch: those launches share one directory.
 enum MetalCompilerCache {
     private typealias SetPath = @convention(c) (UnsafeRawPointer) -> Void
+    private(set) static var outcome = "unprepared"
+    private static var startupDetail = ""
 
     private static func setPath(_ path: String) throws {
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "MTLSetShaderCachePath") else {
@@ -29,6 +31,7 @@ enum MetalCompilerCache {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let count = confstr(_CS_DARWIN_USER_CACHE_DIR, &buffer, buffer.count)
         guard count > 0, count <= buffer.count else {
+            outcome = "cache-directory-unavailable"
             log("Metal compiler cache: cannot locate DARWIN_USER_CACHE_DIR (\(String(cString: strerror(errno))))")
             return
         }
@@ -36,7 +39,10 @@ enum MetalCompilerCache {
                                         bundleID: Bundle.main.bundleIdentifier, bundlePath: Bundle.main.bundlePath)
         if Bundle.main.bundlePath.hasSuffix(".app") { adoptLegacyCache(primary: primary) }
         do { log("Metal shader cache: \(try prepare(primary: primary, fallback: fallback))") }
-        catch { log("Metal compiler cache: cannot use a writable replacement: \(error)") }
+        catch {
+            startupDetail = "\(error)"
+            log("Metal compiler cache: cannot use a writable replacement: \(error)")
+        }
     }
 
     static func paths(userCache: String, home: String, bundleID: String?, bundlePath: String) -> (primary: String, fallback: String) {
@@ -73,15 +79,45 @@ enum MetalCompilerCache {
     static func prepare(primary: String, fallback: String) throws -> String {
         do {
             try checkWritableTree(primary)
+            outcome = "override-unavailable"
             try setPath(primary)
+            outcome = "primary"
+            startupDetail = primary
+            log("Metal compiler cache: primary writable at startup: \(primary)")
             return primary
         } catch {
             let reason = "\(error)"
+            startupDetail = "\(primary): \(reason)"
+            outcome = "replacement-unwritable"
             try checkWritableTree(fallback)
+            outcome = "override-unavailable"
             try setPath(fallback)
+            outcome = "redirected"
             log("Metal compiler cache: \(primary) is not writable (\(reason)); using \(fallback) before Metal initialises")
             return fallback
         }
+    }
+
+    /// A startup probe cannot predict later filesystem/security-policy changes (STEAMAC-7W).
+    /// Preserve the startup decision and the actual failed module's metadata in the next report.
+    /// This is read-only: Metal chooses its cache once; never change it while compiles are running.
+    static func failureDiagnostics(_ message: String) -> String? {
+        guard message.contains("monolithic_metal.pcm"),
+              let start = message.range(of: "unable to open output file '")?.upperBound,
+              let end = message[start...].firstIndex(of: "'") else { return nil }
+        let path = String(message[start..<end])
+        guard path.hasSuffix("/monolithic_metal.pcm") else { return nil }
+        let directory = (path as NSString).deletingLastPathComponent
+        var lines = ["reporter-startup=\(outcome) reporter-detail=\(startupDetail); VM startup decision is the metal_cache tag"]
+        for item in [(directory as NSString).deletingLastPathComponent, directory, path] {
+            var info = stat()
+            if lstat(item, &info) == 0 {
+                lines.append("\(item): uid=\(info.st_uid) gid=\(info.st_gid) mode=\(String(info.st_mode, radix: 8)) flags=0x\(String(info.st_flags, radix: 16)) writable=\(access(item, W_OK) == 0)")
+            } else {
+                lines.append("\(item): lstat errno=\(errno) \(String(cString: strerror(errno)))")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func checkWritableTree(_ path: String) throws {
@@ -129,9 +165,14 @@ enum MetalCompilerCache {
         if let root = environment["STEAMAC_METAL_CACHE_SELFTEST_ROOT"],
            let mode = environment["STEAMAC_METAL_CACHE_SELFTEST_MODE"] {
             do {
-                let primary = root + (mode == "healthy" ? "/own" : "/blocked"), fallback = root + "/replacement"
+                let primary = root + (mode == "healthy" ? "/own" : mode == "late-blocked" ? "/late-primary" : "/blocked"), fallback = root + "/replacement"
                 if mode == "blocked" {
                     try setPath(primary)
+                } else if mode == "late-blocked" {
+                    guard try prepare(primary: primary, fallback: fallback) == primary, outcome == "primary" else {
+                        throw OptionError("healthy startup cache was not recorded")
+                    }
+                    guard chflags(primary, UInt32(UF_IMMUTABLE)) == 0 else { throw OptionError("chflags late cache") }
                 } else {
                     let want = mode == "healthy" ? primary : fallback
                     guard try prepare(primary: primary, fallback: fallback) == want else {
@@ -153,9 +194,16 @@ enum MetalCompilerCache {
                     log("selftest-metal-cache: PASS Metal source compiles with \(mode == "healthy" ? "this copy's own cache" : "replacement cache")")
                 } catch {
                     let detail = "\(error)"
-                    guard mode == "blocked", detail.contains("monolithic_metal.pcm"),
+                    guard mode == "blocked" || mode == "late-blocked", detail.contains("monolithic_metal.pcm"),
                           detail.contains("Operation not permitted"), detail.contains("could not build module") else { throw error }
-                    log("selftest-metal-cache: PASS reproduced STEAMAC-2E: \(detail)")
+                    if mode == "late-blocked" {
+                        guard let diagnostics = failureDiagnostics(detail),
+                              diagnostics.contains("startup=primary"), diagnostics.contains("flags=0x2") else {
+                            throw OptionError("runtime cache failure lost startup outcome or immutable flag")
+                        }
+                        chflags(primary, 0)
+                    }
+                    log("selftest-metal-cache: PASS reproduced \(mode) module-cache failure: \(detail)")
                 }
                 exit(0)
             } catch {
@@ -168,7 +216,7 @@ enum MetalCompilerCache {
         do {
             try FileManager.default.createDirectory(atPath: blocked, withIntermediateDirectories: true)
             guard chflags(blocked, UInt32(UF_IMMUTABLE)) == 0 else { throw OptionError("chflags: \(String(cString: strerror(errno)))") }
-            for mode in ["blocked", "repaired", "healthy"] {
+            for mode in ["blocked", "repaired", "healthy", "late-blocked"] {
                 let process = Process()
                 process.executableURL = Bundle.main.executableURL
                 process.arguments = ["--selftest-metal-cache"]
@@ -182,7 +230,7 @@ enum MetalCompilerCache {
                     throw OptionError("\(mode) child failed: \(process.terminationStatus)")
                 }
             }
-            guard try prepare(primary: root + "/healthy", fallback: root + "/unused") == root + "/healthy" else {
+            guard try prepare(primary: root + "/healthy", fallback: root + "/unused") == root + "/healthy", outcome == "primary" else {
                 throw OptionError("healthy per-copy cache was not used")
             }
             guard !FileManager.default.fileExists(atPath: root + "/unused") else {
@@ -235,6 +283,7 @@ enum MetalCompilerCache {
             exit(0)
         } catch {
             chflags(blocked, 0)
+            chflags(root + "/late-primary", 0)
             chmod(root + "/nested/hash", 0o700)
             chflags(root + "/nested/hash/monolithic_metal.pcm", 0)
             try? FileManager.default.removeItem(atPath: root)
