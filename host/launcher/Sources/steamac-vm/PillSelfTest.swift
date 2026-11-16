@@ -45,8 +45,13 @@ enum PillSelfTest {
 
         let progress = BootProgress()
         wc.attach(progress: progress)
-        // Constant counters: the GPU is idle all the time (the GPU-idle card shows for games).
-        let stall = StallMonitor(view: wc.stallView) { (0, 0) }
+        // Counters: the GPU is idle (the GPU-idle card shows for games) unless `gpuBusy`.
+        nonisolated(unsafe) var gpuBusy = false
+        var ring: UInt64 = 0
+        let stall = StallMonitor(view: wc.stallView) {
+            if gpuBusy { ring += 1 }
+            return (0, ring)
+        }
         wc.attach(stall: stall)
         stall.enabled = true
         let noPicture = NoPictureGuard { presenter.scanout.probe(sampleIfNewerThan: $0) }
@@ -219,7 +224,18 @@ enum PillSelfTest {
             Step(name: "17-game-black-6s-never", action: { guest("focus game 4242"); frames = .black }, wait: 6.0) {
                 expectNoPill("game focused, black 6 s") ?? (wc.stallView.shown ? nil : "GPU-idle card should cover the game")
             },
-            Step(name: "18-steam-black-5.5s", action: { guest("focus steam") }, wait: 5.5) {
+            Step(name: "17b-game-black-gpu-busy", action: { gpuBusy = true }, wait: 2.0) {
+                expectNoPill("loading game, black, GPU busy")
+                    ?? (wc.stallView.shown ? nil : "loading card should cover a black game while its GPU works")
+            },
+            Step(name: "17c-game-picture-hides-card", action: { frames = .pattern }, wait: 0.8) {
+                expectNoPill("game picture") ?? (wc.stallView.shown ? "loading card should hide on the game's picture" : nil)
+            },
+            Step(name: "17d-game-dark-scene-no-card", action: { frames = .black }, wait: 3.5) {
+                expectNoPill("dark scene after the game drew")
+                    ?? (wc.stallView.shown ? "loading card should not cover a dark scene after the game drew" : nil)
+            },
+            Step(name: "18-steam-black-5.5s", action: { gpuBusy = false; guest("focus steam") }, wait: 5.5) {
                 expectPill(waiting, detail: String(localized: "black picture \(sampleSeconds) s"), percent: false)
             },
             Step(name: "19-sleep-hides", action: { wc.guestSleeping(true); noPicture.vmPaused = true }, wait: 6.0) {

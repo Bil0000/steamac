@@ -2850,6 +2850,23 @@
         }
       }
     },
+    "Loading %@…" : {
+      "comment" : "Card over a loading game: game name",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка %@…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载 %@…"
+          }
+        }
+      }
+    },
     "Loading…" : {
       "localizations" : {
         "ru" : {

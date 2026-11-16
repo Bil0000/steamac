@@ -61,6 +61,11 @@ final class StallMonitor {
     var gameFocused = false { didSet { if gameFocused != oldValue { gateChanged() } } }
     /// The focused game is frozen (GamePause): an idle GPU is expected.
     var paused = false { didSet { if paused != oldValue { gateChanged() } } }
+    /// The focused game shows no picture or a black one (NoPictureGuard): the card covers it even
+    /// while the GPU works (a loading game).
+    var gameDark = false { didSet { if gameDark != oldValue { gateChanged() } } }
+    /// Display name of the focused game, if known.
+    var gameName: () -> String? = { nil }
     /// The indicator is up (or about to fade in).
     var indicatorShown: Bool { shownSince != nil }
     /// Once per indicator stretch, when its wording turns to "SteamOS is not responding…"
@@ -128,6 +133,7 @@ final class StallMonitor {
     }
 
     private var gateOpen: Bool { enabled && !suppressed && !paused }
+    private var coversDarkGame: Bool { gameDark && gameFocused }
 
     /// Any gate input changed: a newly opened window starts now; a closed one hides at once.
     private func gateChanged() {
@@ -146,13 +152,13 @@ final class StallMonitor {
         if let c, let prev = counters { active = c != prev } else { active = false }
         if let c { counters = c }
         perfNote(now: now, counters: c, active: active)
+        countersAvailable = c != nil
         if active {
-            hide(reason: nil, now: now)
+            if !coversDarkGame { hide(reason: nil, now: now) }
             lastActivity = now
             cpuAtActivity = StallMonitor.cpuSeconds()
-            return
+            if !coversDarkGame { return }
         }
-        countersAvailable = c != nil
         evaluate(now)
     }
 
@@ -161,10 +167,11 @@ final class StallMonitor {
         let dead = notResponding()
         // Durations shown and logged are the GPU's whole idle time.
         guard countersAvailable, gateOpen, gameFocused || dead,
-              now - max(lastActivity, gateOpenedAt) >= StallMonitor.idleThreshold else {
+              coversDarkGame || now - max(lastActivity, gateOpenedAt) >= StallMonitor.idleThreshold else {
             if shownSince != nil {
                 hide(reason: !enabled ? "setting off" : suppressed ? "overlay"
-                     : notRespondingReported && !dead ? "guest responding again" : "game focus lost", now: now)
+                     : notRespondingReported && !dead ? "guest responding again"
+                     : gameFocused ? "game picture back" : "game focus lost", now: now)
             }
             return
         }
@@ -176,7 +183,8 @@ final class StallMonitor {
         view.update(title: title, detail: detail)
         if starting {
             view.show()
-            log("stall: gpu idle \(String(format: "%.1f", now - lastActivity)) s, indicator shown (\(status(now)))")
+            log((coversDarkGame ? "stall: game picture black" : "stall: gpu idle \(String(format: "%.1f", now - lastActivity)) s")
+                + ", indicator shown (\(status(now)))")
         }
         if !notRespondingReported && dead {
             notRespondingReported = true
@@ -207,7 +215,8 @@ final class StallMonitor {
         if notResponding() {
             return (String(localized: "SteamOS is not responding…"), String(localized: "waiting (\(Int(idle)) s)"))
         }
-        let title = String(localized: "Loading…")
+        let title = gameName().map { String(localized: "Loading \($0)…", comment: "Card over a loading game: game name") }
+            ?? String(localized: "Loading…")
         let cores = String(format: "%.1f", currentCPU())
         let detail = lastAlive > 0
             ? String(localized: "VM CPU \(cores) cores · guest alive")
