@@ -670,9 +670,9 @@ final class WindowController: NSObject, NSWindowDelegate {
             let previousAlive = progress.onAlive
             progress.onAlive = { [weak stall] ms, load, cpu in previousAlive?(ms, load, cpu); stall?.alive(uptimeMs: ms, load: load, gameCPU: cpu) }
             let previousEvent = progress.onGameEvent
-            progress.onGameEvent = { [weak stall] e in
+            progress.onGameEvent = { [weak self, weak stall] e in
                 previousEvent?(e)
-                if case .start(let id) = e { stall?.gameStarted(id) }
+                if case .start(let id) = e { stall?.gameStarted(id); self?.noPicture?.gameStarted(id) }
             }
         }
         subscriptions.append(settings.$showStallIndicator.dropFirst().receive(on: DispatchQueue.main).sink { [weak stall] on in

@@ -261,6 +261,10 @@ enum PillSelfTest {
                 expectNoPill("dark scene after an early first frame")
                     ?? (wc.stallView.shown ? "a game frame newer than the focus change must count as drawn" : nil)
             },
+            Step(name: "17l-relaunch-black-card", action: { guest("game-start 4244") }, wait: 3.5) {
+                expectNoPill("relaunched game black")
+                    ?? (wc.stallView.shown ? nil : "a relaunched game must draw again before its black picture counts as a scene")
+            },
             Step(name: "18-steam-black-5.5s", action: { gpuBusy = false; guest("focus steam") }, wait: 5.5) {
                 expectPill(waiting, detail: String(localized: "black picture \(sampleSeconds) s"), percent: false)
             },

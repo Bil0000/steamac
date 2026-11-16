@@ -358,8 +358,7 @@ final class NoPictureGuard {
     }
 
     /// Game that showed a non-black frame: a dark scene later, also after a trip to Steam, is not loading.
-    /// shortcut: kept until another game draws, so a relaunch of the same game gets no card; track the
-    /// game's process if that matters.
+    /// Kept until another game draws or this one starts again (`gameStarted`).
     private var drewGame: Int?
     /// `presented` when the game got focus: that frame is Steam's and proves nothing.
     private var focusPresented: UInt64?
@@ -370,6 +369,14 @@ final class NoPictureGuard {
     /// Timer suspended while its gate is closed: no 4 Hz main-queue wakeups
     /// during gameplay, sleep or a paused VM.
     private var running = false
+
+    /// `game-start`: a new run of the game must draw again before its dark picture counts as a scene.
+    func gameStarted(_ appid: Int) {
+        guard drewGame == appid else { return }
+        drewGame = nil
+        if game == appid { focusPresented = probe(.max).presented; focusedAt = CACurrentMediaTime() }
+        gateChanged("game started")
+    }
 
     func start() {
         guard timer == nil else { return }
