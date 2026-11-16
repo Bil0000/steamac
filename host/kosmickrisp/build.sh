@@ -505,7 +505,12 @@
 #              and imageLoad, and wrong residency for gradient samples and gathers, of writable placement sparse
 #              textures; values and explicit-LOD samples were correct. Repro: host/moltenvk/repro sparse.c (183
 #              failures before, 0 after).
-#              0100-0107 are the fork's patches (host/kosmickrisp/patches/README.md maps the old numbers). Its opt-in
+#   0108       steamac: release-build bound checks of indices the guest controls (Venus passes them through and
+#              -Db_ndebug=true drops the asserts): sparse buffer binds outside the buffer's pages, sparse image binds
+#              of a level at or past the mip tail or a layer past the image, transform feedback buffer bindings at or
+#              past POLY_MAX_SO_BUFFERS and stream queries at or past POLY_MAX_VERTEX_STREAMS are skipped instead of
+#              writing past host arrays. Valid calls are unchanged.
+#              0100-0108 are the fork's patches (host/kosmickrisp/patches/README.md maps the old numbers). Its opt-in
 #              asynchronous pipelines (0041/0043/0047/0050, MESA_KK_ASYNC_PIPELINES) are dropped for 0051-0057/0063,
 #              and its 0053 (one timestamp trigger dispatch per compute encoder, briefly 0103) with upstream 0064.
 #
@@ -798,6 +803,7 @@ mv -f "$lib.tmp.$$" "$lib"
 	echo "  0105 = steamac: uncommitted Metal command buffers released before their allocator reset (fillCommandBufferArgs crash)"
 	echo "  0106 = steamac: aligned indexed indirect draws with robustness stay in the render pass (no unroll)"
 	echo "  0107 = steamac: sparse residency read through read-only mirror textures on Apple10 (writable ones misreport it)"
+	echo "  0108 = steamac: out-of-range guest sparse binds, xfb buffer bindings and xfb stream queries skipped in release builds"
 	echo
 	echo "Known gaps (host/moltenvk/repro/run.sh): transform feedback with strip geometry shaders and"
 	echo "the overflow counter (draft !44928)."

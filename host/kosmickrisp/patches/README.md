@@ -3,7 +3,7 @@
 `build.sh` (one level up) applies these `git format-patch` files in name order on top of the pinned Mesa commit.
 Each patch names its upstream origin (a Mesa merge request) or says it is a steamac change.
 
-0001–0098 are steamac upstream's series, with its gaps (0060, 0070, 0081, 0084, 0093, 0097). 0100–0107 are this
+0001–0098 are steamac upstream's series, with its gaps (0060, 0070, 0081, 0084, 0093, 0097). 0100–0108 are this
 fork's patches on top of it; 0099 is not used, so that the fork's series starts at a round number.
 
 The fork's series was 0041–0055 before the merge with steamac 1.9.14, whose own 0041–0098 took those numbers. Its
@@ -22,3 +22,4 @@ timestamp tests. The others are 0100–0106 in the same order, without 0103:
 | 0105 | 0054 | uncommitted Metal command buffers released before the allocator reset |
 | 0106 | 0055 | aligned indexed indirect draws kept in the render pass |
 | 0107 | new  | sparse residency through read-only textures on Apple10 |
+| 0108 | new  | release-build bound checks of guest-controlled indices |

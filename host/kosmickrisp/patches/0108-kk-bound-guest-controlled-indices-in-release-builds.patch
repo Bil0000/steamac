@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steamac <steamac@local>
+Date: Mon, 16 Nov 2026 21:00:00 +0300
+Subject: [PATCH] kk: bound guest-controlled indices in release builds
+
+Venus passes guest Vulkan calls to the host driver mostly without
+validating them, and release builds drop asserts (-Db_ndebug=true). An
+out-of-range value from a guest could write past host arrays:
+
+- kk_sparse.c: sparse buffer binds checked first + count against the
+  buffer's page count only with an assert, and kk_sparse_bind_image
+  checked mipLevel only with an assert and arrayLayer not at all. Skip
+  binds whose pages are outside the buffer (in kk_sparse_bind_buffer_pages
+  and kk_sparse_bind_buffer_textures) and image binds whose level is not
+  below the mip tail or whose layer is past the image's layers.
+- kk_cmd_draw.c: kk_CmdBindTransformFeedbackBuffers2EXT wrote
+  xfb.buffers[firstBinding + i] for any binding. Skip bindings at or past
+  POLY_MAX_SO_BUFFERS, as 0100 does in kk_begin_end_xfb.
+- kk_query_pool.c: kk_CmdBeginQueryIndexedEXT and
+  kk_CmdEndQueryIndexedEXT wrote xfb.queries[index] for any stream index.
+  Ignore indices at or past POLY_MAX_VERTEX_STREAMS.
+
+Only out-of-range input is skipped; valid calls are unchanged.
+
+Generated-by: LLM
+---
+ src/kosmickrisp/vulkan/kk_cmd_draw.c   | 2 ++
+ src/kosmickrisp/vulkan/kk_query_pool.c | 8 +++++---
+ src/kosmickrisp/vulkan/kk_sparse.c     | 9 +++++++--
+ 3 files changed, 14 insertions(+), 5 deletions(-)
+
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_draw.c b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+index abb1f52..bbd79d0 100644
+--- a/src/kosmickrisp/vulkan/kk_cmd_draw.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_draw.c
+@@ -3022,6 +3022,8 @@ kk_CmdBindTransformFeedbackBuffers2EXT(
+    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+ 
+    for (uint32_t i = 0; i < bindingCount; i++) {
++      if (firstBinding + i >= POLY_MAX_SO_BUFFERS)
++         continue;
+       cmd->state.gfx.xfb.buffers[firstBinding + i] = (struct kk_addr_range){
+          .addr = pBindingInfos[i].addressRange.address,
+          .range = pBindingInfos[i].addressRange.size,
+diff --git a/src/kosmickrisp/vulkan/kk_query_pool.c b/src/kosmickrisp/vulkan/kk_query_pool.c
+index 3d27579..b899f21 100644
+--- a/src/kosmickrisp/vulkan/kk_query_pool.c
++++ b/src/kosmickrisp/vulkan/kk_query_pool.c
+@@ -596,8 +596,9 @@ kk_CmdBeginQueryIndexedEXT(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+ 
+    /* GS emulation adds to this query until it ends. */
+    if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
+-      cmd->state.gfx.xfb.queries[index] =
+-         kk_query_report_addr(dev, pool, query);
++      if (index < POLY_MAX_VERTEX_STREAMS)
++         cmd->state.gfx.xfb.queries[index] =
++            kk_query_report_addr(dev, pool, query);
+       return;
+    }
+ 
+@@ -618,7 +619,8 @@ kk_CmdEndQueryIndexedEXT(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
+    VK_FROM_HANDLE(kk_query_pool, pool, queryPool);
+ 
+    if (pool->vk.query_type == VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT) {
+-      cmd->state.gfx.xfb.queries[index] = 0u;
++      if (index < POLY_MAX_VERTEX_STREAMS)
++         cmd->state.gfx.xfb.queries[index] = 0u;
+    } else {
+       cmd->state.gfx.occlusion.mode = MTL_VISIBILITY_RESULT_MODE_DISABLED;
+       cmd->state.gfx.dirty |= KK_DIRTY_OCCLUSION;
+diff --git a/src/kosmickrisp/vulkan/kk_sparse.c b/src/kosmickrisp/vulkan/kk_sparse.c
+index 9a72d06..65daf49 100644
+--- a/src/kosmickrisp/vulkan/kk_sparse.c
++++ b/src/kosmickrisp/vulkan/kk_sparse.c
+@@ -583,7 +583,8 @@ kk_sparse_bind_buffer_pages(struct kk_queue *queue,
+       const uint64_t count = DIV_ROUND_UP(bind->size, KK_SPARSE_PAGE_SIZE_B);
+       const uint64_t heap_first =
+          mem ? bind->memoryOffset / KK_SPARSE_PAGE_SIZE_B : 0u;
+-      assert(first + count <= sparse->page_count);
++      if (first >= sparse->page_count || count > sparse->page_count - first)
++         continue;
+ 
+       simple_mtx_lock(&sparse->lock);
+       for (uint64_t p = 0; p < count; ++p) {
+@@ -630,6 +631,8 @@ kk_sparse_bind_buffer_textures(struct kk_queue *queue,
+       const uint64_t count = DIV_ROUND_UP(bind->size, KK_SPARSE_PAGE_SIZE_B);
+       const uint64_t heap_first =
+          mem ? bind->memoryOffset / KK_SPARSE_PAGE_SIZE_B : 0u;
++      if (first >= sparse->page_count || count > sparse->page_count - first)
++         continue;
+ 
+       simple_mtx_lock(&sparse->lock);
+       if (residency) {
+@@ -827,7 +830,9 @@ kk_sparse_bind_image(struct kk_queue *queue,
+ 
+       /* Levels below the Vulkan mip tail; Metal walks the region's tiles in
+        * x, y, z order through consecutive heap pages. */
+-      assert(bind->subresource.mipLevel < image->sparse.vk_tail_level);
++      if (bind->subresource.mipLevel >= image->sparse.vk_tail_level ||
++          bind->subresource.arrayLayer >= image->vk.array_layers)
++         continue;
+       const struct mtl_sparse_texture_mapping mapping = {
+          .unmap = mem == NULL,
+          .origin = {bind->offset.x / tile.width, bind->offset.y / tile.height,
