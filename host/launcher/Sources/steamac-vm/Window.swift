@@ -463,7 +463,7 @@ final class WindowController: NSObject, NSWindowDelegate {
             content = nil
         } else if let p = progress?.state, p.phase != .running {
             content = ProgressPillView.Content(p)
-        } else if let r = noPictureReport {
+        } else if let r = noPictureReport, !r.game {
             content = ProgressPillView.Content(title: r.title, detail: r.detail, fraction: nil)
         } else {
             content = nil
@@ -536,6 +536,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         self.stall = stall
         stall.enabled = settings.showStallIndicator
         stall.gameFocused = focusedGame != nil
+        stall.gameName = { [weak self] in self?.focusedGame.flatMap { self?.settings.gameName($0) } }
         if let progress {
             let previous = progress.onChange
             progress.onChange = { [weak self] s in previous?(s); self?.updateStallGate() }
@@ -555,8 +556,9 @@ final class WindowController: NSObject, NSWindowDelegate {
         stall.suppressed = overlay.shown || bootOrShutdown
     }
 
-    /// "Waiting for SteamOS to draw…" in the pill after `ready` (never during game focus, sleep,
-    /// a paused game or a paused VM; `vmPaused` is set by the owner).
+    /// "Waiting for SteamOS to draw…" in the pill after `ready` (never during sleep, a paused game
+    /// or a paused VM; `vmPaused` is set by the owner). A focused game's black picture goes to the
+    /// GPU-idle card instead.
     func attach(noPicture: NoPictureGuard) {
         self.noPicture = noPicture
         if let progress {
@@ -568,6 +570,7 @@ final class WindowController: NSObject, NSWindowDelegate {
         }
         noPicture.onChange = { [weak self] report in
             self?.noPictureReport = report
+            self?.stall?.gameDark = report?.game == true
             self?.updatePill()
         }
         updateNoPictureGate()
@@ -577,7 +580,7 @@ final class WindowController: NSObject, NSWindowDelegate {
     private func updateNoPictureGate() {
         guard let noPicture else { return }
         noPicture.ready = progress.map { $0.state.phase == .running } ?? false
-        noPicture.gameFocused = focusedGame != nil
+        noPicture.game = focusedGame
         noPicture.gamePaused = pausedGame != nil
         noPicture.asleep = guestAsleep
     }

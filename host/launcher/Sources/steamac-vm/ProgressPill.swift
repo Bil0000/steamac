@@ -290,22 +290,25 @@ final class ProgressPillView: NSView {
 
 /// "Waiting for SteamOS to draw…" after `ready`: the window has had no guest picture at all for
 /// `missingThreshold` (scanout off, or no frame since the last scanout set / resize) or the
-/// presented picture has been black for `blackThreshold`, while Steam or the desktop has focus
-/// and SteamOS neither sleeps nor is paused / suspended (a game's idle GPU is the GPU-idle card's
-/// job). The report says what is known: a guest detail line received after `ready` if any, why
-/// (display off / no frame / black picture), the heartbeat and the VM's CPU. It ends with the
-/// first non-black frame. Black = at least `blackFraction` of Scanout's sparse sample points
-/// below its luma threshold; a frame is sampled only when a newer one was presented, at most
-/// once per `tick`. Main thread only.
+/// presented picture has been black for `blackThreshold`, while SteamOS neither sleeps nor is
+/// paused / suspended. While a game has focus the report is marked `game` after
+/// `gameBlackThreshold` and the GPU-idle card shows it instead of the pill (a loading game's GPU
+/// may be busy while its window stays black) until the game's first non-black frame. The report
+/// says what is known: a guest detail line received after `ready` if any, why (display off / no
+/// frame / black picture), the heartbeat and the VM's CPU. It ends with the first non-black frame.
+/// Black = at least `blackFraction` of Scanout's sparse sample points below its luma threshold; a
+/// frame is sampled only when a newer one was presented, at most once per `tick`. Main thread only.
 final class NoPictureGuard {
     struct Report: Equatable {
         var title: String
         var detail: String
+        var game = false
     }
 
     static let tick: TimeInterval = 0.25
     static let missingThreshold: TimeInterval = 3
     static let blackThreshold: TimeInterval = 5
+    static let gameBlackThreshold: TimeInterval = 2.5
     static let blackFraction = 0.995
     static let title = String(localized: "Waiting for SteamOS to draw…")
 
@@ -325,8 +328,16 @@ final class NoPictureGuard {
 
     /// Steam is ready (the boot overlay / pill is gone; the guest is not shutting down).
     var ready = false { didSet { if ready != oldValue { gateChanged("not ready") } } }
-    /// A game has focus: the GPU-idle card covers games.
-    var gameFocused = false { didSet { if gameFocused != oldValue { gateChanged("game focused") } } }
+    /// The focused game's app id, if a game has focus: its report goes to the GPU-idle card.
+    var game: Int? {
+        didSet {
+            guard game != oldValue else { return }
+            focusPresented = game != nil ? probe(.max).presented : nil
+            hide(game != nil ? "game focused" : "game focus lost")
+            gateChanged("game focus")
+        }
+    }
+    private var gameFocused: Bool { game != nil }
     /// "Game paused" (GamePause confirmed a frozen game).
     var gamePaused = false { didSet { if gamePaused != oldValue { gateChanged("game paused") } } }
     /// SteamOS sleeps.
@@ -343,7 +354,13 @@ final class NoPictureGuard {
         self.probe = probe
     }
 
-    private var gateOpen: Bool { ready && !gameFocused && !gamePaused && !asleep && !vmPaused }
+    /// Game that showed a non-black frame: a dark scene later, also after a trip to Steam, is not loading.
+    /// shortcut: kept until another game draws, so a relaunch of the same game gets no card; track the
+    /// game's process if that matters.
+    private var drewGame: Int?
+    /// `presented` when the game got focus: that frame is Steam's and proves nothing.
+    private var focusPresented: UInt64?
+    private var gateOpen: Bool { ready && !gamePaused && !asleep && !vmPaused && (game == nil || game != drewGame) }
     /// Timer suspended while its gate is closed: no 4 Hz main-queue wakeups
     /// during gameplay, sleep or a paused VM.
     private var running = false
@@ -388,7 +405,7 @@ final class NoPictureGuard {
         let p = probe(seen)
         if let d = p.dark {
             seen = p.presented
-            lastDark = d
+            if p.presented != focusPresented || d >= NoPictureGuard.blackFraction { lastDark = d }
         }
         let missing = !p.enabled || !p.hasPicture
         if missing {
@@ -400,17 +417,25 @@ final class NoPictureGuard {
             if let d = lastDark {
                 if d >= NoPictureGuard.blackFraction {
                     if darkSince == nil { darkSince = now }
-                } else if darkSince != nil {
-                    darkSince = nil
-                    hide("first non-black frame")
+                } else {
+                    if darkSince != nil {
+                        darkSince = nil
+                        hide("first non-black frame")
+                    }
+                    if let game {
+                        drewGame = game
+                        gateChanged("game drew")
+                        return
+                    }
                 }
             }
         }
         noteCPU(now)
         let reason = missing ? (p.enabled ? "no frame" : "display off") : "black picture"
         if shownSince == nil {
-            let due = missing ? now - (missingSince ?? now) >= NoPictureGuard.missingThreshold
-                              : now - (darkSince ?? now) >= NoPictureGuard.blackThreshold
+            let due = gameFocused ? now - (darkSince ?? now) >= NoPictureGuard.gameBlackThreshold
+                : missing ? now - (missingSince ?? now) >= NoPictureGuard.missingThreshold
+                : now - (darkSince ?? now) >= NoPictureGuard.blackThreshold
             guard due, let since = darkSince else { return }
             shownSince = since
             log("no-picture: shown after \(String(format: "%.1f", now - since)) s (\(reason)"
@@ -426,7 +451,7 @@ final class NoPictureGuard {
         if let guest = guestText(now) { parts.append(guest) }
         let cores = String(format: "%.1f", cpu())
         parts.append(String(localized: "VM CPU \(cores) cores"))
-        let r = Report(title: NoPictureGuard.title, detail: parts.joined(separator: " · "))
+        let r = Report(title: NoPictureGuard.title, detail: parts.joined(separator: " · "), game: gameFocused)
         if r != report {
             report = r
             onChange?(r)

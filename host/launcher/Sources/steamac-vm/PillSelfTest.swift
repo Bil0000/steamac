@@ -45,8 +45,13 @@ enum PillSelfTest {
 
         let progress = BootProgress()
         wc.attach(progress: progress)
-        // Constant counters: the GPU is idle all the time (the GPU-idle card shows for games).
-        let stall = StallMonitor(view: wc.stallView) { (0, 0) }
+        // Counters: the GPU is idle (the GPU-idle card shows for games) unless `gpuBusy`.
+        nonisolated(unsafe) var gpuBusy = false
+        var ring: UInt64 = 0
+        let stall = StallMonitor(view: wc.stallView) {
+            if gpuBusy { ring += 1 }
+            return (0, ring)
+        }
         wc.attach(stall: stall)
         stall.enabled = true
         let noPicture = NoPictureGuard { presenter.scanout.probe(sampleIfNewerThan: $0) }
@@ -219,7 +224,42 @@ enum PillSelfTest {
             Step(name: "17-game-black-6s-never", action: { guest("focus game 4242"); frames = .black }, wait: 6.0) {
                 expectNoPill("game focused, black 6 s") ?? (wc.stallView.shown ? nil : "GPU-idle card should cover the game")
             },
-            Step(name: "18-steam-black-5.5s", action: { guest("focus steam") }, wait: 5.5) {
+            Step(name: "17b-game-black-gpu-busy", action: { gpuBusy = true }, wait: 2.0) {
+                expectNoPill("loading game, black, GPU busy")
+                    ?? (wc.stallView.shown ? nil : "loading card should cover a black game while its GPU works")
+            },
+            Step(name: "17c-game-picture-hides-card", action: { frames = .pattern }, wait: 0.8) {
+                expectNoPill("game picture") ?? (wc.stallView.shown ? "loading card should hide on the game's picture" : nil)
+            },
+            Step(name: "17d-game-dark-scene-no-card", action: { frames = .black }, wait: 3.5) {
+                expectNoPill("dark scene after the game drew")
+                    ?? (wc.stallView.shown ? "loading card should not cover a dark scene after the game drew" : nil)
+            },
+            Step(name: "17e-same-game-after-steam-no-card", action: { guest("focus steam"); guest("focus game 4242") }, wait: 3.5) {
+                expectNoPill("dark scene after a trip to Steam")
+                    ?? (wc.stallView.shown ? "loading card should not return for a game that drew" : nil)
+            },
+            Step(name: "17f-steam-frame-before-game", action: { frames = .pattern; guest("focus steam") }, wait: 0.8) {
+                expectNoPill("Steam picture")
+            },
+            Step(name: "17g-new-game-over-old-frame", action: { frames = .none; guest("focus game 4243") }, wait: 1.0) {
+                expectNoPill("new game, old Steam frame")
+            },
+            Step(name: "17h-new-game-black-card", action: { frames = .black }, wait: 3.5) {
+                expectNoPill("new game black, GPU busy")
+                    ?? (wc.stallView.shown ? nil : "the frame shown before focus must not count as the game's picture")
+            },
+            Step(name: "17i-game-frame-before-first-poll", action: { wc.guestFocusChanged(.game(4244)); frames = .pattern }, wait: 0.04) {
+                expectNoPill("new game's first frame")
+            },
+            Step(name: "17j-no-new-frame", action: { frames = .none }, wait: 1.0) {
+                expectNoPill("no new frame")
+            },
+            Step(name: "17k-dark-after-early-frame-no-card", action: { frames = .black }, wait: 3.5) {
+                expectNoPill("dark scene after an early first frame")
+                    ?? (wc.stallView.shown ? "a game frame newer than the focus change must count as drawn" : nil)
+            },
+            Step(name: "18-steam-black-5.5s", action: { gpuBusy = false; guest("focus steam") }, wait: 5.5) {
                 expectPill(waiting, detail: String(localized: "black picture \(sampleSeconds) s"), percent: false)
             },
             Step(name: "19-sleep-hides", action: { wc.guestSleeping(true); noPicture.vmPaused = true }, wait: 6.0) {
