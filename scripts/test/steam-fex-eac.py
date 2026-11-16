@@ -103,6 +103,36 @@ class GameSetupTests(unittest.TestCase):
         self.hook()
         self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
 
+    def test_repair_reinstalls_while_steam_runs_without_editing_settings(self):
+        self.hook()
+        (self.bin / "pgrep").write_text('#!/bin/sh\n[ "$2" = steam ]\n')
+        for name in BINS:
+            (self.tool / "usr/bin" / name).write_text("FEX-valve-update " + name)
+        (self.tool / "VERSIONS.txt").write_text("FEX describe\tFEX-2607-valve-update\n")
+        self.library_game(self.steam, "708", "Protected", "EasyAntiCheat")
+        config, account = self.game_settings("708")
+        before = (config.read_bytes(), account.read_bytes())
+        self.hook("repair")
+        self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-patched FEX")
+        self.assertEqual((config.read_bytes(), account.read_bytes()), before)
+        status = self.home / "state/steamac/fex-eac/status"
+        self.assertEqual(status.read_text().split("\n")[0], "need-restart")
+        self.hook("repair")
+        self.assertEqual(status.read_text().split("\n")[0], "need-restart")
+        (self.bin / "pgrep").write_text('#!/bin/sh\n[ "$2" = steam ] || [ "$2" = FEXServer ]\n')
+        for name in BINS:
+            (self.tool / "usr/bin" / name).write_text("FEX-valve-update " + name)
+        self.hook("repair")
+        self.assertEqual((self.tool / "usr/bin/FEX").read_text(), "FEX-valve-update FEX")
+
+    def test_repair_units_are_enabled(self):
+        user = ROOT / "guest/layer/usr/lib/systemd/user"
+        for target in ("gamescope-session.target", "plasma-session.target"):
+            self.assertEqual(os.readlink(user / f"{target}.wants/steamac-fex-repair.path"), "../steamac-fex-repair.path")
+        self.assertIn("PathChanged=%h/.local/share/Steam/steamapps/common/FEX-Emu/VERSIONS.txt",
+                      (user / "steamac-fex-repair.path").read_text())
+        self.assertIn("ExecStart=/usr/lib/steamac/steam-fex-eac repair", (user / "steamac-fex-repair.service").read_text())
+
     def test_disabled_restores_only_our_installed_runtime(self):
         self.hook()
         self.cmdline.write_text("steamac.fex_eac=0")

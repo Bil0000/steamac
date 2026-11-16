@@ -107,6 +107,13 @@ grep -q 'fx-progress-agent sleep suspend$' "$ST/usr/lib/systemd/system/systemd-s
         "$ST/usr/lib/systemd/system/fx-compact-disk.path" \
     || { echo "[layer] fx-compact-disk (compact-disk script / path+service / multi-user wants) missing" >&2; exit 1; }
 
+# Experimental game support: repair the runtime after Steam rewrites its FEX-Emu tool while it runs.
+for target in gamescope-session.target plasma-session.target; do
+    [[ -L $ST/usr/lib/systemd/user/$target.wants/steamac-fex-repair.path ]] \
+        || { echo "[layer] steamac-fex-repair.path is not wanted by $target" >&2; exit 1; }
+done
+grep -q '^ExecStart=/usr/lib/steamac/steam-fex-eac repair$' "$ST/usr/lib/systemd/user/steamac-fex-repair.service" \
+    || { echo "[layer] steamac-fex-repair.service does not run steam-fex-eac repair" >&2; exit 1; }
 # Once per boot: drop the boot's clean page cache so free page reporting returns it to the Mac.
 [[ -L $ST/usr/lib/systemd/system/timers.target.wants/steamac-mem-trim.timer ]] \
     && grep -q '^ExecStart=/usr/lib/steamac/mem-trim$' "$ST/usr/lib/systemd/system/steamac-mem-trim.service" \

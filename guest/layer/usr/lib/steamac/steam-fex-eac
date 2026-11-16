@@ -12,7 +12,11 @@ English text for people.
                              build is kept until steamac is updated
   failed                     setup failed; line 2 says why
   off                        experimental game support is off
-Usage: steam-fex-eac [prepare|build|status]
+Usage: steam-fex-eac [prepare|build|repair|status]
+  prepare  steam.service ExecStartPre: Steam settings for EAC games, then the runtime
+  build    steamac-fex-build.service: build the runtime in the guest when no prebuilt one fits
+  repair   steamac-fex-repair.path, while Steam runs: install the runtime again after Steam rewrote its FEX-Emu tool,
+           and report need-restart for a newly installed EAC game; never edits Steam's settings
 """
 import fcntl
 import hashlib
@@ -273,10 +277,61 @@ def configure_eac_games():
     return missing
 
 
+def put(stage):
+    """Install stage into Steam's FEX-Emu tool; False when a status was reported instead."""
+    marker = STATE / "installed.json"
+    previous = json.loads(marker.read_text()) if marker.exists() else {}
+    current = fingerprint(TOOL)
+    if previous.get("installed") == current:
+        backup = previous["backup"]
+    elif current == fingerprint(stage):
+        report("installed", "Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
+        return False
+    else:
+        # Files outside FILES stay Steam's: only replace a Steam build of the release our patches are based on or older.
+        base = re.search(r"-(\d+)", pinned("FEX_EAC_TAG"))[1]
+        release = re.match(r"(?:FEX|eac)-(\d+)", describe(TOOL))
+        if not release or int(release[1]) > int(base):
+            report("need-update", f"Steam's FEX-Emu tool is {describe(TOOL) or 'unknown'}, newer than FEX-{base} of the "
+                   "patched runtime. Keeping Steam's build until steamac is updated.")
+            return False
+        backup = str(STATE / "backups" / current)
+    install("install", backup, stage)
+    temporary = marker.with_suffix(".new")
+    temporary.write_text(json.dumps({"source": source(), "backup": backup, "installed": fingerprint(TOOL)}) + "\n")
+    temporary.replace(marker)
+    return True
+
+
+def repair():
+    try:
+        known = {Path(name).stem.split("_", 1)[1] for name, entry in json.loads((STATE / "scan.json").read_text()).items()
+                 if entry[2]}
+    except (OSError, ValueError):
+        known = set()
+    new = set(eac_games(libraries())) - known
+    installed = json.loads((STATE / "installed.json").read_text())["installed"]
+    stage = staged()
+    tool = next((manifest for manifest in (STEAM / "steamapps").glob("appmanifest_*.acf")
+                 if current(manifest, ("AppState", "installdir")) == TOOL.name), None)
+    updated = (stage and complete(TOOL) and fingerprint(TOOL) != installed
+               and (tool is None or current(tool, ("AppState", "StateFlags")) == "4"))
+    if updated:
+        if subprocess.run(["pgrep", "-x", "FEXServer"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
+            report("need-restart", "Steam updated its FEX-Emu tool while a game ran. Restart Steam to install the runtime again.")
+            return
+        if not put(stage):
+            return
+    if new:
+        report("need-restart", "New Easy Anti-Cheat games are installed. Restart Steam to set them up.")
+    elif updated:
+        report("installed", "Runtime installed again after a Steam update of its FEX-Emu tool.")
+
+
 def main():
     action = sys.argv[1] if len(sys.argv) == 2 else "prepare" if len(sys.argv) == 1 else "invalid"
-    if action not in ("prepare", "build", "status"):
-        raise ValueError("usage: steam-fex-eac [prepare|build|status]")
+    if action not in ("prepare", "build", "repair", "status"):
+        raise ValueError("usage: steam-fex-eac [prepare|build|repair|status]")
     marker = STATE / "installed.json"
     if action == "status":
         if marker.exists() and json.loads(marker.read_text()).get("installed") != fingerprint(TOOL):
@@ -301,6 +356,10 @@ def main():
             report("preparing", "Preparing the Linux game runtime. See steamac-fex-build.service in the user journal for progress.")
             subprocess.run(["sh", str(PAYLOAD / "build-fex.sh")], env=dict(os.environ, WORK=str(WORK)), check=True)
             report("need-restart", "Runtime built. Restart Steam to finish setup. Game support is not verified.")
+            return
+        if action == "repair":
+            if active and marker.exists():
+                repair()
             return
         if subprocess.run(["pgrep", "-x", "steam"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
             raise ValueError("Close Steam before preparing or restoring its runtime.")
@@ -330,26 +389,8 @@ def main():
             report("need-tools " + ";".join(missing + ["FEX-Emu"]),
                    "Runtime built. Install " + " and ".join(missing + ["Steam's FEX-Emu tool"]) + ", then restart Steam. Game support is not verified.")
             return
-        previous = json.loads(marker.read_text()) if marker.exists() else {}
-        current = fingerprint(TOOL)
-        if previous.get("installed") == current:
-            backup = previous["backup"]
-        elif current == fingerprint(stage):
-            report("installed", "Matching runtime already present. Keeping the existing manual installation; automatic restore is unavailable.")
+        if not put(stage):
             return
-        else:
-            # Files outside FILES stay Steam's: only replace a Steam build of the release our patches are based on or older.
-            base = re.search(r"-(\d+)", pinned("FEX_EAC_TAG"))[1]
-            release = re.match(r"(?:FEX|eac)-(\d+)", describe(TOOL))
-            if not release or int(release[1]) > int(base):
-                report("need-update", f"Steam's FEX-Emu tool is {describe(TOOL) or 'unknown'}, newer than FEX-{base} of the "
-                       "patched runtime. Keeping Steam's build until steamac is updated.")
-                return
-            backup = str(STATE / "backups" / current)
-        install("install", backup, stage)
-        temporary = marker.with_suffix(".new")
-        temporary.write_text(json.dumps({"source": source(), "backup": backup, "installed": fingerprint(TOOL)}) + "\n")
-        temporary.replace(marker)
         if missing:
             report("need-tools " + ";".join(missing), "Runtime installed. Install " + " and ".join(missing) + " in Steam for EAC games.")
             return
