@@ -338,6 +338,9 @@ enum StallSelfTest {
             Step(name: "14b-dark-game-idle-cpu-prompts", action: { gameCPU.store(2, ordering: .relaxed) }, wait: 63) {
                 expectStuck()
             },
+            Step(name: "14b2-stuck-prompt-keeps-pointer", action: {}, wait: 0) {
+                wc.autoCaptureBlocked ? expectStuck() : "auto-capture would take the mouse while the may-be-stuck card asks"
+            },
             Step(name: "14c-restart-game", action: { _ = hostLines(); if let r = view.linkFrames.first { click(r) } }, wait: 0.6) {
                 let sent = hostLines()
                 return sent == ["stop-game 4242"] ? expectLoading("after Restart game") : "host sent \(sent), expected stop-game 4242"

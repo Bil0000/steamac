@@ -996,9 +996,11 @@ final class WindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    var autoCaptureBlocked: Bool { pauseView.shown || guestAsleep || overlay.shown || stall?.asking == true }
+
     private func captureIfGameActive() {
         guard !captured, focusedGame != nil, clickCaptures, NSApp.isActive, window.isKeyWindow,
-              !pauseView.shown, !guestAsleep, !overlay.shown else { return }
+              !autoCaptureBlocked else { return }
         // A pointer outside the picture (another screen) would stay there hidden and send clicks to other windows.
         if !view.bounds.contains(view.convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
             let c = window.convertPoint(toScreen: view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil))

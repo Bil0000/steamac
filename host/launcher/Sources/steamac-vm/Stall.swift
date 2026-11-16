@@ -130,6 +130,8 @@ final class StallMonitor {
     var gameName: () -> String? = { nil }
     /// The indicator is up (or about to fade in).
     var indicatorShown: Bool { shownSince != nil }
+    /// The may-be-stuck card asks the user (its links need the pointer).
+    var asking: Bool { hungPrompt }
     /// Once per indicator stretch, when its wording turns to "SteamOS is not responding…".
     /// Recent counter/heartbeat samples accompany the report even when perf stats are off.
     var onNotResponding: ((Diagnostic) -> Void)?
