@@ -31,4 +31,8 @@ rm -rf "$d/home/fex-eac-work/valve-backup" "$V"; mk "$V" FEX-valve; mk "$N" FEX-
 rm -rf "$d/home/fex-eac-work/valve-backup" "$V"; mk "$V" FEX-valve; mk "$N" FEX-patched
 printf '#!/bin/sh\ncase "$2" in */.ConfigTemplate.json.new) exit 1;; esac\nexec /bin/cp "$@"\n' > "$d/bin/cp"; chmod +x "$d/bin/cp"; rm "$d/bin/pgrep"
 PATH="$d/bin:$PATH" run; r=$?; [ $r != 0 ] && is x FEX-valve; ok $? "a failed copy (disk full) leaves the old tool whole, not mixed"
+rm "$d/bin/cp"; rm -rf "$d/home/fex-eac-work/valve-backup" "$V"; mk "$V" FEX-valve; mk "$N" FEX-patched
+printf '#!/bin/sh\ncase "$2" in */.ConfigTemplate.json.new) : > %s/game;; esac\nexec /bin/cp "$@"\n' "$d" > "$d/bin/cp"
+printf '#!/bin/sh\n[ -e %s/game ]\n' "$d" > "$d/bin/pgrep"; chmod +x "$d/bin/cp" "$d/bin/pgrep"
+PATH="$d/bin:$PATH" run; r=$?; [ $r != 0 ] && is x FEX-valve; ok $? "a game started during the copy stops the swap, tool untouched"
 rm -rf "$d"; [ $fail = 0 ] && echo "install-fex-tool: all PASS" || { echo "install-fex-tool: FAILED"; exit 1; }

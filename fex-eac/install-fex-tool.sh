@@ -47,6 +47,7 @@ fi
 # Copy everything first, then rename: a game Steam starts during the swap sees a mixed tool for
 # microseconds instead of for the whole copy.
 for b in $BINS; do cp "$N/usr/bin/$b" "$V/usr/bin/.$b.new"; done; for f in $FILES; do cp "$N/$f" "$V/.$f.new"; done
+busy
 for b in $BINS; do mv -f "$V/usr/bin/.$b.new" "$V/usr/bin/$b"; done; for f in $FILES; do mv -f "$V/.$f.new" "$V/$f"; done
 # Verify the swap actually took, so a partial copy can never be reported as a successful install.
 for b in $BINS; do cmp -s "$N/usr/bin/$b" "$V/usr/bin/$b" || { echo "install incomplete: $V/usr/bin/$b does not match the stage" >&2; exit 1; }; done
