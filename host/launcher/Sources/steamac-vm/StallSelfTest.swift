@@ -352,6 +352,10 @@ enum StallSelfTest {
             Step(name: "14f-keep-waiting-survives-pause", action: { monitor.gameDark = false; monitor.gameDark = true }, wait: 62) {
                 expectLoading("Keep waiting, then a pause and resume without a frame")
             },
+            // A relaunch that hangs at the same point: its CPU total need not be smaller.
+            Step(name: "14g-relaunch-prompts-again", action: { guest("game-start 4242\n") }, wait: 1.0) {
+                expectStuck()
+            },
             Step(name: "15-shutdown", action: { guest("shutdown poweroff\n") }, wait: 0.6) {
                 wc.overlay.shown && progress.state.phase == .shutdown(reboot: false)
                     ? expectHidden("shutdown overlay") : "shutdown overlay should be shown"

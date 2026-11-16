@@ -91,9 +91,9 @@ final class StallMonitor {
     private var cpuSamples: [(CFTimeInterval, Double)] = []
     /// The focused game's CPU seconds from the heartbeat: (time, seconds), about `hungThreshold` of them.
     private var gameCPUSamples: [(CFTimeInterval, Double)] = []
-    /// "Keep waiting" was clicked for this game (its CPU seconds then): no prompt until it draws
-    /// or a new process of it starts (a smaller CPU total).
-    private var waited: (game: Int, cpu: Double)?
+    /// "Keep waiting" was clicked for this game: no prompt until it draws or a new process of it
+    /// starts (`game-start`).
+    private var waited: Int?
     private var hungPrompt = false
     private var shownSince: (idleStart: CFTimeInterval, cpu: Double)?
     private var notRespondingReported = false
@@ -196,7 +196,6 @@ final class StallMonitor {
         guard let gameCPU, gameFocused else { return gameCPUSamples.removeAll() }
         // A smaller total: a new game process.
         if let last = gameCPUSamples.last, gameCPU < last.1 { gameCPUSamples.removeAll() }
-        if let w = waited, w.game == game, gameCPU < w.cpu { waited = nil }
         gameCPUSamples.append((lastAlive, gameCPU))
         while gameCPUSamples.count > 2, gameCPUSamples[1].0 <= lastAlive - StallMonitor.hungThreshold { gameCPUSamples.removeFirst() }
     }
@@ -204,12 +203,17 @@ final class StallMonitor {
     /// The game showed its first picture (NoPictureGuard; not a pause or sleep that only closes
     /// its gate): "Keep waiting" is over.
     func gameDrew(_ appid: Int) {
-        if waited?.game == appid { waited = nil }
+        if waited == appid { waited = nil }
+    }
+
+    /// `game-start`: a new process of the game (a relaunch) gets the prompt again.
+    func gameStarted(_ appid: Int) {
+        if waited == appid { waited = nil }
     }
 
     /// The focused game has not drawn, its GPU idled and its CPU stayed near zero for `hungThreshold`.
     private func hung(_ now: CFTimeInterval) -> Bool {
-        guard coversDarkGame, game != waited?.game, !notResponding(at: now),
+        guard coversDarkGame, game != waited, !notResponding(at: now),
               now - max(lastActivity, gateOpenedAt) >= StallMonitor.hungThreshold,
               let first = gameCPUSamples.first, let last = gameCPUSamples.last,
               first.0 <= now - StallMonitor.hungThreshold, last.0 > first.0 else { return false }
@@ -345,7 +349,7 @@ final class StallMonitor {
 
     private func keepWaiting() {
         log("stall: keep waiting for game \(game ?? 0) (user choice)")
-        if let game { waited = (game, gameCPUSamples.last?.1 ?? 0) }
+        waited = game
         evaluate(CACurrentMediaTime())
     }
 
