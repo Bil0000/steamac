@@ -6,7 +6,8 @@ import QuartzCore
 /// boot/shutdown overlay, when the guest sends no GPU work for `idleThreshold` while a game has
 /// focus (`focus game <appid>`; the idle Steam UI legitimately sends none for minutes), or —
 /// whatever has focus — when the guest's heartbeat has also stopped for `heartbeatTimeout`.
-/// Hidden as soon as GPU work arrives, the game loses focus or the guest answers again. No
+/// Hidden as soon as GPU work arrives (not while `gameDark`: a loading game's window is still
+/// black), the game loses focus or the guest answers again. No
 /// heartbeat is expected between sessions (the agent ends with each gamescope session, gaming or
 /// Desktop Mode), and both clocks start over after the VM was paused (suspend, guest sleep) or
 /// the Mac slept.

@@ -295,9 +295,9 @@ final class ProgressPillView: NSView {
 /// `gameBlackThreshold` and the GPU-idle card shows it instead of the pill (a loading game's GPU
 /// may be busy while its window stays black) until the game's first non-black frame. The report
 /// says what is known: a guest detail line received after `ready` if any, why (display off / no
-/// frame / black picture), the heartbeat and the VM's CPU. It ends with the first non-black frame. Black = at least `blackFraction` of Scanout's sparse sample points
-/// below its luma threshold; a frame is sampled only when a newer one was presented, at most
-/// once per `tick`. Main thread only.
+/// frame / black picture), the heartbeat and the VM's CPU. It ends with the first non-black frame.
+/// Black = at least `blackFraction` of Scanout's sparse sample points below its luma threshold; a
+/// frame is sampled only when a newer one was presented, at most once per `tick`. Main thread only.
 final class NoPictureGuard {
     struct Report: Equatable {
         var title: String
