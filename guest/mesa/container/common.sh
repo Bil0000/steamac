@@ -79,6 +79,8 @@ GL_OPTS=(
     -Dzstd=enabled
     -Dzlib=enabled
     -Dexpat=enabled
+    # As for Venus above (STEAMAC-72): zink links the Vulkan WSI deps, libdisplay-info among them.
+    -Ddisplay-info=disabled
     -Dshader-cache=enabled
 )
 
