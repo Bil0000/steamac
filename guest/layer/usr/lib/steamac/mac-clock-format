@@ -38,8 +38,8 @@ def vdf_quote(value):
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + '"'
 
 
-def vdf_entries(text):
-    """Return scalar spans and block closing offsets; retain every unrelated byte."""
+def vdf_entries(text, starts=None):
+    """Return scalar spans and block closing offsets (and key offsets into starts); retain every unrelated byte."""
     tokens = [m for m in re.finditer(r'//[^\n]*|"(?:\\.|[^"\\])*"|[{}]|[^\s{}"]+', text)
               if not m[0].startswith("//")]
     values, blocks, stack = {}, {}, []
@@ -59,6 +59,8 @@ def vdf_entries(text):
         value = tokens[i + 1]
         if value[0] == "{":
             stack.append(key)
+            if starts is not None:
+                starts[tuple(stack)] = token.start()
         elif value[0] == "}":
             raise ValueError("missing VDF value")
         else:

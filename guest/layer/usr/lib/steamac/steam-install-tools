@@ -1,0 +1,23 @@
+#!/bin/bash
+# steamac: asks Steam to install the tools experimental game support needs (Proton Experimental, Proton EasyAntiCheat
+# Runtime) when an EAC game is installed without them. steam-fex-eac (ExecStartPre) writes their steam://install/<appid>
+# URLs, appids from Steam's own appinfo cache, to $XDG_RUNTIME_DIR/steamac/steam-install-tools; this ExecStartPost of
+# steam.service hands them to Steam once its UI is up (the fx-progress-agent `ready` marker of this boot), like
+# steam-launch-app. Steam shows its install dialog for each.
+# Test overrides: STEAMAC_READY_MARKER, STEAMAC_BOOT_ID, STEAMAC_STEAM.
+set -euo pipefail
+
+list=${XDG_RUNTIME_DIR:?}/steamac/steam-install-tools
+[[ -s $list ]] || exit 0
+ready=${STEAMAC_READY_MARKER:-/tmp/.fx-progress-ready-$(id -u)}
+boot=${STEAMAC_BOOT_ID:-$(cat /proc/sys/kernel/random/boot_id)}
+steam=${STEAMAC_STEAM:-/usr/bin/steam}
+(
+    until [[ $(cat "$ready" 2>/dev/null) == "$boot" ]]; do sleep 1; done
+    while read -r url; do
+        [[ $url =~ ^steam://install/[1-9][0-9]{0,9}$ ]] || continue
+        echo "steamac: asking Steam to install $url" >&2
+        "$steam" "$url" || true
+    done < "$list"
+    rm -f "$list"
+) </dev/null >/dev/null 2>&1 &

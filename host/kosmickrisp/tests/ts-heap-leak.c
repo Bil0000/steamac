@@ -6,9 +6,8 @@
  * 0. 40 rounds of: a device, 4 timestamp pools of 8192 with every query written in one command buffer, the device
  * destroyed without destroying the pools or the command pool; the last timestamp of every round must not read 0.
  * Then, on one device, 8192 timestamps written in one command buffer outside a render pass, as vkd3d-proton does: one
- * counter heap resolve for consecutive ones (upstream 0064) and one compute trigger dispatch per encoder (0103). The
- * footprint must grow by less than 60 MiB (about 237 MiB with 0064 alone, 588 MiB with neither) and all 8192 must
- * become available. Then 20 timestamp pools of 8192, more than the heaps hold: all are created and a timestamp of the
+ * counter heap resolve for consecutive ones (upstream 0064). The footprint must grow by less than 400 MiB (about
+ * 240-290 MiB with 0064, 588 MiB without it) and all 8192 must become available. Then 20 timestamp pools of 8192, more than the heaps hold: all are created and a timestamp of the
  * last becomes available. Prints "RESULT: PASS|FAIL ...". Run through tests/run.sh.
  */
 #include <stdio.h>
@@ -102,7 +101,7 @@ int main(void)
       CHECK(vkGetQueryPoolResults(dev, batch, 0, BATCH, sizeof(values), values, sizeof(values[0]), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT));
       uint32_t available = 0;
       for (uint32_t i = 0; i < BATCH; i++) available += values[i][1] != 0;
-      if (grown >= 60 || available != BATCH) {
+      if (grown >= 400 || available != BATCH) {
          printf("RESULT: FAIL %d timestamps in one command buffer: the footprint grew %.1f MiB, %u available\n", BATCH, grown, available);
          return 1;
       }

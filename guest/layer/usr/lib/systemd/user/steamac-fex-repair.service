@@ -1,0 +1,10 @@
+# steamac: started by steamac-fex-repair.path (see there).
+[Unit]
+Description=FX Steam Launcher: repair the experimental game runtime after a Steam tool update
+# A download rewrites manifests in steamapps/ often; never let the start limit stop the path unit.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/steamac/steam-fex-eac repair
+Nice=10

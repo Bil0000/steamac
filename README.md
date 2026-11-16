@@ -3,7 +3,7 @@
 **English** · [Русский](README.ru.md) · [简体中文](README.zh.md)
 
 **A fork of [steamac](https://github.com/fxgl/steamac) for Apple silicon Macs. It runs x86-64 Windows games with genuine
-Easy Anti-Cheat (verified in game: VRChat; Mini Royale also passes EAC), with a choice of two graphics paths.**
+Easy Anti-Cheat (verified in game on one title; Mini Royale also passes EAC), with a choice of two graphics paths.**
 
 - **Vulkan (classic)**: Direct3D through DXVK on Vulkan inside SteamOS (Venus), then KosmicKrisp or MoltenVK on the Mac.
   This is upstream steamac's path.
@@ -18,11 +18,11 @@ where it came from. FEX code changes go to [StonkGuy/FEX](https://github.com/Sto
 current `eac-<release>` branch, with a test in its `eac-tests/`.
 
 The EAC client is the stock one from the Proton EasyAntiCheat Runtime. Nothing fakes, replays or short-circuits its
-result. Not affiliated with FX GAMES, Valve, Epic Games, VRChat or the DXMT authors.
+result. Not affiliated with FX GAMES, Valve, Epic Games or the DXMT authors.
 
-Status: verified on one Mac (M2, 16 GB). VRChat passes EAC and enters a world on both graphics paths. The default is
-the Vulkan path; DXMT is a setting you turn on. Measured on that Mac: VRChat about 29-44 fps on Vulkan and 76-78 fps on
-DXMT (single runs, see [docs/eac-performance.md](docs/eac-performance.md)).
+Status: verified on one Mac (M2, 16 GB). One EAC title passes EAC and runs on both graphics paths. The default is
+the Vulkan path; DXMT is a setting you turn on. Measured on that Mac: about 29-44 fps on Vulkan and 76-78 fps on
+DXMT for that title (single runs, see [docs/eac-performance.md](docs/eac-performance.md)).
 
 ## Requirements
 
@@ -47,8 +47,7 @@ DXMT (single runs, see [docs/eac-performance.md](docs/eac-performance.md)).
    size; the default, 1280×800, is 16:10). A 16:9 game in a 16:10 window is letterboxed.
 4. Grant the **microphone** permission when macOS asks. Without it, the guest's audio capture fails repeatedly and games
    can stutter.
-5. In Steam, install VRChat, set its compatibility tool to **Proton Experimental**, and install **Proton EasyAntiCheat
-   Runtime**. See [SETUP.md](SETUP.md) for the full steps.
+5. Install your games in Steam. The app picks Proton or the EAC setup for each game by itself.
 
 ### First open
 
@@ -67,7 +66,7 @@ the Mac's Metal)** offers DXMT to SteamOS from the next start; then Settings > G
 *Vulkan*. If Proton's original files are missing (for example after switching between two builds of the app on one
 disk), the files stay DXMT's and the boot log says so; repair Proton in Steam: the Proton tool > Properties >
 Installed Files > **Verify integrity of tool files**. DXMT covers Direct3D 11 (and 10); play Direct3D 12 games on
-*Vulkan* (DXMT's Direct3D 12 is limited). EAC on DXMT is verified with VRChat; if EAC fails in another game, set that
+*Vulkan* (DXMT's Direct3D 12 is limited). EAC on DXMT is verified with one title; if EAC fails in another game, set that
 game's profile to *Vulkan*.
 
 | use | when |
@@ -80,36 +79,33 @@ be turned on and off while a game runs.
 
 ## Easy Anti-Cheat
 
-EAC runs inside SteamOS under Valve's FEX emulator. Earlier tests with `eac-2610.2` passed EAC's checks for VRChat, and for
+EAC runs inside SteamOS under Valve's FEX emulator. Earlier tests with `eac-2610.2` passed EAC's checks for one title, and for
 Mini Royale (EAC `301`; that game was not played past its account prompt). The current `eac-2610.3` pin has not passed a real game test. Results differ from game to game: each title
 ships its own EAC build and checks, so an untested game may or may not work.
 
 This development version adds **Settings > Advanced > Experimental game support**, off by default.
-It builds the pinned FEX runtime inside the Linux guest in the background. Restart Steam after the build finishes;
-the next start installs the prepared runtime and can repair it after a Steam tool update. The guest command
-`/usr/lib/steamac/steam-fex-eac status` shows setup status. The first build requires an internet connection.
-For VRChat and every installed game that ships EAC files, in every Steam library, it selects Proton Experimental unless
-the user set another tool, and puts the EAC launch helper before `%command%` in the launch options; other options stay.
-Install Proton Experimental and Proton EasyAntiCheat Runtime in guest Steam first.
-Turning the setting off restores the previous runtime on the next Steam start if its files still match our installation.
-If they were changed by another tool, setup leaves them intact and reports the conflict.
+The app picks Proton or the EAC setup for each game by itself. The patched FEX runtime ships prebuilt in the guest layer
+and is installed on the next Steam start; it is installed again when Steam updates its FEX tool while it runs, unless
+Steam's FEX is a newer release than the patched one. The guest command `/usr/lib/steamac/steam-fex-eac status` shows
+setup status. A game counts as an EAC game when its install has EAC files and a Windows executable; such a game gets
+Proton Experimental unless the user set another tool, and the EAC launch helper in its launch options; other options
+stay. Native Linux games are left alone. If Proton Experimental or Proton EasyAntiCheat Runtime is missing, Steam is
+asked to install it. Turning the setting off removes the helper and the tool choices it made, and restores the previous
+runtime on the next Steam start if its files still match our installation. If they were changed by another tool, setup
+leaves them intact and reports the conflict.
 
 These changes have server-side setup tests. A Mac build, a real protected online session, and performance measurements
 are still required. ARC Raiders and current Call of Duty support are not established by this switch.
 
-The manual path remains available:
-
-1. Install the patched FEX: enable SSH (Settings > Advanced), then run `build-fex.sh` and `install-fex-tool.sh` in the
-   guest ([fex-eac/README.md](fex-eac/README.md)).
-2. Set VRChat's Steam launch options (`EAC_LAUNCHERDIR`, `PROTON_EAC_RUNTIME`, `WINE_CPU_TOPOLOGY`, ...), exactly as given
-   in [fex-eac/README.md](fex-eac/README.md) and [SETUP.md](SETUP.md).
+The manual path remains available: enable SSH (Settings > Advanced), then run `build-fex.sh` and `install-fex-tool.sh`
+in the guest ([fex-eac/README.md](fex-eac/README.md)).
 
 - **Expected:** EAC's launcher reports `Launcher finished with: 301, 'Easy Anti-Cheat successfully loaded in-game'` and
   the game logs `AntiCheat Session Begin: Success`.
 - **Not expected to work:** anti-cheat that refuses virtual machines, and titles whose anti-cheat uses its own
   anti-debug checks beyond EAC's Linux module.
-- **After a Steam update:** if Steam updates its FEX tool, it replaces the patched build. Run
-  `sh install-fex-tool.sh` again.
+- **After a Steam update:** if Steam updates its FEX tool, it replaces the patched build. With experimental game support
+  on, the guest installs the patched build again by itself; on the manual path, run `sh install-fex-tool.sh` again.
 
 ## Troubleshooting
 
@@ -119,7 +115,7 @@ The manual path remains available:
 | EAC fails on DXMT | switch to *Vulkan* and restart the launcher |
 | Direct3D 11 games fail on *Vulkan* after using DXMT | Proton still has DXMT's files: in Steam, the Proton tool > Properties > Installed Files > Verify integrity of tool files |
 | EAC does not finish, or fails after a Steam update | the patched FEX is missing or was replaced by Valve's; run `sh install-fex-tool.sh status` |
-| about a minute's stall before joining | check that `WINE_CPU_TOPOLOGY` is in the launch options |
+| about a minute's stall before joining | try `WINE_CPU_TOPOLOGY` in the game's launch options ([fex-eac/README.md](fex-eac/README.md)) |
 | stutter with audio crackle | grant the microphone permission (System Settings > Privacy & Security > Microphone) |
 | long first launch | shaders compile once per game and path; later launches are faster |
 
@@ -142,7 +138,7 @@ whose peak needs more than the VM and the Mac have (see *Limits*).
 
 ## Limits
 
-- One machine verified (M2, 16 GB, macOS 27.0). VRChat is verified in game on both paths; Mini Royale's EAC launcher
+- One machine verified (M2, 16 GB, macOS 27.0). One EAC title is verified in game on both paths; Mini Royale's EAC launcher
   reaches `301` (not played further). Other titles are untested and results differ game by game.
 - 16 GB Macs: heavy titles can exceed the memory available. Unigine Superposition (720p, Low) went past 14 GB of app
   memory on both paths with an 8 GiB VM.

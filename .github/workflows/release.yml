@@ -6,7 +6,7 @@
 # Jobs (GitHub's arm64 macOS runners have no nested virtualization, so no Linux containers there):
 #   dxmt   macOS      host/dxmt/build.sh fetch llvm native host pe      (DXMT host library, PE dlls)
 #   guest  Linux arm  guest/kernel, guest/mesa, scripts/build-image.sh initramfs (parallel to dxmt)
-#   layer  Linux arm  DXMT client + payload, scripts/build-image.sh layer
+#   layer  Linux arm  DXMT client + payload, scripts/build-image.sh fex layer
 #   app    macOS      ./build.sh host (bundle.sh checks the guest receipts), dist.sh, dist-verify.sh
 #   release           uploads the three files (the only job with contents: write)
 # The guest receipts (scripts/guest-artifacts.py) bind source bytes to output bytes and name no
@@ -278,7 +278,7 @@ jobs:
         run: host/dxmt/build.sh fetch client payload
       - name: Layer
         run: |
-          scripts/build-image.sh builder layer
+          scripts/build-image.sh builder fex layer
           sudo chown -R "$(id -u):$(id -g)" work
       - name: Receipts and container facts
         run: |
@@ -291,6 +291,7 @@ jobs:
             work/out/Image work/out/Image.inputs.json work/out/kernel.config \
             work/out/initramfs.cpio.gz work/out/initramfs.cpio.gz.inputs.json \
             work/out/steamac-layer.img work/out/steamac-layer.img.inputs.json \
+            work/out/fex-eac work/out/fex-eac.inputs.json \
             work/out/mesa-venus work/out/mesa-venus.inputs.json work/out/mesa-aarch64.inputs.json work/out/mesa-x86.inputs.json \
             work/out/dxmt work/out/guest-toolchain.json \
             work/cache/licenses work/cache/cargo-home/registry \

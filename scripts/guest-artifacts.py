@@ -29,6 +29,7 @@ INPUTS = {
     "mesa": MESA_INPUTS,
     "mesa-aarch64": MESA_INPUTS,
     "mesa-x86": MESA_INPUTS,
+    "fex": ("fex-eac/build-fex.sh", "scripts/build-image.sh", "scripts/steps/27-fex.sh", "guest/mesa/versions.env"),
     "layer": ("guest/layer/usr", "guest/progress-agent", "fex-eac/build-fex.sh", "fex-eac/install-fex-tool.sh", "scripts/build-image.sh",
               "scripts/steps/25-progress-agent.sh", "scripts/steps/30-layer.sh") + MESA_INPUTS,
 }
@@ -42,6 +43,7 @@ OUTPUTS = {
         "usr/lib/libEGL_mesa.so*", "usr/lib/libgbm.so*", "usr/lib/dri", "usr/lib/gbm", "usr/share/glvnd",
         "usr/share/drirc.d")),
     "mesa-x86": (OUT / "mesa-venus/usr/share/guestos", OUT / "mesa-venus/usr/lib/steamac"),
+    "fex": (OUT / "fex-eac",),
     "layer": (OUT / "steamac-layer.img",),
 }
 COMMANDS = {
@@ -50,7 +52,8 @@ COMMANDS = {
     "mesa": "scripts/build-image.sh builder rootfs && guest/mesa/build.sh",
     "mesa-aarch64": "guest/mesa/build.sh fetch aarch64",
     "mesa-x86": "guest/mesa/build.sh fetch x86",
-    "layer": "scripts/build-image.sh builder layer",
+    "fex": "scripts/build-image.sh fex",
+    "layer": "scripts/build-image.sh builder fex layer",
 }
 
 
@@ -122,8 +125,9 @@ def input_digest(kind):
     if kind in ("initramfs", "layer"):
         add_record(digest, "SOURCE_DATE_EPOCH", os.environ.get("SOURCE_DATE_EPOCH", "1767225600"))
     if kind == "layer":
-        check("mesa")
-        add_record(digest, "mesa-receipt", file_digest(stamp_path("mesa")))
+        for dependency in ("mesa", "fex"):
+            check(dependency)
+            add_record(digest, dependency + "-receipt", file_digest(stamp_path(dependency)))
         # This optional build output is ignored by Git, so ls-files cannot
         # include it. Bind both its absence and its complete working-tree bytes.
         dxmt = OUT / "dxmt"

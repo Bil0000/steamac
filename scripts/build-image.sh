@@ -3,6 +3,8 @@
 #
 #   work/out/steamos.img          raw sparse GPT disk  -> guest /dev/vda
 #   work/out/initramfs.cpio.gz    boot stage (busybox + guest/initramfs/init)
+#   work/out/fex-eac/stage        patched FEX (fex-eac/build-fex.sh) built in the
+#                                 SteamOS userspace container, packed into the layer
 #   work/out/steamac-layer.img    read-only erofs /usr layer -> guest /dev/vdb
 #                                 (includes guest/progress-agent, built in Rust)
 #
@@ -11,7 +13,7 @@
 # rootfs reconstruction is cached in work/cache/, everything else is rebuilt.
 #
 # Usage: scripts/build-image.sh [step...]
-#   steps: builder rootfs initramfs layer disk check   (default: all, in order)
+#   steps: builder rootfs initramfs fex layer disk check   (default: all, in order)
 # Env:   HOME_SIZE_GIB (default 128), STEAMOS_PASSWORD (default "steamos"),
 #        FORCE_DISK=1 to rebuild steamos.img even if it exists (it holds user
 #        state once booted, so it is never overwritten silently),
@@ -21,12 +23,13 @@ set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 WORK=$REPO/work
 . "$REPO/scripts/config.env"
+AARCH64_IMAGE=$(. "$REPO/guest/mesa/versions.env" && echo "$AARCH64_IMAGE")
 
 # Receipts are taken on the host: containers do not need Git/Python installed.
 artifacts() { python3 "$REPO/scripts/guest-artifacts.py" "$@"; }
 
 steps=("$@")
-[[ ${#steps[@]} -gt 0 ]] || steps=(builder rootfs initramfs layer disk check)
+[[ ${#steps[@]} -gt 0 ]] || steps=(builder rootfs initramfs fex layer disk check)
 
 mkdir -p "$WORK/out" "$WORK/cache"
 
@@ -54,6 +57,13 @@ for step in "${steps[@]}"; do
             inputs=$(artifacts begin initramfs)
             run_in_builder /src/scripts/steps/20-initramfs.sh
             artifacts finish initramfs "$inputs"
+            ;;
+        fex)
+            inputs=$(artifacts begin fex)
+            docker run --rm --platform linux/arm64 \
+                -v "$REPO:/src:ro" -v "$WORK:/work" \
+                "$AARCH64_IMAGE" bash /src/scripts/steps/27-fex.sh
+            artifacts finish fex "$inputs"
             ;;
         layer)
             if [[ ${ALLOW_NO_VENUS:-} == 1 ]]; then
